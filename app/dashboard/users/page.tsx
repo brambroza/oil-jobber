@@ -52,7 +52,7 @@ export default function UsersProfilePage() {
     if (!companyId) return;
     setLoading(true);
     setError('');
-
+ 
     const res = await fetch(`/api/users-profile?company_id=${companyId}`);
     const data = await res.json();
 
