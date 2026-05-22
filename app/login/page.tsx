@@ -1,11 +1,14 @@
 'use client';
 
 import Link from 'next/link';
+import { useRouter, useSearchParams } from 'next/navigation';
 import { FormEvent, useState } from 'react';
 import { Alert, Box, Button, Paper, Stack, TextField, Typography } from '@mui/material';
 import { supabaseClient } from '@/lib/supabase/client';
 
 export default function LoginPage() {
+  const router = useRouter();
+  const searchParams = useSearchParams();
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [loading, setLoading] = useState(false);
@@ -24,7 +27,10 @@ export default function LoginPage() {
       return;
     }
 
-    window.location.href = '/dashboard';
+    const nextPath = searchParams.get('next');
+    const redirectPath = nextPath && nextPath.startsWith('/') ? nextPath : '/dashboard';
+    router.replace(redirectPath);
+    router.refresh();
   };
 
   return (
@@ -51,6 +57,7 @@ export default function LoginPage() {
             type='email'
             value={email}
             onChange={(e) => setEmail(e.target.value)}
+            autoComplete='email'
             required
             fullWidth
             size='small'
@@ -60,6 +67,7 @@ export default function LoginPage() {
             type='password'
             value={password}
             onChange={(e) => setPassword(e.target.value)}
+            autoComplete='current-password'
             required
             fullWidth
             size='small'

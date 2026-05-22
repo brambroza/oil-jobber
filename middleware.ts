@@ -1,16 +1,10 @@
-import { NextResponse } from 'next/server';
 import type { NextRequest } from 'next/server';
+import { updateSession } from '@/lib/supabase/middleware';
 
-export function middleware(request: NextRequest) {
-  const { pathname } = request.nextUrl;
-  // NOTE:
-  // Current auth flow uses supabase-js on client side (local storage session).
-  // Checking a fixed cookie here causes false redirect even after successful login.
-  // Keep middleware passive for now; enforce access in server-side auth integration later.
-  if (pathname.startsWith('/dashboard')) return NextResponse.next();
-  return NextResponse.next();
+export async function middleware(request: NextRequest) {
+  return updateSession(request);
 }
 
 export const config = {
-  matcher: ['/dashboard/:path*'],
+  matcher: ['/dashboard/:path*', '/login', '/register'],
 };
