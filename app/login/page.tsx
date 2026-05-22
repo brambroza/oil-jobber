@@ -1,14 +1,13 @@
 'use client';
 
 import Link from 'next/link';
-import { useRouter, useSearchParams } from 'next/navigation';
+import { useRouter } from 'next/navigation';
 import { FormEvent, useState } from 'react';
 import { Alert, Box, Button, Paper, Stack, TextField, Typography } from '@mui/material';
 import { supabaseClient } from '@/lib/supabase/client';
 
 export default function LoginPage() {
   const router = useRouter();
-  const searchParams = useSearchParams();
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [loading, setLoading] = useState(false);
@@ -27,7 +26,7 @@ export default function LoginPage() {
       return;
     }
 
-    const nextPath = searchParams.get('next');
+    const nextPath = new URLSearchParams(window.location.search).get('next');
     const redirectPath = nextPath && nextPath.startsWith('/') ? nextPath : '/dashboard';
     router.replace(redirectPath);
     router.refresh();
