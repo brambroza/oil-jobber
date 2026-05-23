@@ -63,6 +63,18 @@ function nowHHmm(): string {
   return `${hh}:${mm}`;
 }
 
+function ddMmYyyyToIso(value: string): string {
+  const [dd, mm, yyyy] = String(value || '').split('/');
+  if (!dd || !mm || !yyyy) return '';
+  return `${yyyy}-${mm}-${dd}`;
+}
+
+function isoToDdMmYyyy(value: string): string {
+  const [yyyy, mm, dd] = String(value || '').split('-');
+  if (!yyyy || !mm || !dd) return '';
+  return `${dd}/${mm}/${yyyy}`;
+}
+
 function cleanRaw(raw: string): string {
   return raw.replace(/\r/g, '').replace(/\s+/g, ' ').replace(/\*+/g, '').trim();
 }
@@ -150,6 +162,8 @@ export default function OCRUploadPage() {
   const [openReview, setOpenReview] = useState(false);
   const [effectiveDate, setEffectiveDate] = useState(todayDdMmYyyy());
   const [effectiveTime, setEffectiveTime] = useState(nowHHmm());
+  const [expiresDate, setExpiresDate] = useState(todayDdMmYyyy());
+  const [expiresTime, setExpiresTime] = useState('');
   const [rows, setRows] = useState<PriceRow[]>([]);
 
   const canSubmit = useMemo(() => Boolean(base64Image && refineryId) && !loading, [base64Image, refineryId, loading]);
@@ -258,6 +272,8 @@ export default function OCRUploadPage() {
           refinery_id: refineryId,
           effective_date: effectiveDate,
           effective_time: effectiveTime,
+          expires_date: expiresDate,
+          expires_time: expiresTime,
           rows,
           raw_text: rawText,
         }),
@@ -310,6 +326,14 @@ export default function OCRUploadPage() {
             <Stack direction={{ xs: 'column', sm: 'row' }} spacing={1}>
               <TextField label='วันที่มีผล (dd/MM/yyyy)' value={effectiveDate} onChange={(e) => setEffectiveDate(e.target.value)} />
               <TextField label='เวลา' type='time' value={effectiveTime} onChange={(e) => setEffectiveTime(e.target.value)} InputLabelProps={{ shrink: true }} />
+              <TextField
+                label='วันหมดอายุ'
+                type='date'
+                value={ddMmYyyyToIso(expiresDate)}
+                onChange={(e) => setExpiresDate(isoToDdMmYyyy(e.target.value))}
+                InputLabelProps={{ shrink: true }}
+              />
+              <TextField label='เวลาหมดอายุ' type='time' value={expiresTime} onChange={(e) => setExpiresTime(e.target.value)} InputLabelProps={{ shrink: true }} />
             </Stack>
 
             <Table size='small'>

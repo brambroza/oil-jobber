@@ -6,6 +6,7 @@ import {
   Alert,
   Box,
   Button,
+  Checkbox,
   Chip,
   Dialog,
   DialogActions,
@@ -22,6 +23,7 @@ import {
   TableRow,
   TextField,
   Typography,
+  FormControlLabel,
 } from '@mui/material';
 import { resolveCompanyId as resolveCompanyIdClient } from '@/lib/supabase/company';
 
@@ -30,6 +32,7 @@ type OilProduct = {
   company_id: string;
   code: string;
   name: string;
+  color_hex: string;
   is_active: boolean;
 };
 
@@ -37,13 +40,20 @@ type OilProductForm = {
   id?: string;
   code: string;
   name: string;
+  color_hex: string;
   is_active: boolean;
 };
 
-const emptyForm: OilProductForm = { code: '', name: '', is_active: true };
+const emptyForm: OilProductForm = { code: '', name: '', color_hex: '#2563EB', is_active: true };
 
 function normalizeCode(value: string): string {
   return value.toUpperCase().replace(/\s+/g, '_');
+}
+
+function normalizeColorHex(value: string): string {
+  const raw = String(value ?? '').trim().toUpperCase();
+  if (/^#[0-9A-F]{6}$/.test(raw)) return raw;
+  return '#2563EB';
 }
 
 export default function OilProductsPage() {
@@ -81,6 +91,7 @@ export default function OilProductsPage() {
       ...form,
       company_id: companyId,
       code: normalizeCode(form.code.trim()),
+      color_hex: normalizeColorHex(form.color_hex),
     };
 
     const res = await fetch(form.id ? `/api/oil-products/${form.id}` : '/api/oil-products', {
@@ -131,6 +142,7 @@ export default function OilProductsPage() {
             <TableRow>
               <TableCell>รหัส</TableCell>
               <TableCell>ชื่อน้ำมัน</TableCell>
+              <TableCell>สี</TableCell>
               <TableCell>สถานะใช้งาน</TableCell>
               <TableCell align='right'>จัดการ</TableCell>
             </TableRow>
@@ -141,15 +153,21 @@ export default function OilProductsPage() {
                 <TableCell><Typography sx={{ fontFamily: 'monospace', fontWeight: 700 }}>{r.code}</Typography></TableCell>
                 <TableCell>{r.name}</TableCell>
                 <TableCell>
+                  <Stack direction='row' spacing={1} alignItems='center'>
+                    <Box sx={{ width: 22, height: 22, borderRadius: '6px', bgcolor: r.color_hex || '#2563EB', border: '1px solid #cbd5e1' }} />
+                    <Typography sx={{ fontFamily: 'monospace' }}>{r.color_hex || '#2563EB'}</Typography>
+                  </Stack>
+                </TableCell>
+                <TableCell>
                   <Chip size='small' color={r.is_active ? 'success' : 'default'} label={r.is_active ? 'ใช้งาน' : 'ปิดใช้งาน'} />
                 </TableCell>
                 <TableCell align='right'>
-                  <IconButton onClick={() => { setForm({ id: r.id, code: r.code, name: r.name, is_active: r.is_active }); setOpen(true); }}><Edit fontSize='small' /></IconButton>
+                  <IconButton onClick={() => { setForm({ id: r.id, code: r.code, name: r.name, color_hex: r.color_hex || '#2563EB', is_active: r.is_active }); setOpen(true); }}><Edit fontSize='small' /></IconButton>
                   <IconButton color='error' onClick={() => setDeleteId(r.id)}><Delete fontSize='small' /></IconButton>
                 </TableCell>
               </TableRow>
             ))}
-            {!rows.length && !loading ? <TableRow><TableCell colSpan={4} align='center'>ไม่มีข้อมูลน้ำมัน</TableCell></TableRow> : null}
+            {!rows.length && !loading ? <TableRow><TableCell colSpan={5} align='center'>ไม่มีข้อมูลน้ำมัน</TableCell></TableRow> : null}
           </TableBody>
         </Table>
       </Box>
@@ -164,15 +182,33 @@ export default function OilProductsPage() {
             helperText={codePreview ? `รหัสที่บันทึกจริง: ${codePreview}` : 'เช่น DIESEL_B7, GASOHOL_95'}
           />
           <TextField label='ชื่อน้ำมัน' value={form.name} onChange={(e) => setForm((p) => ({ ...p, name: e.target.value }))} />
-          <TextField
-            select
+          <Stack direction='row' spacing={1.2} alignItems='center'>
+            <TextField
+              type='color'
+              label='เลือกสี'
+              value={normalizeColorHex(form.color_hex)}
+              onChange={(e) => setForm((p) => ({ ...p, color_hex: normalizeColorHex(e.target.value) }))}
+              sx={{ width: 120 }}
+              InputLabelProps={{ shrink: true }}
+            />
+            <TextField
+              label='รหัสสี'
+              value={form.color_hex}
+              onChange={(e) => setForm((p) => ({ ...p, color_hex: normalizeColorHex(e.target.value) }))}
+              helperText='รูปแบบ #RRGGBB'
+              sx={{ flex: 1 }}
+            />
+            <Box sx={{ width: 36, height: 36, borderRadius: 1, bgcolor: normalizeColorHex(form.color_hex), border: '1px solid #cbd5e1' }} />
+          </Stack>
+          <FormControlLabel
+            control={
+              <Checkbox
+                checked={form.is_active}
+                onChange={(e) => setForm((p) => ({ ...p, is_active: e.target.checked }))}
+              />
+            }
             label='สถานะใช้งาน'
-            value={form.is_active ? 'true' : 'false'}
-            onChange={(e) => setForm((p) => ({ ...p, is_active: e.target.value === 'true' }))}
-          >
-            <MenuItem value='true'>ใช้งาน</MenuItem>
-            <MenuItem value='false'>ปิดใช้งาน</MenuItem>
-          </TextField>
+          />
           <Button variant='contained' onClick={() => void save()} disabled={!form.code.trim() || !form.name.trim()}>บันทึก</Button>
         </Stack>
       </Drawer>

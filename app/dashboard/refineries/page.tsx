@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useMemo, useState } from 'react';
+import { ChangeEvent, useEffect, useMemo, useState } from 'react';
 import { Add, Delete, Edit } from '@mui/icons-material';
 import {
   Alert,
@@ -24,11 +24,13 @@ import {
   TextField,
   Typography,
 } from '@mui/material';
+import { display } from '@mui/system';
 
 type Refinery = {
   id: string;
   name: string;
   contact_info: string | null;
+  image_url: string | null;
   active: boolean;
   created_at?: string;
   updated_at?: string;
@@ -38,10 +40,11 @@ type RefineryForm = {
   id?: string;
   name: string;
   contact_info: string;
+  image_url: string;
   active: boolean;
 };
 
-const emptyForm: RefineryForm = { name: '', contact_info: '', active: true };
+const emptyForm: RefineryForm = { name: '', contact_info: '', image_url: '', active: true };
 
 export default function RefineriesPage() {
   const [companyId, setCompanyId] = useState(process.env.NEXT_PUBLIC_DEFAULT_COMPANY_ID ?? '');
@@ -92,6 +95,7 @@ export default function RefineriesPage() {
       company_id: companyId,
       name: form.name,
       contact_info: form.contact_info || null,
+      image_url: form.image_url || null,
       active: form.active,
     };
 
@@ -117,6 +121,20 @@ export default function RefineriesPage() {
     const data = await res.json();
     if (!res.ok) setError(data.error || 'ลบไม่สำเร็จ');
     else { setDeleteId(null); await load(); }
+  };
+
+  const onUploadImage = (e: ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    if (!file.type.startsWith('image/')) {
+      setError('ไฟล์รูปไม่ถูกต้อง กรุณาเลือกไฟล์ภาพ');
+      return;
+    }
+
+    const reader = new FileReader();
+    reader.onload = () => setForm((p) => ({ ...p, image_url: String(reader.result || '') }));
+    reader.onerror = () => setError('อ่านไฟล์รูปไม่สำเร็จ');
+    reader.readAsDataURL(file);
   };
 
   return (
@@ -158,6 +176,7 @@ export default function RefineriesPage() {
           <TableHead>
             <TableRow>
               <TableCell>ชื่อโรงกลั่น</TableCell>
+              <TableCell>รูปภาพ</TableCell>
               <TableCell>ข้อมูลติดต่อ</TableCell>
               <TableCell>สถานะใช้งาน</TableCell>
               <TableCell align='right'>จัดการ</TableCell>
@@ -167,15 +186,18 @@ export default function RefineriesPage() {
             {pagedRows.map((r) => (
               <TableRow key={r.id} hover>
                 <TableCell>{r.name}</TableCell>
+                <TableCell>
+                  {r.image_url ? <Box component='img' src={r.image_url} alt={r.name} sx={{ width: 44, height: 44, borderRadius: 1, objectFit: 'cover', border: '1px solid #e2e8f0' }} /> : '-'}
+                </TableCell>
                 <TableCell>{r.contact_info ?? '-'}</TableCell>
                 <TableCell><Chip size='small' color={r.active ? 'success' : 'default'} label={r.active ? 'ใช้งาน' : 'ปิดใช้งาน'} /></TableCell>
                 <TableCell align='right'>
-                  <IconButton onClick={() => { setForm({ id: r.id, name: r.name, contact_info: r.contact_info ?? '', active: r.active }); setOpen(true); }}><Edit fontSize='small' /></IconButton>
+                  <IconButton onClick={() => { setForm({ id: r.id, name: r.name, contact_info: r.contact_info ?? '', image_url: r.image_url ?? '', active: r.active }); setOpen(true); }}><Edit fontSize='small' /></IconButton>
                   <IconButton color='error' onClick={() => setDeleteId(r.id)}><Delete fontSize='small' /></IconButton>
                 </TableCell>
               </TableRow>
             ))}
-            {!filteredRows.length && !loading ? <TableRow><TableCell colSpan={4} align='center'>ไม่มีข้อมูลโรงกลั่น</TableCell></TableRow> : null}
+            {!filteredRows.length && !loading ? <TableRow><TableCell colSpan={5} align='center'>ไม่มีข้อมูลโรงกลั่น</TableCell></TableRow> : null}
           </TableBody>
         </Table>
         <TablePagination
@@ -197,6 +219,15 @@ export default function RefineriesPage() {
         <Stack sx={{ width: { xs: 320, sm: 440 }, p: 2 }} spacing={2}>
           <Typography variant='h6'>{form.id ? 'แก้ไขโรงกลั่น' : 'เพิ่มโรงกลั่น'}</Typography>
           <TextField label='ชื่อโรงกลั่น' value={form.name} onChange={(e) => setForm((p) => ({ ...p, name: e.target.value }))} />
+          <Stack direction='row' spacing={1} alignItems='center'>
+            <Button component='label' variant='outlined'>
+              อัปโหลดรูป
+              <input hidden accept='image/*' type='file' onChange={onUploadImage} />
+            </Button>
+            <Button variant='text' color='inherit' onClick={() => setForm((p) => ({ ...p, image_url: '' }))}>ล้างรูป</Button>
+          </Stack>
+          {form.image_url ? <Box component='img' src={form.image_url} alt='preview' sx={{ width: 96, height: 96, borderRadius: 1, objectFit: 'cover', border: '1px solid #e2e8f0' }} /> : null}
+          <TextField sx={{ display : 'none'}} label='Image URL (ตัวเลือก)' value={form.image_url} onChange={(e) => setForm((p) => ({ ...p, image_url: e.target.value }))} />
           <TextField label='ข้อมูลติดต่อ' value={form.contact_info} onChange={(e) => setForm((p) => ({ ...p, contact_info: e.target.value }))} />
           <TextField select label='สถานะใช้งาน' value={form.active ? 'true' : 'false'} onChange={(e) => setForm((p) => ({ ...p, active: e.target.value === 'true' }))}>
             <MenuItem value='true'>ใช้งาน</MenuItem>

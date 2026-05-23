@@ -36,7 +36,10 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
   const companyId = resolveCompanyId(body.company_id);
   if (!companyId) return NextResponse.json({ error: 'กรุณาตั้งค่า company_id หรือ DEFAULT_COMPANY_ID' }, { status: 422 });
 
-  const { effective_date, effective_time, refinery_id, rows } = body;
+  const { effective_date, effective_time, expires_date, expires_time, refinery_id, rows } = body;
+  if ((expires_date && !expires_time) || (!expires_date && expires_time)) {
+    return NextResponse.json({ error: 'กรุณาระบุวันและเวลาหมดอายุให้ครบ' }, { status: 422 });
+  }
 
   const effectiveAt = effective_date && effective_time
     ? (() => {
@@ -45,6 +48,13 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
         return { isoDate, effectiveAt: `${isoDate}T${effective_time}:00` };
       })()
     : null;
+  const expiresAt = expires_date && expires_time
+    ? (() => {
+        const [dd, mm, yyyy] = String(expires_date).split('/');
+        const isoDate = `${yyyy}-${mm}-${dd}`;
+        return { isoDate, expiresAt: `${isoDate}T${expires_time}:00` };
+      })()
+    : { isoDate: null, expiresAt: null };
 
   const { error: baseErr } = await supabaseAdmin
     .from('oil_base_prices')
@@ -52,6 +62,8 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
       refinery_id: refinery_id ?? null,
       effective_date: effectiveAt?.isoDate,
       effective_at: effectiveAt?.effectiveAt,
+      expires_date: expiresAt.isoDate,
+      expires_at: expiresAt.expiresAt,
       confirmed: true,
     })
     .eq('id', id)

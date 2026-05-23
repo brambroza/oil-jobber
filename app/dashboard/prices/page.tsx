@@ -30,6 +30,8 @@ type BasePriceRow = {
   refinery_name: string;
   effective_date: string;
   effective_at: string | null;
+  expires_date?: string | null;
+  expires_at?: string | null;
   confirmed: boolean;
   item_count: number;
 };
@@ -54,6 +56,18 @@ function nowHHmm(): string {
   return `${hh}:${mm}`;
 }
 
+function ddMmYyyyToIso(value: string): string {
+  const [dd, mm, yyyy] = String(value || '').split('/');
+  if (!dd || !mm || !yyyy) return '';
+  return `${yyyy}-${mm}-${dd}`;
+}
+
+function isoToDdMmYyyy(value: string): string {
+  const [yyyy, mm, dd] = String(value || '').split('-');
+  if (!yyyy || !mm || !dd) return '';
+  return `${dd}/${mm}/${yyyy}`;
+}
+
 export default function PricesPage() {
   const [companyId] = useState(process.env.NEXT_PUBLIC_DEFAULT_COMPANY_ID ?? '');
   const [rows, setRows] = useState<BasePriceRow[]>([]);
@@ -73,6 +87,8 @@ export default function PricesPage() {
   const [refineryId, setRefineryId] = useState('');
   const [effectiveDate, setEffectiveDate] = useState(todayDdMmYyyy());
   const [effectiveTime, setEffectiveTime] = useState(nowHHmm());
+  const [expiresDate, setExpiresDate] = useState('');
+  const [expiresTime, setExpiresTime] = useState('');
   const [items, setItems] = useState<EditItem[]>([]);
 
   const [deleteId, setDeleteId] = useState<string | null>(null);
@@ -125,6 +141,8 @@ export default function PricesPage() {
     setRefineryId('');
     setEffectiveDate(todayDdMmYyyy());
     setEffectiveTime(nowHHmm());
+    setExpiresDate('');
+    setExpiresTime('');
     setItems([{ depot_id: '', product_code: '', product_name: '', price: 0 }]);
     setOpenEditor(true);
   };
@@ -150,6 +168,16 @@ export default function PricesPage() {
       setEffectiveDate(todayDdMmYyyy());
       setEffectiveTime(nowHHmm());
     }
+    const expAt = String(data.base.expires_at ?? '');
+    if (expAt.includes('T')) {
+      const [d, t] = expAt.split('T');
+      const [yyyy, mm, dd] = d.split('-');
+      setExpiresDate(`${dd}/${mm}/${yyyy}`);
+      setExpiresTime((t || '00:00').slice(0, 5));
+    } else {
+      setExpiresDate('');
+      setExpiresTime('');
+    }
 
     setItems(
       (data.items || []).map((x: any) => ({
@@ -169,6 +197,8 @@ export default function PricesPage() {
       refinery_id: refineryId,
       effective_date: effectiveDate,
       effective_time: effectiveTime,
+      expires_date: expiresDate,
+      expires_time: expiresTime,
       rows: items,
     };
 
@@ -244,6 +274,7 @@ export default function PricesPage() {
               <TableCell>โรงกลั่น</TableCell>
               <TableCell>วันที่มีผล</TableCell>
               <TableCell>เวลา</TableCell>
+              <TableCell>ราคาขายถึงเวลา</TableCell>
               <TableCell>จำนวนรายการ</TableCell>
               <TableCell align='right'>จัดการ</TableCell>
             </TableRow>
@@ -254,6 +285,7 @@ export default function PricesPage() {
                 <TableCell>{r.refinery_name}</TableCell>
                 <TableCell>{formatDate(r.effective_date)}</TableCell>
                 <TableCell>{r.effective_at ? String(r.effective_at).slice(11, 16) : '-'}</TableCell>
+                <TableCell>{r.expires_at ? `${formatDate(String(r.expires_at).slice(0, 10))} ${String(r.expires_at).slice(11, 16)}` : '-'}</TableCell>
                 <TableCell>{r.item_count}</TableCell>
                 <TableCell align='right'>
                   <IconButton onClick={() => void openEdit(r.id)}><Edit fontSize='small' /></IconButton>
@@ -261,7 +293,7 @@ export default function PricesPage() {
                 </TableCell>
               </TableRow>
             ))}
-            {!filteredRows.length && !loading ? <TableRow><TableCell colSpan={5} align='center'>ไม่มีข้อมูลราคา</TableCell></TableRow> : null}
+            {!filteredRows.length && !loading ? <TableRow><TableCell colSpan={6} align='center'>ไม่มีข้อมูลราคา</TableCell></TableRow> : null}
           </TableBody>
         </Table>
         <TablePagination
@@ -280,7 +312,7 @@ export default function PricesPage() {
       </Box>
 
       <Drawer anchor='right' open={openEditor} onClose={() => setOpenEditor(false)}>
-        <Stack spacing={2} sx={{ width: { xs: 340, sm: 640 }, p: 2 }}>
+        <Stack spacing={2} sx={{ width: { xs: 640, sm: 640 }, p: 2 }}>
           <Typography variant='h6'>{editingId ? 'แก้ไขราคาน้ำมัน' : 'เพิ่มราคาน้ำมัน'}</Typography>
           <TextField select label='โรงกลั่น' value={refineryId} onChange={(e) => setRefineryId(e.target.value)}>
             {refineries.map((r) => <MenuItem key={r.id} value={r.id}>{r.name}</MenuItem>)}
@@ -288,6 +320,14 @@ export default function PricesPage() {
           <Stack direction='row' spacing={1}>
             <TextField label='วันที่มีผล (dd/MM/yyyy)' value={effectiveDate} onChange={(e) => setEffectiveDate(e.target.value)} />
             <TextField label='เวลา' type='time' value={effectiveTime} onChange={(e) => setEffectiveTime(e.target.value)} InputLabelProps={{ shrink: true }} />
+            <TextField
+              label='วันหมดอายุ'
+              type='date'
+              value={ddMmYyyyToIso(expiresDate)}
+              onChange={(e) => setExpiresDate(isoToDdMmYyyy(e.target.value))}
+              InputLabelProps={{ shrink: true }}
+            />
+            <TextField label='เวลาหมดอายุ' type='time' value={expiresTime} onChange={(e) => setExpiresTime(e.target.value)} InputLabelProps={{ shrink: true }} />
           </Stack>
 
           <Table size='small'>

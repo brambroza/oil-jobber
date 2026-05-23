@@ -8,7 +8,7 @@ export async function GET(req: NextRequest) {
 
   const { data, error } = await supabaseAdmin
     .from('oil_base_prices')
-    .select('id, company_id, effective_date, effective_at, confirmed, refinery_id, refineries(name)')
+    .select('id, company_id, effective_date, effective_at, expires_date, expires_at, confirmed, refinery_id, refineries(name)')
     .eq('company_id', companyId)
     .eq('is_deleted', false)
     .order('effective_at', { ascending: false, nullsFirst: false })

@@ -27,7 +27,10 @@ export default function LoginPage() {
     }
 
     const nextPath = new URLSearchParams(window.location.search).get('next');
-    const redirectPath = nextPath && nextPath.startsWith('/') ? nextPath : '/dashboard';
+    let redirectPath = '/dashboard';
+    if (nextPath && (nextPath.startsWith('/dashboard') || nextPath.startsWith('/customer'))) {
+      redirectPath = nextPath;
+    }
     router.replace(redirectPath);
     router.refresh();
   };

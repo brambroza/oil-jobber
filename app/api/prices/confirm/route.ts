@@ -21,17 +21,29 @@ export async function POST(req: NextRequest) {
   const refineryId = String(body.refinery_id ?? '').trim();
   const effectiveDate = String(body.effective_date ?? '').trim(); // dd/MM/yyyy
   const effectiveTime = String(body.effective_time ?? '').trim(); // HH:mm
+  const expiresDate = String(body.expires_date ?? '').trim(); // dd/MM/yyyy
+  const expiresTime = String(body.expires_time ?? '').trim(); // HH:mm
   const rows = Array.isArray(body.rows) ? body.rows : [];
 
   if (!companyId) return NextResponse.json({ error: 'กรุณาตั้งค่า company_id' }, { status: 422 });
   if (!refineryId) return NextResponse.json({ error: 'กรุณาเลือกโรงกลั่น' }, { status: 422 });
   if (!effectiveDate) return NextResponse.json({ error: 'กรุณาระบุวันที่มีผล' }, { status: 422 });
   if (!effectiveTime) return NextResponse.json({ error: 'กรุณาระบุเวลา' }, { status: 422 });
+  if ((expiresDate && !expiresTime) || (!expiresDate && expiresTime)) {
+    return NextResponse.json({ error: 'กรุณาระบุวันและเวลาหมดอายุให้ครบ' }, { status: 422 });
+  }
   if (!rows.length) return NextResponse.json({ error: 'ไม่มีรายการราคาให้บันทึก' }, { status: 422 });
 
   const [dd, mm, yyyy] = effectiveDate.split('/');
   const isoDate = `${yyyy}-${mm}-${dd}`;
   const effectiveAt = `${isoDate}T${effectiveTime}:00`;
+  let expiresIsoDate: string | null = null;
+  let expiresAt: string | null = null;
+  if (expiresDate && expiresTime) {
+    const [edd, emm, eyyyy] = expiresDate.split('/');
+    expiresIsoDate = `${eyyyy}-${emm}-${edd}`;
+    expiresAt = `${expiresIsoDate}T${expiresTime}:00`;
+  }
 
   const { data: base, error: baseErr } = await supabaseAdmin
     .from('oil_base_prices')
@@ -40,6 +52,8 @@ export async function POST(req: NextRequest) {
       refinery_id: refineryId,
       effective_date: isoDate,
       effective_at: effectiveAt,
+      expires_date: expiresIsoDate,
+      expires_at: expiresAt,
       confirmed: true,
     })
     .select('*')

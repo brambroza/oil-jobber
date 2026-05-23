@@ -10,6 +10,7 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
     .update({
       name: body.name,
       contact_info: body.contact_info ?? null,
+      image_url: body.image_url ?? null,
       active: Boolean(body.active),
     })
     .eq('id', id)

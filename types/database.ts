@@ -26,8 +26,14 @@ export interface BaseEntity {
 }
 
 export interface PaymentCondition extends BaseEntity { code: string; name: string; payment_type: 'CASH' | 'CREDIT'; credit_days: number; extra_cost_per_liter: number; }
-export interface Depot extends BaseEntity { code: string; name: string; pickup_cost_per_liter: number; }
-export interface OilProduct extends BaseEntity { code: string; name: string; is_active: boolean; }
+export interface Depot extends BaseEntity {
+  code: string;
+  name: string;
+  pickup_cost_per_liter: number;
+  refinery_id: UUID | null;
+  refineries?: { id: UUID; name: string } | null;
+}
+export interface OilProduct extends BaseEntity { code: string; name: string; color_hex: string; is_active: boolean; }
 export interface PriceRuleSetting extends BaseEntity { service_fee_per_liter: number; profit_margin_per_liter: number; }
 
 export interface Customer extends BaseEntity {

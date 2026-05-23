@@ -2,11 +2,12 @@
 
 import { useEffect, useMemo, useState } from 'react';
 import { Add, Delete, Edit } from '@mui/icons-material';
-import { Alert, Box, Button, Dialog, DialogActions, DialogContent, DialogTitle, Drawer, IconButton, Stack, Table, TableBody, TableCell, TableHead, TablePagination, TableRow, TextField, Typography } from '@mui/material';
+import { Alert, Box, Button, Dialog, DialogActions, DialogContent, DialogTitle, Drawer, IconButton, MenuItem, Stack, Table, TableBody, TableCell, TableHead, TablePagination, TableRow, TextField, Typography } from '@mui/material';
 import { Depot } from '@/types/database';
 
-type DepotForm = { id?: string; code: string; name: string; pickup_cost_per_liter: number };
-const emptyForm: DepotForm = { code: '', name: '', pickup_cost_per_liter: 0 };
+type RefineryOption = { id: string; name: string };
+type DepotForm = { id?: string; code: string; name: string; refinery_id: string; pickup_cost_per_liter: number };
+const emptyForm: DepotForm = { code: '', name: '', refinery_id: '', pickup_cost_per_liter: 0 };
 const DEFAULT_COMPANY_ID = process.env.NEXT_PUBLIC_DEFAULT_COMPANY_ID ?? '';
 
 function normalizeDepotCode(value: string): string {
@@ -16,6 +17,7 @@ function normalizeDepotCode(value: string): string {
 export default function DepotsPage() {
   const [companyId, setCompanyId] = useState(DEFAULT_COMPANY_ID);
   const [rows, setRows] = useState<Depot[]>([]);
+  const [refineries, setRefineries] = useState<RefineryOption[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
   const [searchText, setSearchText] = useState('');
@@ -34,7 +36,8 @@ export default function DepotsPage() {
       const okText =
         !q ||
         (r.code || '').toLowerCase().includes(q) ||
-        (r.name || '').toLowerCase().includes(q);
+        (r.name || '').toLowerCase().includes(q) ||
+        (r.refineries?.name || '').toLowerCase().includes(q);
       const okDate = !d || String(r.created_at || '').includes(d) || String(r.updated_at || '').includes(d);
       return okText && okDate;
     });
@@ -48,10 +51,15 @@ export default function DepotsPage() {
     if (!companyId) return;
     setLoading(true);
     setError('');
-    const res = await fetch(`/api/depots?company_id=${companyId}`);
-    const data = await res.json();
-    if (!res.ok) setError(data.error || 'โหลดข้อมูลไม่สำเร็จ');
-    else setRows(data);
+    const [depotRes, refineryRes] = await Promise.all([
+      fetch(`/api/depots?company_id=${companyId}`),
+      fetch(`/api/refineries?company_id=${companyId}`),
+    ]);
+    const [depotData, refineryData] = await Promise.all([depotRes.json(), refineryRes.json()]);
+    if (!depotRes.ok) setError(depotData.error || 'โหลดข้อมูลคลังไม่สำเร็จ');
+    else setRows(depotData);
+    if (!refineryRes.ok) setError(refineryData.error || 'โหลดข้อมูลโรงกลั่นไม่สำเร็จ');
+    else setRefineries((refineryData || []).map((x: any) => ({ id: x.id, name: x.name })));
     setLoading(false);
   };
 
@@ -137,6 +145,7 @@ export default function DepotsPage() {
             <TableRow>
               <TableCell>Code</TableCell>
               <TableCell>ชื่อคลังน้ำมัน</TableCell>
+              <TableCell>โรงกลั่น</TableCell>
               <TableCell>ค่ารับขึ้น (บาท/ลิตร)</TableCell>
               <TableCell align='right'>จัดการ</TableCell>
             </TableRow>
@@ -146,14 +155,15 @@ export default function DepotsPage() {
               <TableRow key={r.id}>
                 <TableCell><Typography sx={{ fontFamily: 'monospace', fontWeight: 700 }}>{r.code}</Typography></TableCell>
                 <TableCell>{r.name}</TableCell>
+                <TableCell>{r.refineries?.name ?? '-'}</TableCell>
                 <TableCell>{Number(r.pickup_cost_per_liter).toFixed(4)}</TableCell>
                 <TableCell align='right'>
-                  <IconButton onClick={() => { setForm({ id: r.id, code: r.code, name: r.name, pickup_cost_per_liter: Number(r.pickup_cost_per_liter) }); setOpen(true); }}><Edit fontSize='small' /></IconButton>
+                  <IconButton onClick={() => { setForm({ id: r.id, code: r.code, name: r.name, refinery_id: r.refinery_id || '', pickup_cost_per_liter: Number(r.pickup_cost_per_liter) }); setOpen(true); }}><Edit fontSize='small' /></IconButton>
                   <IconButton color='error' onClick={() => setDeleteId(r.id)}><Delete fontSize='small' /></IconButton>
                 </TableCell>
               </TableRow>
             ))}
-            {!filteredRows.length && !loading ? <TableRow><TableCell colSpan={4} align='center'>ไม่มีข้อมูล</TableCell></TableRow> : null}
+            {!filteredRows.length && !loading ? <TableRow><TableCell colSpan={5} align='center'>ไม่มีข้อมูล</TableCell></TableRow> : null}
           </TableBody>
         </Table>
         <TablePagination
@@ -181,8 +191,17 @@ export default function DepotsPage() {
             helperText={codePreview ? `รหัสที่บันทึกจริง: ${codePreview}` : 'เช่น SRIRACHA, SARABURI, BANG_PA_IN'}
           />
           <TextField label='ชื่อคลังน้ำมัน' value={form.name} onChange={(e) => setForm((p) => ({ ...p, name: e.target.value }))} />
+          <TextField
+            select
+            label='โรงกลั่น'
+            value={form.refinery_id}
+            onChange={(e) => setForm((p) => ({ ...p, refinery_id: e.target.value }))}
+            helperText='คลังต้องอ้างอิงโรงกลั่น'
+          >
+            {refineries.map((r) => <MenuItem key={r.id} value={r.id}>{r.name}</MenuItem>)}
+          </TextField>
           <TextField label='ค่ารับขึ้น (บาท/ลิตร)' type='number' value={form.pickup_cost_per_liter} onChange={(e) => setForm((p) => ({ ...p, pickup_cost_per_liter: Number(e.target.value) }))} />
-          <Button variant='contained' onClick={() => void save()} disabled={!form.code.trim() || !form.name.trim()}>บันทึก</Button>
+          <Button variant='contained' onClick={() => void save()} disabled={!form.code.trim() || !form.name.trim() || !form.refinery_id}>บันทึก</Button>
         </Stack>
       </Drawer>
 

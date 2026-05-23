@@ -6,28 +6,47 @@ import {
   Alert,
   Box,
   Button,
+  Checkbox,
   Chip,
   Dialog,
   DialogActions,
   DialogContent,
   DialogTitle,
+  Divider,
   Drawer,
+  FormControlLabel,
+  FormGroup,
   IconButton,
-  MenuItem,
+  Paper,
   Stack,
+  Switch,
+  Tab,
   Table,
   TableBody,
   TableCell,
   TableHead,
   TablePagination,
   TableRow,
+  Tabs,
   TextField,
   Typography,
 } from '@mui/material';
 import { Customer, PaymentCondition } from '@/types/database';
 
+type MasterRefinery = { id: string; name: string };
+type MasterDepot = { id: string; code: string; name: string; refineries?: { name?: string } | null };
+type MasterOilProduct = { id: string; code: string; name: string };
+
 type CustomerWithPayment = Customer & {
   payment_conditions?: { name?: string; code?: string } | null;
+};
+
+type CustomerAccessForm = {
+  allowed_refinery_ids: string[];
+  allowed_depot_ids: string[];
+  allowed_oil_product_ids: string[];
+  allowed_payment_condition_ids: string[];
+  can_place_order: boolean;
 };
 
 type CustomerForm = {
@@ -37,7 +56,6 @@ type CustomerForm = {
   address: string;
   phone: string;
   credit_limit: number;
-  payment_condition_id: string;
   status: string;
 };
 
@@ -47,14 +65,24 @@ const emptyForm: CustomerForm = {
   address: '',
   phone: '',
   credit_limit: 0,
-  payment_condition_id: '',
   status: 'ACTIVE',
 };
 
+const emptyAccess: CustomerAccessForm = {
+  allowed_refinery_ids: [],
+  allowed_depot_ids: [],
+  allowed_oil_product_ids: [],
+  allowed_payment_condition_ids: [],
+  can_place_order: true,
+};
+
 export default function CustomersPage() {
-  const [companyId, setCompanyId] = useState('');
+  const [companyId] = useState(process.env.NEXT_PUBLIC_DEFAULT_COMPANY_ID ?? '');
   const [rows, setRows] = useState<CustomerWithPayment[]>([]);
   const [paymentConditions, setPaymentConditions] = useState<PaymentCondition[]>([]);
+  const [refineries, setRefineries] = useState<MasterRefinery[]>([]);
+  const [depots, setDepots] = useState<MasterDepot[]>([]);
+  const [oilProducts, setOilProducts] = useState<MasterOilProduct[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
   const [searchText, setSearchText] = useState('');
@@ -62,10 +90,16 @@ export default function CustomersPage() {
   const [page, setPage] = useState(0);
   const [rowsPerPage, setRowsPerPage] = useState(10);
   const [drawerOpen, setDrawerOpen] = useState(false);
+  const [drawerTab, setDrawerTab] = useState<'portal' | 'login'>('portal');
   const [form, setForm] = useState<CustomerForm>(emptyForm);
+  const [accessForm, setAccessForm] = useState<CustomerAccessForm>(emptyAccess);
+  const [portalUserId, setPortalUserId] = useState<string | null>(null);
+  const [portalEmail, setPortalEmail] = useState('');
+  const [portalPassword, setPortalPassword] = useState('');
   const [deleteId, setDeleteId] = useState<string | null>(null);
 
   const isEdit = useMemo(() => Boolean(form.id), [form.id]);
+
   const filteredRows = useMemo(() => {
     const q = searchText.trim().toLowerCase();
     const d = searchDate.trim();
@@ -82,6 +116,7 @@ export default function CustomersPage() {
       return okText && okDate;
     });
   }, [rows, searchText, searchDate]);
+
   const pagedRows = useMemo(() => {
     const start = page * rowsPerPage;
     return filteredRows.slice(start, start + rowsPerPage);
@@ -92,17 +127,33 @@ export default function CustomersPage() {
     setLoading(true);
     setError('');
     try {
-      const [customerRes, paymentRes] = await Promise.all([
+      const [customerRes, paymentRes, refineryRes, depotRes, productRes] = await Promise.all([
         fetch(`/api/customers?company_id=${companyId}`),
         fetch(`/api/payment-conditions?company_id=${companyId}`),
+        fetch(`/api/refineries?company_id=${companyId}`),
+        fetch(`/api/depots?company_id=${companyId}`),
+        fetch(`/api/oil-products?company_id=${companyId}`),
       ]);
-      const [customerData, paymentData] = await Promise.all([customerRes.json(), paymentRes.json()]);
+
+      const [customerData, paymentData, refineryData, depotData, productData] = await Promise.all([
+        customerRes.json(),
+        paymentRes.json(),
+        refineryRes.json(),
+        depotRes.json(),
+        productRes.json(),
+      ]);
 
       if (!customerRes.ok) throw new Error(customerData.error || 'โหลดข้อมูลลูกค้าไม่สำเร็จ');
       if (!paymentRes.ok) throw new Error(paymentData.error || 'โหลดเงื่อนไขชำระเงินไม่สำเร็จ');
+      if (!refineryRes.ok) throw new Error(refineryData.error || 'โหลดโรงกลั่นไม่สำเร็จ');
+      if (!depotRes.ok) throw new Error(depotData.error || 'โหลดคลังไม่สำเร็จ');
+      if (!productRes.ok) throw new Error(productData.error || 'โหลดสินค้าน้ำมันไม่สำเร็จ');
 
       setRows(customerData);
       setPaymentConditions(paymentData);
+      setRefineries(refineryData);
+      setDepots(depotData);
+      setOilProducts(productData);
     } catch (e) {
       setError((e as Error).message);
     } finally {
@@ -114,6 +165,21 @@ export default function CustomersPage() {
     void load();
   }, [companyId]);
 
+  const loadAccess = async (customerId: string) => {
+    const res = await fetch(`/api/customer-portal/access/${customerId}?company_id=${companyId}`);
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || 'โหลดสิทธิ์ลูกค้าไม่สำเร็จ');
+
+    setAccessForm({
+      allowed_refinery_ids: data.access?.allowed_refinery_ids ?? [],
+      allowed_depot_ids: data.access?.allowed_depot_ids ?? [],
+      allowed_oil_product_ids: data.access?.allowed_oil_product_ids ?? [],
+      allowed_payment_condition_ids: data.access?.allowed_payment_condition_ids ?? [],
+      can_place_order: Boolean(data.access?.can_place_order ?? true),
+    });
+    setPortalUserId(data.portal_user?.auth_user_id ?? null);
+  };
+
   const onSave = async () => {
     try {
       const payload = {
@@ -123,7 +189,6 @@ export default function CustomersPage() {
         address: form.address || null,
         phone: form.phone || null,
         credit_limit: form.credit_limit,
-        payment_condition_id: form.payment_condition_id || null,
         status: form.status,
       };
       const res = await fetch(form.id ? `/api/customers/${form.id}` : '/api/customers', {
@@ -132,10 +197,48 @@ export default function CustomersPage() {
         body: JSON.stringify(payload),
       });
       const data = await res.json();
-      if (!res.ok) throw new Error(data.error || 'บันทึกไม่สำเร็จ');
+      if (!res.ok) throw new Error(data.error || 'บันทึกข้อมูลลูกค้าไม่สำเร็จ');
+
+      const customerId = form.id || data.id;
+      const accessRes = await fetch(`/api/customer-portal/access/${customerId}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ company_id: companyId, ...accessForm }),
+      });
+      const accessData = await accessRes.json();
+      if (!accessRes.ok) throw new Error(accessData.error || 'บันทึกสิทธิ์ลูกค้าไม่สำเร็จ');
+
       setDrawerOpen(false);
       setForm(emptyForm);
+      setAccessForm(emptyAccess);
+      setPortalUserId(null);
+      setPortalEmail('');
+      setPortalPassword('');
       await load();
+    } catch (e) {
+      setError((e as Error).message);
+    }
+  };
+
+  const onCreatePortalUser = async () => {
+    if (!form.id) return;
+
+    try {
+      const res = await fetch('/api/customer-portal/users', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          company_id: companyId,
+          customer_id: form.id,
+          email: portalEmail,
+          password: portalPassword,
+        }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || 'สร้างผู้ใช้ลูกค้าไม่สำเร็จ');
+
+      setPortalUserId(data.auth_user_id);
+      setPortalPassword('');
     } catch (e) {
       setError((e as Error).message);
     }
@@ -152,6 +255,93 @@ export default function CustomersPage() {
     } catch (e) {
       setError((e as Error).message);
     }
+  };
+
+  const toggleInArray = (items: string[], value: string): string[] => {
+    if (items.includes(value)) return items.filter((x) => x !== value);
+    return [...items, value];
+  };
+
+  const AccessCheckboxGroup = ({
+    title,
+    helper,
+    selected,
+    options,
+    searchable = false,
+    maxHeight = 260,
+    onChange,
+  }: {
+    title: string;
+    helper: string;
+    selected: string[];
+    options: Array<{ id: string; label: string; group?: string }>;
+    searchable?: boolean;
+    maxHeight?: number;
+    onChange: (next: string[]) => void;
+  }) => {
+    const [q, setQ] = useState('');
+    const qv = q.trim().toLowerCase();
+    const shown = qv ? options.filter((x) => `${x.group || ''} ${x.label}`.toLowerCase().includes(qv)) : options;
+
+    return (
+    <Paper variant='outlined' sx={{ p: 1.25, borderColor: '#dbe4f0', borderRadius: 2 }}>
+      <Stack spacing={0.8}>
+        <Stack direction='row' justifyContent='space-between' alignItems='center' spacing={1}>
+          <Stack spacing={0.2}>
+            <Typography fontWeight={700}>{title}</Typography>
+            <Typography variant='caption' color='text.secondary'>เลือกแล้ว {selected.length} รายการ</Typography>
+          </Stack>
+          <Stack direction='row' spacing={0.5}>
+            <Button size='small' onClick={() => onChange(options.map((o) => o.id))}>เลือกทั้งหมด</Button>
+            <Button size='small' color='inherit' onClick={() => onChange([])}>ล้าง</Button>
+          </Stack>
+        </Stack>
+        <Typography variant='caption' color='text.secondary'>{helper}</Typography>
+        {searchable ? (
+          <TextField
+            size='small'
+            placeholder='ค้นหาในรายการนี้'
+            value={q}
+            onChange={(e) => setQ(e.target.value)}
+          />
+        ) : null}
+        <FormGroup sx={{ maxHeight, overflowY: 'auto', pr: 0.5, border: '1px solid #edf2f7', borderRadius: 1, p: 0.6 }}>
+          {shown.map((opt, idx) => {
+            const prev = shown[idx - 1];
+            const showGroup = Boolean(opt.group) && (idx === 0 || prev?.group !== opt.group);
+            return (
+              <Box key={opt.id}>
+                {showGroup ? (
+                  <Typography
+                    variant='caption'
+                    sx={{
+                      color: '#1e3a8a',
+                      fontWeight: 800,
+                      mt: 0.5,
+                      mb: 0.2,
+                      display: 'block',
+                      position: 'sticky',
+                      top: 0,
+                      zIndex: 1,
+                      bgcolor: '#f8fbff',
+                      py: 0.2,
+                    }}
+                  >
+                    {opt.group}
+                  </Typography>
+                ) : null}
+                <FormControlLabel
+                  control={<Checkbox size='small' checked={selected.includes(opt.id)} onChange={() => onChange(toggleInArray(selected, opt.id))} />}
+                  label={<Typography variant='body2'>{opt.label}</Typography>}
+                />
+              </Box>
+            );
+          })}
+          {!shown.length ? <Typography variant='caption' color='text.secondary'>ไม่พบข้อมูล</Typography> : null}
+        </FormGroup>
+      </Stack>
+    </Paper>
+  );
   };
 
   return (
@@ -180,12 +370,13 @@ export default function CustomersPage() {
           }}
           sx={{ minWidth: { xs: '100%', md: 220 } }}
         />
-    {/*     <TextField label='Company ID' value={companyId} onChange={(e) => setCompanyId(e.target.value)} fullWidth /> */}
         <Button variant='outlined' onClick={() => void load()}>รีเฟรช</Button>
-        <Button variant='contained' startIcon={<Add />} onClick={() => { setForm(emptyForm); setDrawerOpen(true); }}>เพิ่มลูกค้า</Button>
+        <Button variant='contained' startIcon={<Add />} onClick={() => { setForm(emptyForm); setAccessForm(emptyAccess); setPortalUserId(null); setPortalEmail(''); setPortalPassword(''); setDrawerTab('portal'); setDrawerOpen(true); }}>เพิ่มลูกค้า</Button>
       </Stack>
+
       {error ? <Alert severity='error'>{error}</Alert> : null}
       {loading ? <Alert severity='info'>กำลังโหลด...</Alert> : null}
+
       <Box sx={{ overflowX: 'auto', bgcolor: 'background.paper', borderRadius: 1 }}>
         <Table size='small'>
           <TableHead>
@@ -219,9 +410,10 @@ export default function CustomersPage() {
                       address: r.address ?? '',
                       phone: r.phone ?? '',
                       credit_limit: Number(r.credit_limit),
-                      payment_condition_id: r.payment_condition_id ?? '',
                       status: r.status,
                     });
+                    void loadAccess(r.id);
+                    setDrawerTab('portal');
                     setDrawerOpen(true);
                   }}><Edit fontSize='small' /></IconButton>
                   <IconButton color='error' onClick={() => setDeleteId(r.id)}><Delete fontSize='small' /></IconButton>
@@ -247,25 +439,86 @@ export default function CustomersPage() {
       </Box>
 
       <Drawer anchor='right' open={drawerOpen} onClose={() => setDrawerOpen(false)}>
-        <Stack sx={{ width: { xs: 340, sm: 460 }, p: 2 }} spacing={2}>
+       <Stack spacing={2} sx={{ width: { xs: '100vw', sm: 700, md: 1120 }, maxWidth: '100vw', p: { xs: 1.25, md: 2.5 } }}>
+      
           <Typography variant='h6'>{isEdit ? 'แก้ไขลูกค้า' : 'เพิ่มลูกค้า'}</Typography>
-          <TextField label='บริษัท' value={form.company_name} onChange={(e) => setForm((p) => ({ ...p, company_name: e.target.value }))} required />
-          <TextField label='เลขภาษี' value={form.tax_id} onChange={(e) => setForm((p) => ({ ...p, tax_id: e.target.value }))} />
-          <TextField label='ที่อยู่' multiline minRows={3} value={form.address} onChange={(e) => setForm((p) => ({ ...p, address: e.target.value }))} />
-          <TextField label='เบอร์โทร' value={form.phone} onChange={(e) => setForm((p) => ({ ...p, phone: e.target.value }))} />
-          <TextField label='วงเงินเครดิต' type='number' value={form.credit_limit} onChange={(e) => setForm((p) => ({ ...p, credit_limit: Number(e.target.value) }))} />
-          <TextField
-            select
-            label='เงื่อนไขชำระเงิน'
-            value={form.payment_condition_id}
-            onChange={(e) => setForm((p) => ({ ...p, payment_condition_id: e.target.value }))}
-          >
-            <MenuItem value=''>ไม่ระบุ</MenuItem>
-            {paymentConditions.map((pc) => (
-              <MenuItem key={pc.id} value={pc.id}>{pc.name} ({pc.code})</MenuItem>
-            ))}
-          </TextField>
-          <TextField label='สถานะ' value={form.status} onChange={(e) => setForm((p) => ({ ...p, status: e.target.value }))} />
+          <Paper variant='outlined' sx={{ p: 1.25, borderColor: '#dbe4f0', borderRadius: 2 }}>
+            <Stack spacing={1.1}>
+              <TextField size='small' label='บริษัท' value={form.company_name} onChange={(e) => setForm((p) => ({ ...p, company_name: e.target.value }))} required />
+              <Stack direction={{ xs: 'column', md: 'row' }} spacing={1}>
+                <TextField size='small' label='เลขภาษี' value={form.tax_id} onChange={(e) => setForm((p) => ({ ...p, tax_id: e.target.value }))} fullWidth />
+                <TextField size='small' label='เบอร์โทร' value={form.phone} onChange={(e) => setForm((p) => ({ ...p, phone: e.target.value }))} fullWidth />
+              </Stack>
+              <TextField size='small' label='ที่อยู่' multiline minRows={3} value={form.address} onChange={(e) => setForm((p) => ({ ...p, address: e.target.value }))} />
+              <Stack direction={{ xs: 'column', md: 'row' }} spacing={1}>
+                <TextField size='small' label='วงเงินเครดิต' type='number' value={form.credit_limit} onChange={(e) => setForm((p) => ({ ...p, credit_limit: Number(e.target.value) }))} fullWidth />
+                <TextField size='small' label='สถานะ' value={form.status} onChange={(e) => setForm((p) => ({ ...p, status: e.target.value }))} fullWidth />
+              </Stack>
+            </Stack>
+          </Paper>
+
+          <Divider />
+          <Tabs value={drawerTab} onChange={(_, v) => setDrawerTab(v)} sx={{ borderBottom: '1px solid #e2e8f0' }}>
+            <Tab value='portal' label='สิทธิ์ลูกค้าในพอร์ทัล' />
+            <Tab value='login' label='บัญชี Login ลูกค้า' />
+          </Tabs>
+
+          {drawerTab === 'portal' ? (
+            <Stack spacing={1.2}>
+              <Stack direction='row' spacing={1} alignItems='center'>
+                <Switch checked={accessForm.can_place_order} onChange={(e) => setAccessForm((p) => ({ ...p, can_place_order: e.target.checked }))} />
+                <Typography>อนุญาตให้สั่งซื้อ</Typography>
+              </Stack>
+
+              <AccessCheckboxGroup
+                title='โรงกลั่นที่เห็นได้'
+                helper='ถ้าไม่เลือก = เห็นทุกโรงกลั่น'
+                selected={accessForm.allowed_refinery_ids}
+                options={refineries.map((r) => ({ id: r.id, label: r.name }))}
+                onChange={(next) => setAccessForm((p) => ({ ...p, allowed_refinery_ids: next }))}
+              />
+
+              <AccessCheckboxGroup
+                title='คลังที่เห็นได้'
+                helper='ถ้าไม่เลือก = เห็นทุกคลัง'
+                selected={accessForm.allowed_depot_ids}
+                options={depots
+                  .map((d) => ({ id: d.id, label: `${d.code} - ${d.name}`, group: d.refineries?.name || 'ไม่ระบุโรงกลั่น' }))
+                  .sort((a, b) => `${a.group}|${a.label}`.localeCompare(`${b.group}|${b.label}`))}
+                searchable
+                maxHeight={320}
+                onChange={(next) => setAccessForm((p) => ({ ...p, allowed_depot_ids: next }))}
+              />
+
+              <AccessCheckboxGroup
+                title='น้ำมันที่เห็นได้'
+                helper='ถ้าไม่เลือก = เห็นทุกชนิด'
+                selected={accessForm.allowed_oil_product_ids}
+                options={oilProducts.map((p) => ({ id: p.id, label: `${p.code} - ${p.name}` }))}
+                onChange={(next) => setAccessForm((p) => ({ ...p, allowed_oil_product_ids: next }))}
+              />
+
+              <AccessCheckboxGroup
+                title='เครดิตเทอมที่เห็นได้'
+                helper='ถ้าไม่เลือก = เห็นทุกเทอม'
+                selected={accessForm.allowed_payment_condition_ids}
+                options={paymentConditions.map((pc) => ({ id: pc.id, label: `${pc.name} (${pc.payment_type}${pc.credit_days ? ` ${pc.credit_days} วัน` : ''})` }))}
+                onChange={(next) => setAccessForm((p) => ({ ...p, allowed_payment_condition_ids: next }))}
+              />
+            </Stack>
+          ) : (
+            <Paper variant='outlined' sx={{ p: 1.25, borderColor: '#dbe4f0', borderRadius: 2 }}>
+              <Stack spacing={1.1}>
+                {portalUserId ? <Alert severity='success'>สร้างบัญชีแล้ว (Auth User ID: {portalUserId})</Alert> : <Alert severity='info'>ยังไม่มีบัญชีพอร์ทัลสำหรับลูกค้ารายนี้</Alert>}
+                <TextField size='small' label='อีเมลสำหรับลูกค้า' value={portalEmail} onChange={(e) => setPortalEmail(e.target.value)} placeholder='customer@example.com' />
+                <TextField size='small' label='รหัสผ่านเริ่มต้น' value={portalPassword} onChange={(e) => setPortalPassword(e.target.value)} type='password' helperText='อย่างน้อย 8 ตัวอักษร' />
+                <Button variant='outlined' disabled={!form.id || !portalEmail || !portalPassword || Boolean(portalUserId)} onClick={() => void onCreatePortalUser()}>
+                  สร้างบัญชีลูกค้า
+                </Button>
+              </Stack>
+            </Paper>
+          )}
+
           <Button variant='contained' onClick={() => void onSave()} disabled={!companyId || !form.company_name}>บันทึก</Button>
         </Stack>
       </Drawer>

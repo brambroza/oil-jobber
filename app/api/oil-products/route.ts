@@ -6,6 +6,12 @@ function normalizeCode(code: string): string {
   return code.trim().toUpperCase().replace(/\s+/g, '_');
 }
 
+function normalizeColorHex(value: unknown): string {
+  const raw = String(value ?? '').trim().toUpperCase();
+  if (/^#[0-9A-F]{6}$/.test(raw)) return raw;
+  return '#2563EB';
+}
+
 function isUuid(value: string): boolean {
   return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(value);
 }
@@ -32,6 +38,7 @@ export async function POST(req: NextRequest) {
   const code = normalizeCode(String(body.code ?? ''));
   const name = String(body.name ?? '').trim();
   const isActive = Boolean(body.is_active ?? true);
+  const colorHex = normalizeColorHex(body.color_hex);
 
   if (!companyId) return NextResponse.json({ error: 'กรุณาตั้งค่า company_id หรือ DEFAULT_COMPANY_ID' }, { status: 422 });
   if (!isUuid(companyId)) return NextResponse.json({ error: 'company_id ต้องเป็น UUID เท่านั้น' }, { status: 422 });
@@ -52,7 +59,7 @@ export async function POST(req: NextRequest) {
 
   const { data, error } = await supabaseAdmin
     .from('oil_products')
-    .insert({ company_id: companyId, code, name, is_active: isActive })
+    .insert({ company_id: companyId, code, name, is_active: isActive, color_hex: colorHex })
     .select('*')
     .single();
 

@@ -27,6 +27,7 @@ export async function POST(req: NextRequest) {
   const companyId = resolveCompanyId(body.company_id);
   const name = String(body.name ?? '').trim();
   const contactInfo = String(body.contact_info ?? '').trim() || null;
+  const imageUrl = String(body.image_url ?? '').trim() || null;
   const active = Boolean(body.active ?? true);
 
   if (!companyId) return NextResponse.json({ error: 'กรุณาตั้งค่า company_id หรือ DEFAULT_COMPANY_ID' }, { status: 422 });
@@ -35,7 +36,7 @@ export async function POST(req: NextRequest) {
 
   const { data, error } = await supabaseAdmin
     .from('refineries')
-    .insert({ company_id: companyId, name, contact_info: contactInfo, active })
+    .insert({ company_id: companyId, name, contact_info: contactInfo, image_url: imageUrl, active })
     .select('*')
     .single();
 

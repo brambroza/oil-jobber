@@ -52,7 +52,7 @@ const menuGroups: MenuGroup[] = [
     title: 'หลัก',
     items: [
       { label: 'แดชบอร์ด', href: '/dashboard', icon: <DashboardOutlined fontSize='small' /> },
-      { label: 'OCR ราคาน้ำมัน', href: '/dashboard/prices/ocr-upload', icon: <ScannerOutlined fontSize='small' />, badge: '2' },
+      { label: 'ราคาน้ำมัน อ่านจากภาพ', href: '/dashboard/prices/ocr-upload', icon: <ScannerOutlined fontSize='small' />, badge: '2' },
       { label: 'ข้อมูลน้ำมัน', href: '/dashboard/oil-products', icon: <TagOutlined fontSize='small' /> },
       { label: 'ราคาน้ำมัน', href: '/dashboard/prices', icon: <TagOutlined fontSize='small' /> },
       { label: 'แจ้งราคา LINE', href: '/dashboard/line/broadcast-price', icon: <CampaignOutlined fontSize='small' /> },
@@ -63,7 +63,7 @@ const menuGroups: MenuGroup[] = [
     items: [
       { label: 'ใบสั่งซื้อ', href: '/dashboard/orders', icon: <ReceiptLongOutlined fontSize='small' />, badge: '7' },
       { label: 'ลูกค้า', href: '/dashboard/customers', icon: <PeopleOutline fontSize='small' /> },
-      { label: 'รถขนส่ง', href: '/dashboard/customers', icon: <LocalShippingOutlined fontSize='small' /> },
+      { label: 'รถขนส่ง', href: '/dashboard/customer-vehicles', icon: <LocalShippingOutlined fontSize='small' /> },
       { label: 'โรงกลั่น', href: '/dashboard/refineries', icon: <StoreOutlined fontSize='small' /> },
       { label: 'คลังน้ำมัน', href: '/dashboard/depots', icon: <StoreOutlined fontSize='small' /> },
     ],
@@ -92,7 +92,8 @@ const menuGroups: MenuGroup[] = [
   },
 ];
 
-const drawerWidth = 220;
+const drawerWidth = 240;
+const topbarHeight = 56;
 
 export default function DashboardShell({ children }: { children: ReactNode }) {
   const pathname = usePathname();
@@ -183,10 +184,10 @@ export default function DashboardShell({ children }: { children: ReactNode }) {
     const timer = setInterval(() => void fetchNotifs(), 15000);
     return () => clearInterval(timer);
   }, [companyId]);
-
+ 
   const sidebar = (
     <Box sx={{ height: '100%', bgcolor: '#ffffff' }}>
-      <Box sx={{ px: 2, py: 2 }}>
+      <Box sx={{ px: 2, py: 2.2 }}>
         <Stack direction='row' spacing={1} alignItems='center'>
           <Box sx={{ width: 8, height: 8, borderRadius: '50%', bgcolor: '#0f172a' }} />
           <Typography sx={{ fontSize: 13, fontWeight: 700, letterSpacing: '.01em' }}>OilJobber</Typography>
@@ -216,7 +217,7 @@ export default function DashboardShell({ children }: { children: ReactNode }) {
                     '&:hover': { bgcolor: selected ? '#e2e8f0' : '#f8fafc' },
                   }}
                 >
-                  <Box sx={{ width: 18, mr: 1, opacity: selected ? 1 : 0.72 }}>{item.icon}</Box>
+                  <Box sx={{ width: 18, mr: 1, opacity: selected ? 1 : 0.72, color: selected ? '#0f172a' : '#64748b' }}>{item.icon}</Box>
                   <ListItemText
                     primary={item.label}
                     primaryTypographyProps={{ fontSize: 13, fontWeight: selected ? 600 : 400, noWrap: true }}
@@ -236,24 +237,31 @@ export default function DashboardShell({ children }: { children: ReactNode }) {
   );
 
   return (
-    <Box sx={{ display: 'flex', minHeight: '100vh', bgcolor: '#f8fafc' }}>
+    <Box
+      sx={{
+        minHeight: '100vh',
+        bgcolor: '#f8fafc',
+        '--dashboard-drawer-width': `${drawerWidth}px`,
+        '--dashboard-topbar-height': `${topbarHeight}px`,
+      }}
+    >
       <AppBar
         position='fixed'
         elevation={0}
         sx={{
-          width: { md: `calc(100% - ${drawerWidth}px)` },
-          ml: { md: `${drawerWidth}px` },
+          width: { md: 'calc(100% - var(--dashboard-drawer-width))' },
+          ml: { md: 'var(--dashboard-drawer-width)' },
           bgcolor: 'rgba(255,255,255,0.88)',
-          backdropFilter: 'blur(8px)',
+          backdropFilter: 'blur(10px)',
           color: 'text.primary',
           borderBottom: '1px solid',
           borderColor: '#e2e8f0',
           zIndex: (theme) => theme.zIndex.drawer + 1,
-          height: 52,
+          height: 'var(--dashboard-topbar-height)',
           justifyContent: 'center',
         }}
       >
-        <Toolbar variant='dense' sx={{ minHeight: '52px !important', px: { xs: 1, md: 3 } }}>
+        <Toolbar variant='dense' sx={{ minHeight: 'var(--dashboard-topbar-height) !important', px: { xs: 1, md: 3 } }}>
           <IconButton sx={{ display: { md: 'none' }, mr: 0.5 }} onClick={() => setMobileOpen(true)}>
             <MenuIcon fontSize='small' />
           </IconButton>
@@ -366,27 +374,42 @@ export default function DashboardShell({ children }: { children: ReactNode }) {
         </Toolbar>
       </AppBar>
 
-      <Box component='nav' sx={{ width: { md: drawerWidth }, flexShrink: { md: 0 } }}>
+      <Box component='nav'>
         <Drawer
           variant='temporary'
           open={mobileOpen}
           onClose={() => setMobileOpen(false)}
           ModalProps={{ keepMounted: true }}
-          sx={{ display: { xs: 'block', md: 'none' }, '& .MuiDrawer-paper': { width: drawerWidth } }}
+          sx={{ display: { xs: 'block', md: 'none' }, '& .MuiDrawer-paper': { width: drawerWidth, borderRight: '1px solid #e2e8f0' } }}
         >
           {sidebar}
         </Drawer>
         <Drawer
           variant='permanent'
-          sx={{ display: { xs: 'none', md: 'block' }, '& .MuiDrawer-paper': { width: drawerWidth, boxSizing: 'border-box', borderRight: '1px solid #e2e8f0' } }}
+          sx={{
+            display: { xs: 'none', md: 'block' },
+            '& .MuiDrawer-paper': {
+              width: 'var(--dashboard-drawer-width)',
+              boxSizing: 'border-box',
+              borderRight: '1px solid #e2e8f0',
+              bgcolor: '#fff',
+            },
+          }}
           open
         >
           {sidebar}
         </Drawer>
       </Box>
 
-      <Box component='main' sx={{ flexGrow: 1, pt: '52px' }}>
-        <Box sx={{ p: { xs: 2, md: 3 } }}>{children}</Box>
+      <Box
+        component='main'
+        sx={{
+          minHeight: '100vh',
+          pt: 'var(--dashboard-topbar-height)',
+          pl: { md: 'var(--dashboard-drawer-width)' },
+        }}
+      >
+        <Box sx={{ p: { xs: 1.5, md: 2.5 }, maxWidth: '100%', overflowX: 'hidden' }}>{children}</Box>
       </Box>
     </Box>
   );
