@@ -39,7 +39,7 @@ import {
   TagOutlined,
   TextsmsOutlined,
 } from '@mui/icons-material';
-import { supabaseClient } from '@/lib/supabase/client';
+import { getSupabaseClient } from '@/lib/supabase/client';
 
 type MenuItem = { label: string; href: string; icon: ReactNode; badge?: string };
 type MenuGroup = { title: string; items: MenuItem[] };
@@ -110,6 +110,7 @@ export default function DashboardShell({ children }: { children: ReactNode }) {
     let mounted = true;
 
     const loadUser = async () => {
+      const supabaseClient = getSupabaseClient();
       const { data } = await supabaseClient.auth.getUser();
       const user = data.user;
       if (!mounted || !user) return;
@@ -150,6 +151,7 @@ export default function DashboardShell({ children }: { children: ReactNode }) {
   }, [pathname]);
 
   const onLogout = async () => {
+    const supabaseClient = getSupabaseClient();
     await supabaseClient.auth.signOut();
     window.location.href = '/login';
   };

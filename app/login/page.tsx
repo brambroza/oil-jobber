@@ -1,14 +1,13 @@
 'use client';
 
 import Link from 'next/link';
-import { useRouter, useSearchParams } from 'next/navigation';
+import { useRouter } from 'next/navigation';
 import { FormEvent, useState } from 'react';
 import { Alert, Box, Button, Paper, Stack, TextField, Typography } from '@mui/material';
-import { supabaseClient } from '@/lib/supabase/client';
+import { getSupabaseClient } from '@/lib/supabase/client';
 
 export default function LoginPage() {
   const router = useRouter();
-  const searchParams = useSearchParams();
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [loading, setLoading] = useState(false);
@@ -19,7 +18,7 @@ export default function LoginPage() {
     setError('');
     setLoading(true);
 
-    const { error: signInError } = await supabaseClient.auth.signInWithPassword({ email, password });
+    const { error: signInError } = await getSupabaseClient().auth.signInWithPassword({ email, password });
     setLoading(false);
 
     if (signInError) {
@@ -36,8 +35,10 @@ export default function LoginPage() {
     router.refresh();
   };
 
-  const nextPath = searchParams.get('next');
-  const errorCode = searchParams.get('error');
+  const search = typeof window !== 'undefined' ? window.location.search : '';
+  const params = new URLSearchParams(search);
+  const nextPath = params.get('next');
+  const errorCode = params.get('error');
   const lineErrorText = errorCode?.startsWith('line_') ? ({
     line_not_configured: 'LINE Login ยังไม่ถูกตั้งค่าในระบบ',
     line_invalid_state: 'LINE Login หมดอายุหรือ state ไม่ถูกต้อง กรุณาลองใหม่',

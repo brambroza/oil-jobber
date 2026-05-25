@@ -3,7 +3,7 @@
 import Link from 'next/link';
 import { FormEvent, useState } from 'react';
 import { Alert, Box, Button, Paper, Stack, TextField, Typography } from '@mui/material';
-import { supabaseClient } from '@/lib/supabase/client';
+import { getSupabaseClient } from '@/lib/supabase/client';
 
 export default function RegisterPage() {
   const [fullName, setFullName] = useState('');
@@ -24,7 +24,7 @@ export default function RegisterPage() {
     if (password !== confirmPassword) return setError('รหัสผ่านและยืนยันรหัสผ่านไม่ตรงกัน');
 
     setLoading(true);
-    const { error: signUpError } = await supabaseClient.auth.signUp({
+    const { error: signUpError } = await getSupabaseClient().auth.signUp({
       email,
       password,
       options: { data: { full_name: fullName } },

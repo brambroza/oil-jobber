@@ -1,3 +1,10 @@
 import { createSupabaseBrowserClient } from '@/lib/supabase/browser';
 
-export const supabaseClient = createSupabaseBrowserClient();
+let browserClient: ReturnType<typeof createSupabaseBrowserClient> | null = null;
+
+export function getSupabaseClient() {
+  if (!browserClient) {
+    browserClient = createSupabaseBrowserClient();
+  }
+  return browserClient;
+}
