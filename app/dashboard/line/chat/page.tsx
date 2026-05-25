@@ -1,7 +1,7 @@
 'use client';
 
 import { FormEvent, useEffect, useMemo, useRef, useState } from 'react';
-import { Search, Send } from '@mui/icons-material';
+import { Refresh, Search, Send } from '@mui/icons-material';
 import {
   Alert,
   Avatar,
@@ -133,12 +133,17 @@ export default function LineChatPage() {
   }, [selectedCustomerId]);
 
   useEffect(() => {
-    if (!selectedCustomerId) return;
-    const timer = setInterval(() => {
-      void loadMessages(selectedCustomerId);
+    const onVisibleOrFocus = () => {
+      if (document.visibilityState !== 'visible') return;
       void loadCustomers();
-    }, 5000);
-    return () => clearInterval(timer);
+      if (selectedCustomerId) void loadMessages(selectedCustomerId);
+    };
+    window.addEventListener('focus', onVisibleOrFocus);
+    document.addEventListener('visibilitychange', onVisibleOrFocus);
+    return () => {
+      window.removeEventListener('focus', onVisibleOrFocus);
+      document.removeEventListener('visibilitychange', onVisibleOrFocus);
+    };
   }, [selectedCustomerId, companyId]);
 
   useEffect(() => {
@@ -174,7 +179,7 @@ export default function LineChatPage() {
   };
 
   return (
-    <PageScaffold title='LINE Chat' description='สนทนากับลูกค้าผ่าน LINE OA แบบเรียลไทม์ (รีเฟรชอัตโนมัติทุก 5 วินาที)'>
+    <PageScaffold title='LINE Chat' description='สนทนากับลูกค้าผ่าน LINE OA'>
       <Stack spacing={1.5}>
         {error ? <Alert severity='error'>{error}</Alert> : null}
 
@@ -197,7 +202,18 @@ export default function LineChatPage() {
                 />
                 <Stack direction='row' justifyContent='space-between' alignItems='center'>
                   <Typography variant='caption' color='text.secondary'>ลูกค้า {filteredCustomers.length} ราย</Typography>
-                  {loadingCustomers ? <CircularProgress size={14} /> : null}
+                  <Stack direction='row' spacing={0.5} alignItems='center'>
+                    {loadingCustomers ? <CircularProgress size={14} /> : null}
+                    <IconButton
+                      size='small'
+                      onClick={() => {
+                        void loadCustomers();
+                        if (selectedCustomerId) void loadMessages(selectedCustomerId);
+                      }}
+                    >
+                      <Refresh fontSize='small' />
+                    </IconButton>
+                  </Stack>
                 </Stack>
               </Stack>
               <Divider />
@@ -251,9 +267,9 @@ export default function LineChatPage() {
                     <Typography variant='body2' sx={{ fontWeight: 700 }}>
                       {selectedCustomer?.display_name || 'เลือกห้องแชท'}
                     </Typography>
-                    <Typography variant='caption' color='text.secondary'>
+                {/*     <Typography variant='caption' color='text.secondary'>
                       {selectedCustomer?.line_user_id || 'ยังไม่ได้เลือกลูกค้า'}
-                    </Typography>
+                    </Typography> */}
                   </Box>
                 </Stack>
                 {selectedCustomer ? <Chip size='small' label='เชื่อมต่อ LINE OA' color='success' variant='outlined' /> : null}

@@ -4,6 +4,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { Add, Delete, Edit } from '@mui/icons-material';
 import {
   Alert,
+  Avatar,
   Box,
   Button,
   Checkbox,
@@ -17,6 +18,7 @@ import {
   FormControlLabel,
   FormGroup,
   IconButton,
+  MenuItem,
   Paper,
   Stack,
   Switch,
@@ -36,6 +38,13 @@ import { Customer, PaymentCondition } from '@/types/database';
 type MasterRefinery = { id: string; name: string };
 type MasterDepot = { id: string; code: string; name: string; refineries?: { name?: string } | null };
 type MasterOilProduct = { id: string; code: string; name: string };
+type LineCustomer = {
+  id: string;
+  customer_id: string | null;
+  line_user_id: string;
+  display_name: string | null;
+  profile_image_url: string | null;
+};
 
 type CustomerWithPayment = Customer & {
   payment_conditions?: { name?: string; code?: string } | null;
@@ -90,12 +99,15 @@ export default function CustomersPage() {
   const [page, setPage] = useState(0);
   const [rowsPerPage, setRowsPerPage] = useState(10);
   const [drawerOpen, setDrawerOpen] = useState(false);
-  const [drawerTab, setDrawerTab] = useState<'portal' | 'login'>('portal');
+  const [drawerTab, setDrawerTab] = useState<'portal' | 'login' | 'line-map'>('portal');
   const [form, setForm] = useState<CustomerForm>(emptyForm);
   const [accessForm, setAccessForm] = useState<CustomerAccessForm>(emptyAccess);
   const [portalUserId, setPortalUserId] = useState<string | null>(null);
   const [portalEmail, setPortalEmail] = useState('');
   const [portalPassword, setPortalPassword] = useState('');
+  const [lineCustomers, setLineCustomers] = useState<LineCustomer[]>([]);
+  const [selectedLineCustomerId, setSelectedLineCustomerId] = useState('');
+  const [lineMapSaving, setLineMapSaving] = useState(false);
   const [deleteId, setDeleteId] = useState<string | null>(null);
 
   const isEdit = useMemo(() => Boolean(form.id), [form.id]);
@@ -161,8 +173,20 @@ export default function CustomersPage() {
     }
   };
 
+  const loadLineCustomers = async () => {
+    if (!companyId) return;
+    const res = await fetch(`/api/line/customers?company_id=${companyId}`);
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || 'โหลดรายการ LINE ไม่สำเร็จ');
+    setLineCustomers(data || []);
+  };
+
   useEffect(() => {
     void load();
+  }, [companyId]);
+
+  useEffect(() => {
+    void loadLineCustomers();
   }, [companyId]);
 
   const loadAccess = async (customerId: string) => {
@@ -254,6 +278,30 @@ export default function CustomersPage() {
       await load();
     } catch (e) {
       setError((e as Error).message);
+    }
+  };
+
+  const onSaveLineMapping = async () => {
+    if (!form.id) return;
+    if (!selectedLineCustomerId) {
+      setError('กรุณาเลือกผู้ใช้ LINE ก่อนบันทึก');
+      return;
+    }
+    setLineMapSaving(true);
+    setError('');
+    try {
+      const res = await fetch(`/api/line/customers/${selectedLineCustomerId}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ company_id: companyId, customer_id: form.id }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || 'บันทึกการผูก LINE ไม่สำเร็จ');
+      await loadLineCustomers();
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setLineMapSaving(false);
     }
   };
 
@@ -371,7 +419,7 @@ export default function CustomersPage() {
           sx={{ minWidth: { xs: '100%', md: 220 } }}
         />
         <Button variant='outlined' onClick={() => void load()}>รีเฟรช</Button>
-        <Button variant='contained' startIcon={<Add />} onClick={() => { setForm(emptyForm); setAccessForm(emptyAccess); setPortalUserId(null); setPortalEmail(''); setPortalPassword(''); setDrawerTab('portal'); setDrawerOpen(true); }}>เพิ่มลูกค้า</Button>
+        <Button variant='contained' startIcon={<Add />} onClick={() => { setForm(emptyForm); setAccessForm(emptyAccess); setPortalUserId(null); setPortalEmail(''); setPortalPassword(''); setSelectedLineCustomerId(''); setDrawerTab('portal'); setDrawerOpen(true); }}>เพิ่มลูกค้า</Button>
       </Stack>
 
       {error ? <Alert severity='error'>{error}</Alert> : null}
@@ -413,6 +461,8 @@ export default function CustomersPage() {
                       status: r.status,
                     });
                     void loadAccess(r.id);
+                    const mapped = lineCustomers.find((lc) => lc.customer_id === r.id);
+                    setSelectedLineCustomerId(mapped?.id || '');
                     setDrawerTab('portal');
                     setDrawerOpen(true);
                   }}><Edit fontSize='small' /></IconButton>
@@ -452,7 +502,19 @@ export default function CustomersPage() {
               <TextField size='small' label='ที่อยู่' multiline minRows={3} value={form.address} onChange={(e) => setForm((p) => ({ ...p, address: e.target.value }))} />
               <Stack direction={{ xs: 'column', md: 'row' }} spacing={1}>
                 <TextField size='small' label='วงเงินเครดิต' type='number' value={form.credit_limit} onChange={(e) => setForm((p) => ({ ...p, credit_limit: Number(e.target.value) }))} fullWidth />
-                <TextField size='small' label='สถานะ' value={form.status} onChange={(e) => setForm((p) => ({ ...p, status: e.target.value }))} fullWidth />
+                <Box sx={{ display: 'flex', alignItems: 'center', px: 1, border: '1px solid #dbe4f0', borderRadius: 1, minHeight: 40, flex: 1 }}>
+                  <FormControlLabel
+                    control={
+                      <Checkbox
+                        size='small'
+                        checked={form.status === 'ACTIVE'}
+                        onChange={(e) => setForm((p) => ({ ...p, status: e.target.checked ? 'ACTIVE' : 'INACTIVE' }))}
+                      />
+                    }
+                    label={<Typography variant='body2'>{form.status === 'ACTIVE' ? 'สถานะ: ใช้งาน' : 'สถานะ: ปิดใช้งาน'}</Typography>}
+                    sx={{ m: 0 }}
+                  />
+                </Box>
               </Stack>
             </Stack>
           </Paper>
@@ -461,6 +523,7 @@ export default function CustomersPage() {
           <Tabs value={drawerTab} onChange={(_, v) => setDrawerTab(v)} sx={{ borderBottom: '1px solid #e2e8f0' }}>
             <Tab value='portal' label='สิทธิ์ลูกค้าในพอร์ทัล' />
             <Tab value='login' label='บัญชี Login ลูกค้า' />
+            <Tab value='line-map' label='ผูก LINE กับลูกค้า' />
           </Tabs>
 
           {drawerTab === 'portal' ? (
@@ -506,7 +569,7 @@ export default function CustomersPage() {
                 onChange={(next) => setAccessForm((p) => ({ ...p, allowed_payment_condition_ids: next }))}
               />
             </Stack>
-          ) : (
+          ) : drawerTab === 'login' ? (
             <Paper variant='outlined' sx={{ p: 1.25, borderColor: '#dbe4f0', borderRadius: 2 }}>
               <Stack spacing={1.1}>
                 {portalUserId ? <Alert severity='success'>สร้างบัญชีแล้ว (Auth User ID: {portalUserId})</Alert> : <Alert severity='info'>ยังไม่มีบัญชีพอร์ทัลสำหรับลูกค้ารายนี้</Alert>}
@@ -514,6 +577,44 @@ export default function CustomersPage() {
                 <TextField size='small' label='รหัสผ่านเริ่มต้น' value={portalPassword} onChange={(e) => setPortalPassword(e.target.value)} type='password' helperText='อย่างน้อย 8 ตัวอักษร' />
                 <Button variant='outlined' disabled={!form.id || !portalEmail || !portalPassword || Boolean(portalUserId)} onClick={() => void onCreatePortalUser()}>
                   สร้างบัญชีลูกค้า
+                </Button>
+              </Stack>
+            </Paper>
+          ) : (
+            <Paper variant='outlined' sx={{ p: 1.25, borderColor: '#dbe4f0', borderRadius: 2 }}>
+              <Stack spacing={1.1}>
+                <Alert severity='info'>เลือกบัญชี LINE แล้วผูกกับลูกค้ารายนี้ เพื่อใช้ส่งแจ้งเตือน/ติดตามออเดอร์</Alert>
+                <TextField
+                  select
+                  size='small'
+                  label='LINE User'
+                  value={selectedLineCustomerId}
+                  onChange={(e) => setSelectedLineCustomerId(e.target.value)}
+                  helperText='แสดงเฉพาะรายการที่ยังไม่ผูก หรือผูกกับลูกค้ารายนี้อยู่แล้ว'
+                >
+                  <MenuItem value=''>-- เลือกผู้ใช้ LINE --</MenuItem>
+                  {lineCustomers
+                    .filter((lc) => !lc.customer_id || lc.customer_id === form.id)
+                    .map((lc) => (
+                      <MenuItem key={lc.id} value={lc.id}>
+                        <Stack direction='row' spacing={1} alignItems='center' sx={{ minWidth: 0 }}>
+                          <Avatar src={lc.profile_image_url || undefined} sx={{ width: 24, height: 24 }}>
+                            {(lc.display_name || lc.line_user_id || 'U').slice(0, 1).toUpperCase()}
+                          </Avatar>
+                          <Box sx={{ minWidth: 0 }}>
+                            <Typography variant='body2' noWrap sx={{ fontWeight: 600 }}>
+                              {lc.display_name || '-'}
+                            </Typography>
+                           {/*  <Typography variant='caption' color='text.secondary' noWrap>
+                              {lc.line_user_id}
+                            </Typography> */}
+                          </Box>
+                        </Stack>
+                      </MenuItem>
+                    ))}
+                </TextField>
+                <Button variant='contained' disabled={!form.id || !selectedLineCustomerId || lineMapSaving} onClick={() => void onSaveLineMapping()}>
+                  {lineMapSaving ? 'กำลังบันทึก...' : 'บันทึกการผูก LINE'}
                 </Button>
               </Stack>
             </Paper>

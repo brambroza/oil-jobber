@@ -8,7 +8,7 @@ export async function GET(req: NextRequest) {
 
   const { data: customers, error } = await supabaseAdmin
     .from('line_customers')
-    .select('id, line_user_id, display_name, profile_image_url, created_at, updated_at')
+    .select('id, customer_id, line_user_id, display_name, profile_image_url, created_at, updated_at, customers(company_name)')
     .eq('company_id', companyId)
     .eq('is_deleted', false)
     .order('updated_at', { ascending: false });

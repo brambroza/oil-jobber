@@ -30,6 +30,8 @@ type PriceRound = {
   refinery_name: string;
   effective_date: string;
   effective_at: string | null;
+  expires_date?: string | null;
+  expires_at?: string | null;
   item_count: number;
 };
 
@@ -57,15 +59,19 @@ type PriceRoundDetail = {
     refinery_id: string | null;
     effective_date: string;
     effective_at: string | null;
-    refineries?: { name?: string } | null;
+    expires_date?: string | null;
+    expires_at?: string | null;
+    refineries?: { name?: string; image_url?: string } | null;
   };
   items: PriceItem[];
 };
 type LineCustomer = {
   id: string;
+  customer_id?: string | null;
   line_user_id: string;
   display_name: string | null;
   profile_image_url: string | null;
+  customers?: { company_name?: string } | null;
 };
 
 function formatDate(isoDate: string): string {
@@ -234,17 +240,144 @@ export default function SellingPricesPage() {
   const selectAll = () => setSelectedCustomerIds(lineCustomers.map((c) => c.id));
   const clearAll = () => setSelectedCustomerIds([]);
 
-  const buildBroadcastMessage = (): string => {
+  const buildBroadcastMessage = (allowedPaymentConditionIds?: string[] | null): string => {
     if (!selected) return '';
+    const allowedSet = new Set((allowedPaymentConditionIds || []).map((x) => String(x)));
+    const visibleConditions = (allowedPaymentConditionIds && allowedPaymentConditionIds.length)
+      ? sortedConditions.filter((pc) => allowedSet.has(pc.id))
+      : sortedConditions;
     const header = `อัปเดตราคาขาย ${selected.base.refineries?.name || '-'} วันที่ ${formatDate(selected.base.effective_date)} เวลา ${formatTime(selected.base.effective_at)}`;
     const lines: string[] = [header, ''];
-    for (const g of groupedSelectedItems.slice(0, 6)) {
-      const first = g.items[0];
+    for (const g of groupedSelectedItems.slice(0, 4)) {
+      const visibleItems = g.items.filter((it) => Number(it.base_cost_price || 0) > 0);
+      if (!visibleItems.length) continue;
       lines.push(`${g.depotCode}${g.depotName ? ` (${g.depotName})` : ''}`);
-      lines.push(`${first?.product_code || '-'}: ${formatMoney(Number(first?.base_cost_price || 0))}`);
+      for (const item of visibleItems.slice(0, 3)) {
+        lines.push(`${item.product_code} ${item.product_name || ''}`.trim());
+        const parts = (visibleConditions.length ? visibleConditions : [{ id: 'base', name: 'ราคาขาย', extra_cost_per_liter: 0 } as any]).map(
+          (pc: any) => `${pc.name}: ${(Number(item.base_cost_price || 0) + Number(pc.extra_cost_per_liter || 0)).toFixed(2)}`,
+        );
+        lines.push(parts.join(' | '));
+      }
     }
+    lines.push('');
+    lines.push(`ราคาถึง: ${selected.base.expires_date ? formatDate(selected.base.expires_date) : '-'} ${formatTime(selected.base.expires_at)}`);
     lines.push('', 'ดูรายละเอียดเพิ่มเติมในระบบ');
     return lines.join('\n');
+  };
+
+  const buildPriceFlexMessages = (allowedPaymentConditionIds?: string[] | null) => {
+    if (!selected) return [] as Array<Record<string, unknown>>;
+    const refineryName = selected.base.refineries?.name || '-';
+    const effectiveText = `${formatDate(selected.base.effective_date)} ${formatTime(selected.base.effective_at)} น.`;
+    const expireText = `${selected.base.expires_date ? formatDate(selected.base.expires_date) : '-'} ${formatTime(selected.base.expires_at)} น.`;
+    const allowedSet = new Set((allowedPaymentConditionIds || []).map((x) => String(x)));
+    const visibleConditions = (allowedPaymentConditionIds && allowedPaymentConditionIds.length)
+      ? sortedConditions.filter((pc) => allowedSet.has(pc.id))
+      : sortedConditions;
+    const conditionsToUse = visibleConditions.length
+      ? visibleConditions
+      : [{ id: 'base', name: 'ราคาขาย', extra_cost_per_liter: 0 } as any];
+
+    const bubbles = groupedSelectedItems.slice(0, 5).map((group) => {
+      const visibleItems = group.items.filter((it) => Number(it.base_cost_price || 0) > 0);
+      const conditionBlocks = conditionsToUse.map((pc: any) => {
+        const productRows = visibleItems.slice(0, 4).map((item) => ({
+          type: 'box',
+          layout: 'baseline',
+          spacing: 'sm',
+          margin: 'sm',
+          contents: [
+            { type: 'text', text: item.product_code, size: 'xs', color: '#1e3a8a', weight: 'bold', flex: 2 },
+            { type: 'text', text: item.product_name || '-', size: 'xxs', color: '#334155', flex: 5, wrap: true },
+            {
+              type: 'text',
+              text: (Number(item.base_cost_price || 0) + Number(pc.extra_cost_per_liter || 0)).toFixed(2),
+              size: 'sm',
+              color: '#111827',
+              weight: 'bold',
+              align: 'end',
+              flex: 3,
+            },
+          ],
+        }));
+
+        return {
+          type: 'box',
+          layout: 'vertical',
+          margin: 'md',
+          paddingAll: '10px',
+          cornerRadius: '10px',
+          backgroundColor: '#f8fafc',
+          contents: [
+            {
+              type: 'box',
+              layout: 'baseline',
+              contents: [
+                { type: 'text', text: 'เงื่อนไขการชำระเงิน', size: 'xxs', color: '#64748b', flex: 5 },
+                { type: 'text', text: pc.name, size: 'xs', color: '#111827', weight: 'bold', align: 'end', flex: 5, wrap: true },
+              ],
+            },
+            { type: 'separator', margin: 'sm', color: '#e2e8f0' },
+            ...productRows,
+          ],
+        };
+      });
+
+      return {
+        type: 'bubble',
+        size: 'mega',
+        body: {
+          type: 'box',
+          layout: 'vertical',
+          spacing: 'sm',
+          contents: [
+            { type: 'text', text: refineryName, size: 'lg', weight: 'bold', color: '#1e3a8a' },
+            { type: 'text', text: `อัปเดต ${effectiveText}`, size: 'xs', color: '#64748b' },
+            {
+              type: 'box',
+              layout: 'vertical',
+              margin: 'sm',
+              paddingAll: '8px',
+              backgroundColor: '#eef2ff',
+              cornerRadius: '8px',
+              contents: [
+                { type: 'text', text: 'คลัง', size: 'xxs', color: '#64748b' },
+                { type: 'text', text: `${group.depotCode}${group.depotName ? ` (${group.depotName})` : ''}`, size: 'sm', weight: 'bold', color: '#1e3a8a', wrap: true },
+              ],
+            },
+            {
+              type: 'box',
+              layout: 'vertical',
+              margin: 'sm',
+              paddingAll: '8px',
+              backgroundColor: '#fff1f2',
+              cornerRadius: '8px',
+              contents: [
+                { type: 'text', text: 'วันหมดอายุราคา', size: 'xxs', color: '#64748b' },
+                { type: 'text', text: expireText, size: 'xs', color: '#dc2626', weight: 'bold' },
+              ],
+            },
+            ...conditionBlocks,
+          ],
+        },
+      };
+    });
+    const safeBubbles = bubbles.filter((b: any) => {
+      const contents = b?.body?.contents;
+      return Array.isArray(contents) && contents.length > 0;
+    });
+
+    if (!safeBubbles.length) return [] as Array<Record<string, unknown>>;
+
+    return [{
+      type: 'flex',
+      altText: `ราคาน้ำมัน ${refineryName} มีผล ${effectiveText} หมดอายุ ${expireText}`,
+      contents: {
+        type: 'carousel',
+        contents: safeBubbles,
+      },
+    }];
   };
 
   const sendToLineOA = async () => {
@@ -254,22 +387,36 @@ export default function SellingPricesPage() {
     const recipients = lineCustomers
       .filter((c) => selectedCustomerIds.includes(c.id))
       .map((c) => ({ lineUserId: c.line_user_id, lineCustomerId: c.id }));
+    let success = 0;
+    let fail = 0;
+    for (const recipient of recipients) {
+      const lc = lineCustomers.find((x) => x.id === recipient.lineCustomerId);
+      const customerId = String(lc?.customer_id || '').trim();
+      let allowedPaymentConditionIds: string[] = [];
+      if (customerId) {
+        const accessRes = await fetch(`/api/customer-portal/access/${customerId}?company_id=${companyId}`);
+        const accessData = await accessRes.json();
+        if (accessRes.ok) allowedPaymentConditionIds = accessData.access?.allowed_payment_condition_ids || [];
+      }
 
-    const res = await fetch('/api/line/broadcast-price', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        company_id: companyId,
-        title: `ราคาขาย ${selected.base.refineries?.name || '-'}`,
-        message: buildBroadcastMessage(),
-        recipients,
-      }),
-    });
-    const data = await res.json();
-    if (!res.ok) {
-      setSendResult({ ok: false, message: data.error || 'ส่งราคาไม่สำเร็จ' });
-    } else {
-      setSendResult({ ok: true, message: `ส่งสำเร็จ ${recipients.length} ราย` });
+      const res = await fetch('/api/line/broadcast-price', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          company_id: companyId,
+          title: `ราคาขาย ${selected.base.refineries?.name || '-'}`,
+          message: buildBroadcastMessage(allowedPaymentConditionIds),
+          messages: buildPriceFlexMessages(allowedPaymentConditionIds),
+          recipients: [recipient],
+        }),
+      });
+      const data = await res.json();
+      if (res.ok && data?.ok !== false) success += 1;
+      else fail += 1;
+    }
+    if (fail > 0) setSendResult({ ok: false, message: `ส่งสำเร็จ ${success} รายการ, ไม่สำเร็จ ${fail} รายการ` });
+    else {
+      setSendResult({ ok: true, message: `ส่งสำเร็จ ${success} ราย` });
       setOpenSendDialog(false);
     }
     setSending(false);
@@ -322,6 +469,8 @@ export default function SellingPricesPage() {
               <TableRow>
                 <TableCell sx={{ fontWeight: 700 }}>วันที่</TableCell>
                 <TableCell sx={{ fontWeight: 700 }}>เวลา</TableCell>
+                <TableCell sx={{ fontWeight: 700 }}>ราคาถึงวันที่</TableCell>
+                <TableCell sx={{ fontWeight: 700 }}>ราคาถึงเวลา</TableCell>
                 <TableCell sx={{ fontWeight: 700 }}>โรงกลั่น</TableCell>
                 <TableCell sx={{ fontWeight: 700 }}>จำนวนรายการ</TableCell>
                 <TableCell sx={{ fontWeight: 700 }} align='right'>ดูรายละเอียด</TableCell>
@@ -332,6 +481,8 @@ export default function SellingPricesPage() {
                 <TableRow key={r.id} hover>
                   <TableCell>{formatDate(r.effective_date)}</TableCell>
                   <TableCell>{formatTime(r.effective_at)}</TableCell>
+                  <TableCell>{r.expires_date ? formatDate(r.expires_date) : '-'}</TableCell>
+                  <TableCell>{formatTime(r.expires_at)}</TableCell>
                   <TableCell>{r.refinery_name || '-'}</TableCell>
                   <TableCell>{r.item_count}</TableCell>
                   <TableCell align='right'>
@@ -350,7 +501,7 @@ export default function SellingPricesPage() {
               ))}
               {!filteredRounds.length && !loading ? (
                 <TableRow>
-                  <TableCell colSpan={5} align='center'>
+                  <TableCell colSpan={7} align='center'>
                     ไม่มีรอบบันทึกราคาน้ำมัน
                   </TableCell>
                 </TableRow>
@@ -469,7 +620,7 @@ export default function SellingPricesPage() {
                     <TableRow>
                       <TableCell width={48}>เลือก</TableCell>
                       <TableCell>ชื่อลูกค้า LINE</TableCell>
-                      <TableCell>LINE User ID</TableCell>
+                      <TableCell>บริษัทลูกค้า</TableCell>
                     </TableRow>
                   </TableHead>
                   <TableBody>
@@ -481,7 +632,7 @@ export default function SellingPricesPage() {
                             <Checkbox checked={checked} onChange={(e) => toggleCustomer(c.id, e.target.checked)} />
                           </TableCell>
                           <TableCell>{c.display_name || '-'}</TableCell>
-                          <TableCell>{c.line_user_id}</TableCell>
+                          <TableCell>{c.customers?.company_name || '-'}</TableCell>
                         </TableRow>
                       );
                     })}

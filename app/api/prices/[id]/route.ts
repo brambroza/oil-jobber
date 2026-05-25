@@ -9,7 +9,7 @@ export async function GET(req: NextRequest, { params }: { params: Promise<{ id: 
 
   const { data: base, error: baseErr } = await supabaseAdmin
     .from('oil_base_prices')
-    .select('*, refineries(name)')
+    .select('*, refineries(name,image_url)')
     .eq('id', id)
     .eq('company_id', companyId)
     .eq('is_deleted', false)
