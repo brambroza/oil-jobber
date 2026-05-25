@@ -164,6 +164,7 @@ export default function OCRUploadPage() {
   const [effectiveTime, setEffectiveTime] = useState(nowHHmm());
   const [expiresDate, setExpiresDate] = useState(todayDdMmYyyy());
   const [expiresTime, setExpiresTime] = useState('');
+  const [remark, setRemark] = useState('');
   const [rows, setRows] = useState<PriceRow[]>([]);
 
   const canSubmit = useMemo(() => Boolean(base64Image && refineryId) && !loading, [base64Image, refineryId, loading]);
@@ -252,6 +253,7 @@ export default function OCRUploadPage() {
       setRawText(text);
       const mapped = parseByRefinery(text);
       setRows(mapped);
+      setRemark('');
       setOpenReview(true);
     } catch (err) {
       setError((err as Error).message);
@@ -274,6 +276,7 @@ export default function OCRUploadPage() {
           effective_time: effectiveTime,
           expires_date: expiresDate,
           expires_time: expiresTime,
+          remark,
           rows,
           raw_text: rawText,
         }),
@@ -294,7 +297,7 @@ export default function OCRUploadPage() {
   const refineryTitle = refineries.find((r) => r.id === refineryId)?.name || '-';
 
   return (
-    <PageScaffold title='อัปโหลดภาพ OCR ราคา' description='เลือกภาพ > เลือกโรงกลั่น > ตรวจสอบแมพคลัง/รหัสน้ำมัน > ยืนยันบันทึกราคา'>
+    <PageScaffold title='อัปโหลดภาพราคา' description='เลือกภาพ > เลือกโรงกลั่น > ตรวจสอบแมพคลัง/รหัสน้ำมัน > ยืนยันบันทึกราคา'>
       <Stack spacing={2}>
         <TextField select label='โรงกลั่น' value={refineryId} onChange={(e) => setRefineryId(e.target.value)}>
           {refineries.map((r) => <MenuItem key={r.id} value={r.id}>{r.name}</MenuItem>)}
@@ -313,7 +316,7 @@ export default function OCRUploadPage() {
         {previewUrl ? <Box sx={{ border: '1px solid', borderColor: 'divider', borderRadius: 2, p: 1, width: 'fit-content', maxWidth: '100%' }}><Box component='img' src={previewUrl} alt='OCR Preview' sx={{ width: '100%', maxWidth: 420, borderRadius: 1, display: 'block' }} /></Box> : null}
 
         <Button variant='contained' onClick={onSubmit} disabled={!canSubmit} sx={{ width: { xs: '100%', sm: 'auto' } }}>
-          {loading ? <><CircularProgress size={18} sx={{ mr: 1 }} />กำลังส่ง OCR...</> : 'อ่าน OCR และแมพราคา'}
+          {loading ? <><CircularProgress size={18} sx={{ mr: 1 }} />กำลังส่ง OCR...</> : 'อ่านไฟล์ภาพ และแมพราคา'}
         </Button>
 
         {error ? <Alert severity='error'>{error}</Alert> : null}
@@ -335,6 +338,14 @@ export default function OCRUploadPage() {
               />
               <TextField label='เวลาหมดอายุ' type='time' value={expiresTime} onChange={(e) => setExpiresTime(e.target.value)} InputLabelProps={{ shrink: true }} />
             </Stack>
+            <TextField
+              label='หมายเหตุ (Remark)'
+              value={remark}
+              onChange={(e) => setRemark(e.target.value)}
+              multiline
+              minRows={2}
+              placeholder='เช่น รอบราคาจากประกาศพิเศษ / มีเงื่อนไขเพิ่มเติม'
+            />
 
             <Table size='small'>
               <TableHead>

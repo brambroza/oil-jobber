@@ -11,6 +11,7 @@ export default function LoginPage() {
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [loading, setLoading] = useState(false);
+  const [lineLoading, setLineLoading] = useState(false);
   const [error, setError] = useState('');
 
   const onSubmit = async (e: FormEvent<HTMLFormElement>) => {
@@ -33,6 +34,24 @@ export default function LoginPage() {
     }
     router.replace(redirectPath);
     router.refresh();
+  };
+
+  const onLoginWithLine = async () => {
+    setError('');
+    setLineLoading(true);
+    const nextPath = new URLSearchParams(window.location.search).get('next');
+    const safeNext = nextPath && (nextPath.startsWith('/dashboard') || nextPath.startsWith('/customer')) ? nextPath : '';
+    const redirectTo = `${window.location.origin}/auth/callback${safeNext ? `?next=${encodeURIComponent(safeNext)}` : ''}`;
+
+    const { error: oauthError } = await supabaseClient.auth.signInWithOAuth({
+      provider: 'line' as any,
+      options: { redirectTo },
+    });
+
+    if (oauthError) {
+      setLineLoading(false);
+      setError(`เข้าสู่ระบบด้วย LINE ไม่สำเร็จ: ${oauthError.message}`);
+    }
   };
 
   return (
@@ -88,6 +107,18 @@ export default function LoginPage() {
             }}
           >
             {loading ? 'กำลังเข้าสู่ระบบ...' : 'เข้าสู่ระบบ'}
+          </Button>
+
+          <Typography sx={{ fontSize: 12, color: '#9ca3af', textAlign: 'center' }}>หรือ</Typography>
+
+          <Button
+            type='button'
+            variant='outlined'
+            disabled={lineLoading}
+            onClick={() => void onLoginWithLine()}
+            sx={{ borderRadius: 2, textTransform: 'none', fontWeight: 600 }}
+          >
+            {lineLoading ? 'กำลังเชื่อมต่อ LINE...' : 'เข้าสู่ระบบด้วย LINE'}
           </Button>
 
           <Typography sx={{ fontSize: 13, color: '#6b7280' }}>

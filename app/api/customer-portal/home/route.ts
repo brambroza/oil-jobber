@@ -70,7 +70,7 @@ export async function GET() {
 
   const roundsRes = await supabaseAdmin
     .from('oil_base_prices')
-    .select('id, refinery_id, effective_date, effective_at, expires_date, expires_at, refineries(name,image_url)')
+    .select('id, refinery_id, effective_date, effective_at, expires_date, expires_at, remark, refineries(name,image_url)')
     .eq('company_id', companyId)
     .eq('confirmed', true)
     .eq('is_deleted', false)

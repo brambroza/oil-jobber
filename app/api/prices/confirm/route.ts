@@ -23,6 +23,7 @@ export async function POST(req: NextRequest) {
   const effectiveTime = String(body.effective_time ?? '').trim(); // HH:mm
   const expiresDate = String(body.expires_date ?? '').trim(); // dd/MM/yyyy
   const expiresTime = String(body.expires_time ?? '').trim(); // HH:mm
+  const remark = String(body.remark ?? '').trim();
   const rows = Array.isArray(body.rows) ? body.rows : [];
 
   if (!companyId) return NextResponse.json({ error: 'กรุณาตั้งค่า company_id' }, { status: 422 });
@@ -54,6 +55,7 @@ export async function POST(req: NextRequest) {
       effective_at: effectiveAt,
       expires_date: expiresIsoDate,
       expires_at: expiresAt,
+      remark: remark || null,
       confirmed: true,
     })
     .select('*')

@@ -33,7 +33,7 @@ type HomeData = {
     used_credit: number;
     available_credit: number;
   } | null;
-  rounds: Array<{ id: string; refinery_id: string | null; effective_date: string; effective_at: string | null; refineries?: { name?: string, image_url?: string } | null }>;
+  rounds: Array<{ id: string; refinery_id: string | null; effective_date: string; effective_at: string | null; remark?: string | null; refineries?: { name?: string, image_url?: string } | null }>;
   items: Array<{
     id: string;
     oil_base_price_id: string;
@@ -206,6 +206,15 @@ export default function CustomerHomePage() {
     return fmtThaiDateTime(r.effectiveDate, r.effectiveAt);
   }, [refiners]);
 
+  const remarkText = useMemo(() => {
+    if (!data) return '';
+    const remarks = (data.rounds || [])
+      .map((r) => String(r.remark || '').trim())
+      .filter(Boolean);
+    if (!remarks.length) return '';
+    return Array.from(new Set(remarks)).join('\n');
+  }, [data]);
+
   const creditUsage = useMemo(() => {
     const limit = Number(data?.customer.credit_limit || 0);
     const used = Number(data?.credit?.used_credit || 0);
@@ -280,7 +289,7 @@ export default function CustomerHomePage() {
                 <Typography sx={{ fontSize: 20, fontWeight: 800, color: '#1e3a8a' }}>หมายเหตุ</Typography>
               </Stack>
               <Typography sx={{ fontSize: 14, color: '#1e3a8a' }}>
-                ราคาน้ำมันอาจมีการเปลี่ยนแปลง กรุณาตรวจสอบก่อนทำรายการ
+                {remarkText || 'ราคาน้ำมันอาจมีการเปลี่ยนแปลง กรุณาตรวจสอบก่อนทำรายการ'}
               </Typography>
               <Stack direction='row' justifyContent='space-between' alignItems='center' spacing={1}>
                 <Chip size='small' color='primary' variant='outlined' label={`เครดิตเทอม ${paymentTerms.length} แบบ`} />

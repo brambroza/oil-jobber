@@ -36,7 +36,7 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
   const companyId = resolveCompanyId(body.company_id);
   if (!companyId) return NextResponse.json({ error: 'กรุณาตั้งค่า company_id หรือ DEFAULT_COMPANY_ID' }, { status: 422 });
 
-  const { effective_date, effective_time, expires_date, expires_time, refinery_id, rows } = body;
+  const { effective_date, effective_time, expires_date, expires_time, refinery_id, rows, remark } = body;
   if ((expires_date && !expires_time) || (!expires_date && expires_time)) {
     return NextResponse.json({ error: 'กรุณาระบุวันและเวลาหมดอายุให้ครบ' }, { status: 422 });
   }
@@ -64,6 +64,7 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
       effective_at: effectiveAt?.effectiveAt,
       expires_date: expiresAt.isoDate,
       expires_at: expiresAt.expiresAt,
+      remark: String(remark ?? '').trim() || null,
       confirmed: true,
     })
     .eq('id', id)

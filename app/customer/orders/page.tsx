@@ -30,6 +30,7 @@ import {
   TableBody,
   TableCell,
   TableHead,
+  TablePagination,
   TableRow,
   TextField,
   Typography,
@@ -181,6 +182,8 @@ function paymentExtraById(paymentOptions: PaymentOption[], paymentConditionId: s
 
 export default function CustomerOrdersPage() {
   const [orders, setOrders] = useState<OrderRow[]>([]);
+  const [page, setPage] = useState(0);
+  const [rowsPerPage, setRowsPerPage] = useState<number | 'all'>(15);
   const [choices, setChoices] = useState<ProductChoice[]>([]);
   const [vehicles, setVehicles] = useState<CustomerVehicle[]>([]);
   const [paymentOptions, setPaymentOptions] = useState<PaymentOption[]>([]);
@@ -229,6 +232,11 @@ export default function CustomerOrdersPage() {
       .map((item, idx) => ({ idx, item }))
       .filter(({ item }) => (depotChoicesByProduct[item.key] || []).some((d) => (d.depot_id || '') === form.selected_depot_id));
   }, [form.items, form.selected_depot_id, depotChoicesByProduct]);
+  const pagedOrders = useMemo(() => {
+    if (rowsPerPage === 'all') return orders;
+    const start = page * rowsPerPage;
+    return orders.slice(start, start + rowsPerPage);
+  }, [orders, page, rowsPerPage]);
 
   const recalcItemsByDepotAndPayment = (
     items: FormItem[],
@@ -497,7 +505,7 @@ export default function CustomerOrdersPage() {
         {error ? <Alert severity='error'>{error}</Alert> : null}
         {loading ? <Alert severity='info'>กำลังโหลด...</Alert> : null}
 
-        <Paper sx={{ borderRadius: 2, overflow: 'hidden', border: '1px solid #d8e0eb' }}>
+        <Paper sx={{ borderRadius: 1, overflow: 'hidden', border: '1px solid #d8e0eb' }}>
           <Table size='small'>
             <TableHead>
               <TableRow>
@@ -513,11 +521,11 @@ export default function CustomerOrdersPage() {
               </TableRow>
             </TableHead>
             <TableBody>
-              {orders.map((r) => (
+              {pagedOrders.map((r) => (
                 <TableRow key={r.id} hover>
                   <TableCell>{r.order_no || r.id.slice(0, 8)}</TableCell>
                   <TableCell>{r.created_at ? new Date(r.created_at).toLocaleDateString('th-TH') : '-'}</TableCell>
-              {/*     <TableCell>{r.customer_po_no || '-'}</TableCell> */}
+                  {/*     <TableCell>{r.customer_po_no || '-'}</TableCell> */}
                   <TableCell>{receiveMethodThai(r.receive_method)}</TableCell>
                   <TableCell>
                     {r.delivery_order_no || r.delivery_order_file_url ? (
@@ -553,6 +561,25 @@ export default function CustomerOrdersPage() {
               {!orders.length && !loading ? <TableRow><TableCell colSpan={9} align='center'>ยังไม่มีคำสั่งซื้อ</TableCell></TableRow> : null}
             </TableBody>
           </Table>
+          <TablePagination
+            component='div'
+            count={orders.length}
+            page={page}
+            onPageChange={(_, nextPage) => setPage(nextPage)}
+            rowsPerPage={rowsPerPage === 'all' ? Math.max(orders.length, 1) : rowsPerPage}
+            onRowsPerPageChange={(e) => {
+              const value = e.target.value === 'all' ? 'all' : Number(e.target.value);
+              setRowsPerPage(value);
+              setPage(0);
+            }}
+            rowsPerPageOptions={[
+              { label: '15', value: 15 },
+              { label: '25', value: 25 },
+              { label: '30', value: 30 },
+              { label: 'all', value: 'all' as any },
+            ]}
+            labelRowsPerPage='แถวต่อหน้า'
+          />
         </Paper>
       </Stack>
 
@@ -571,9 +598,9 @@ export default function CustomerOrdersPage() {
           <Typography variant='h6'>{form.order_no ? `แก้ไขคำสั่งซื้อ ${form.order_no}` : 'รายละเอียดเพิ่มเติมสำหรับคำสั่งซื้อ'}</Typography>
 
           <Stack direction={{ xs: 'column', md: 'row' }} spacing={1.2}>
-            <TextField label='วันที่ต้องการให้จัดส่ง' type='date' value={form.requested_delivery_date} onChange={(e) => setForm((p) => ({ ...p, requested_delivery_date: e.target.value }))} InputLabelProps={{ shrink: true }} fullWidth />
+            <TextField sx={{ display: 'none' }} label='วันที่ต้องการให้จัดส่ง' type='date' value={form.requested_delivery_date} onChange={(e) => setForm((p) => ({ ...p, requested_delivery_date: e.target.value }))} InputLabelProps={{ shrink: true }} fullWidth />
             <TextField sx={{ display: 'none' }} label='เลขที่ใบสั่งซื้อ (ตัวเลือก)' value={form.customer_po_no} onChange={(e) => setForm((p) => ({ ...p, customer_po_no: e.target.value }))} fullWidth />
-            <TextField label='รายละเอียดจัดส่ง' value={form.delivery_note} onChange={(e) => setForm((p) => ({ ...p, delivery_note: e.target.value }))} multiline minRows={3} fullWidth />
+            <TextField sx={{ display: 'none' }} label='รายละเอียดจัดส่ง' value={form.delivery_note} onChange={(e) => setForm((p) => ({ ...p, delivery_note: e.target.value }))} multiline minRows={3} fullWidth />
           </Stack>
           <Paper sx={{ border: '1px solid #d7e0ea', p: 1.5 }}>
             <FormControl fullWidth>
