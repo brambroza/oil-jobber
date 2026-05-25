@@ -1,17 +1,17 @@
 'use client';
 
 import Link from 'next/link';
-import { useRouter } from 'next/navigation';
+import { useRouter, useSearchParams } from 'next/navigation';
 import { FormEvent, useState } from 'react';
 import { Alert, Box, Button, Paper, Stack, TextField, Typography } from '@mui/material';
 import { supabaseClient } from '@/lib/supabase/client';
 
 export default function LoginPage() {
   const router = useRouter();
+  const searchParams = useSearchParams();
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [loading, setLoading] = useState(false);
-  const [lineLoading, setLineLoading] = useState(false);
   const [error, setError] = useState('');
 
   const onSubmit = async (e: FormEvent<HTMLFormElement>) => {
@@ -36,23 +36,25 @@ export default function LoginPage() {
     router.refresh();
   };
 
-  const onLoginWithLine = async () => {
-    setError('');
-    setLineLoading(true);
-    const nextPath = new URLSearchParams(window.location.search).get('next');
-    const safeNext = nextPath && (nextPath.startsWith('/dashboard') || nextPath.startsWith('/customer')) ? nextPath : '';
-    const redirectTo = `${window.location.origin}/auth/callback${safeNext ? `?next=${encodeURIComponent(safeNext)}` : ''}`;
-
-    const { error: oauthError } = await supabaseClient.auth.signInWithOAuth({
-      provider: 'line' as any,
-      options: { redirectTo },
-    });
-
-    if (oauthError) {
-      setLineLoading(false);
-      setError(`เข้าสู่ระบบด้วย LINE ไม่สำเร็จ: ${oauthError.message}`);
-    }
-  };
+  const nextPath = searchParams.get('next');
+  const errorCode = searchParams.get('error');
+  const lineErrorText = errorCode?.startsWith('line_') ? ({
+    line_not_configured: 'LINE Login ยังไม่ถูกตั้งค่าในระบบ',
+    line_invalid_state: 'LINE Login หมดอายุหรือ state ไม่ถูกต้อง กรุณาลองใหม่',
+    line_missing_code: 'ไม่ได้รับรหัสยืนยันจาก LINE',
+    line_token_failed: 'ยืนยัน token กับ LINE ไม่สำเร็จ',
+    line_profile_failed: 'โหลดโปรไฟล์ LINE ไม่สำเร็จ',
+    line_user_not_found: 'ไม่พบ LINE user id',
+    line_not_mapped_customer: 'LINE นี้ยังไม่ถูกผูกกับลูกค้าในระบบ',
+    line_customer_portal_missing: 'ลูกค้ายังไม่มีบัญชีเข้าใช้งานพอร์ทัล',
+    line_auth_user_missing: 'ไม่พบบัญชี Auth ของลูกค้า',
+    line_generate_link_failed: 'สร้าง session login ไม่สำเร็จ',
+    line_session_create_failed: 'ยืนยัน session login ไม่สำเร็จ',
+    line_user_session_missing: 'สร้าง session แล้วแต่ไม่พบผู้ใช้',
+  } as Record<string, string>)[errorCode] || 'LINE Login ไม่สำเร็จ' : '';
+  const lineLoginHref = nextPath && (nextPath.startsWith('/dashboard') || nextPath.startsWith('/customer'))
+    ? `/api/auth/line/start?next=${encodeURIComponent(nextPath)}`
+    : '/api/auth/line/start';
 
   return (
     <Box
@@ -72,6 +74,7 @@ export default function LoginPage() {
           </Box>
 
           {error ? <Alert severity='error'>{error}</Alert> : null}
+          {!error && lineErrorText ? <Alert severity='warning'>{lineErrorText}</Alert> : null}
 
           <TextField
             label='อีเมล'
@@ -109,16 +112,20 @@ export default function LoginPage() {
             {loading ? 'กำลังเข้าสู่ระบบ...' : 'เข้าสู่ระบบ'}
           </Button>
 
-          <Typography sx={{ fontSize: 12, color: '#9ca3af', textAlign: 'center' }}>หรือ</Typography>
-
           <Button
-            type='button'
+            component='a'
+            href={lineLoginHref}
             variant='outlined'
-            disabled={lineLoading}
-            onClick={() => void onLoginWithLine()}
-            sx={{ borderRadius: 2, textTransform: 'none', fontWeight: 600 }}
+            sx={{
+              borderColor: '#16a34a',
+              color: '#166534',
+              borderRadius: 2,
+              textTransform: 'none',
+              fontWeight: 600,
+              '&:hover': { borderColor: '#15803d', bgcolor: '#f0fdf4' },
+            }}
           >
-            {lineLoading ? 'กำลังเชื่อมต่อ LINE...' : 'เข้าสู่ระบบด้วย LINE'}
+            เข้าสู่ระบบด้วย LINE
           </Button>
 
           <Typography sx={{ fontSize: 13, color: '#6b7280' }}>
