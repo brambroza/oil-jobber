@@ -262,6 +262,19 @@ export default function CustomerOrdersPage() {
     setForm((prev) => (prev.payment_condition_id ? prev : { ...prev, payment_condition_id: paymentOptions[0].id }));
   }, [paymentOptions]);
 
+  useEffect(() => {
+    // On slower environments (e.g. Vercel), choices may load after opening "new order".
+    // Keep new-order form items in sync without touching edit flow.
+    if (!open) return;
+    if (form.id) return;
+    if (form.items.length > 0) return;
+    if (!choices.length) return;
+    setForm((prev) => ({
+      ...prev,
+      items: choices.map((c) => ({ ...c, selected: false, liters: 0 })),
+    }));
+  }, [open, form.id, form.items.length, choices]);
+
   const loadOrders = async () => {
     setLoading(true);
     setError('');
@@ -698,6 +711,7 @@ export default function CustomerOrdersPage() {
                   <TableCell width={48}><Checkbox size='small' /></TableCell>
                   <TableCell width={180}>รหัสสินค้า</TableCell>
                   <TableCell>รายละเอียดสินค้า</TableCell>
+                  <TableCell width={140}>ราคาต่อลิตร</TableCell>
                   <TableCell width={150}>จำนวนเงิน</TableCell>
                   <TableCell width={180}>ปริมาณสินค้า (L)</TableCell>
                 </TableRow>
@@ -714,6 +728,7 @@ export default function CustomerOrdersPage() {
                     </TableCell>
                     <TableCell>{it.product_code}</TableCell>
                     <TableCell>{it.product_name}</TableCell>
+                    <TableCell>{money(Number(it.unit_price || 0))}</TableCell>
                     <TableCell>{money(Number(it.liters || 0) * Number(it.unit_price || 0))}</TableCell>
                     <TableCell>
                       <TextField
@@ -731,8 +746,8 @@ export default function CustomerOrdersPage() {
                     </TableCell>
                   </TableRow>
                 ))}
-                {!form.selected_depot_id ? <TableRow><TableCell colSpan={5} align='center'>กรุณาเลือกคลังรับน้ำมันก่อน</TableCell></TableRow> : null}
-                {form.selected_depot_id && !visibleItemEntries.length ? <TableRow><TableCell colSpan={5} align='center'>คลังนี้ยังไม่มีรายการน้ำมันที่ได้รับสิทธิ์</TableCell></TableRow> : null}
+                {!form.selected_depot_id ? <TableRow><TableCell colSpan={6} align='center'>กรุณาเลือกคลังรับน้ำมันก่อน</TableCell></TableRow> : null}
+                {form.selected_depot_id && !visibleItemEntries.length ? <TableRow><TableCell colSpan={6} align='center'>คลังนี้ยังไม่มีรายการน้ำมันที่ได้รับสิทธิ์</TableCell></TableRow> : null}
               </TableBody>
             </Table>
             <Box sx={{ bgcolor: '#2f6175', color: '#fff', px: 1.5, py: 0.8 }}>
