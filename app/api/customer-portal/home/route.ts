@@ -96,16 +96,31 @@ export async function GET() {
     dateTimeValue: string | null | undefined,
     fallbackTime: '00:00:00' | '23:59:59',
   ): number => {
+    const dateText = String(dateValue || '').trim();
     const dtText = String(dateTimeValue || '').trim();
     if (dtText) {
+      // Primary rule: when business date is present, use that date and only time-of-day from *_at.
+      // This avoids timezone serialization differences between environments.
+      if (dateText) {
+        const hhmmss = (() => {
+          if (/^\d{2}:\d{2}(:\d{2})?/.test(dtText)) {
+            return dtText.slice(0, 8).padEnd(8, ':00');
+          }
+          const m = dtText.match(/T(\d{2}:\d{2}:\d{2})| (\d{2}:\d{2}:\d{2})/);
+          if (m?.[1]) return m[1];
+          if (m?.[2]) return m[2];
+          return fallbackTime;
+        })();
+        return parseBangkokMs(`${dateText}T${hhmmss}`);
+      }
       // Handle "HH:mm:ss" style by combining with date when available.
-      if (!dtText.includes('T') && !dtText.includes(' ') && dateValue) {
-        return parseBangkokMs(`${dateValue}T${dtText.slice(0, 8)}`);
+      if (!dtText.includes('T') && !dtText.includes(' ') && dateText) {
+        return parseBangkokMs(`${dateText}T${dtText.slice(0, 8)}`);
       }
       return parseBangkokMs(dtText);
     }
-    if (!dateValue) return Number.NaN;
-    return parseBangkokMs(`${dateValue}T${fallbackTime}`);
+    if (!dateText) return Number.NaN;
+    return parseBangkokMs(`${dateText}T${fallbackTime}`);
   };
   const nowMs = Date.now();
 
