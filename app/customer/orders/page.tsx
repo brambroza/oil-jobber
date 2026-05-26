@@ -194,6 +194,7 @@ export default function CustomerOrdersPage() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
   const [deleteId, setDeleteId] = useState<string | null>(null);
+  const [pdfViewerUrl, setPdfViewerUrl] = useState<string | null>(null);
   const [snack, setSnack] = useState<{ open: boolean; message: string; severity: 'success' | 'error' }>({
     open: false,
     message: '',
@@ -549,10 +550,7 @@ export default function CustomerOrdersPage() {
                             <Button
                               size='small'
                               variant='outlined'
-                              component='a'
-                              href={r.delivery_order_file_url}
-                              target='_blank'
-                              rel='noopener noreferrer'
+                              onClick={() => setPdfViewerUrl(r.delivery_order_file_url || null)}
                               sx={{ alignSelf: 'flex-start', minWidth: 0, px: 1, py: 0.1, fontSize: 11 }}
                             >
                               เปิดเอกสาร DO
@@ -635,10 +633,7 @@ export default function CustomerOrdersPage() {
                           <Button
                             size='small'
                             variant='outlined'
-                            component='a'
-                            href={r.delivery_order_file_url}
-                            target='_blank'
-                            rel='noopener noreferrer'
+                            onClick={() => setPdfViewerUrl(r.delivery_order_file_url || null)}
                             sx={{ alignSelf: 'flex-start', minWidth: 0, px: 1, py: 0.1, fontSize: 11, borderColor: '#cbd5e1', color: '#334155' }}
                           >
                             เปิดเอกสาร DO
@@ -1007,6 +1002,22 @@ export default function CustomerOrdersPage() {
         <DialogActions>
           <Button onClick={() => setDeleteId(null)}>ยกเลิก</Button>
           <Button color='error' onClick={() => void onDelete()}>ลบ</Button>
+        </DialogActions>
+      </Dialog>
+
+      <Dialog open={Boolean(pdfViewerUrl)} onClose={() => setPdfViewerUrl(null)} maxWidth='lg' fullWidth>
+        <DialogTitle>เอกสาร DO</DialogTitle>
+        <DialogContent sx={{ p: 0, height: { xs: '70vh', md: '80vh' } }}>
+          {pdfViewerUrl ? (
+            <iframe
+              src={pdfViewerUrl}
+              title='DO PDF Viewer'
+              style={{ width: '100%', height: '100%', border: 'none' }}
+            />
+          ) : null}
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={() => setPdfViewerUrl(null)}>ปิด</Button>
         </DialogActions>
       </Dialog>
 
