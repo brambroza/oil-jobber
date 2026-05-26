@@ -2,6 +2,7 @@
 
 import { useEffect, useMemo, useState } from 'react';
 import Add from '@mui/icons-material/Add';
+import CalendarTodayOutlined from '@mui/icons-material/CalendarTodayOutlined';
 import Delete from '@mui/icons-material/Delete';
 import Edit from '@mui/icons-material/Edit';
 import LocalShipping from '@mui/icons-material/LocalShipping';
@@ -508,7 +509,7 @@ export default function CustomerOrdersPage() {
     <CustomerShell title='เมนูสั่งซื้อ' subtitle='สร้างและติดตามคำสั่งซื้อ'>
       <Stack spacing={1.5}>
         <Stack direction={{ xs: 'column', sm: 'row' }} justifyContent='space-between' alignItems={{ xs: 'stretch', sm: 'center' }} spacing={1}>
-          <Typography sx={{ fontSize: 28, fontWeight: 800, color: '#0f2f6e' }}>เมนูสั่งซื้อ</Typography>
+          <Typography sx={{ display: { xs: 'none', md: 'flex' }, fontSize: 28, fontWeight: 800, color: '#0f2f6e' }}>เมนูสั่งซื้อ</Typography>
           <Stack direction='row' spacing={1}>
             <Button component={Link} href='/customer' variant='outlined'>กลับหน้าราคา</Button>
             <Button variant='contained' startIcon={<Add />} onClick={openNew}>สั่งซื้อใหม่</Button>
@@ -519,31 +520,117 @@ export default function CustomerOrdersPage() {
         {loading ? <Alert severity='info'>กำลังโหลด...</Alert> : null}
 
         <Paper sx={{ borderRadius: 1, overflow: 'hidden', border: '1px solid #d8e0eb' }}>
-          <Table size='small'>
-            <TableHead>
-              <TableRow>
-                <TableCell>เลขที่คำสั่งซื้อ</TableCell>
-                <TableCell>วันที่สั่งซื้อ</TableCell>
-                {/* <TableCell>PO ลูกค้า</TableCell> */}
-                <TableCell>วิธีรับ</TableCell>
-                <TableCell>เอกสาร DO</TableCell>
-                <TableCell align='right'>รวมเงิน</TableCell>
-                <TableCell align='right'>รวมลิตร</TableCell>
-                <TableCell>สถานะ</TableCell>
-                <TableCell align='right'>จัดการ</TableCell>
-              </TableRow>
-            </TableHead>
-            <TableBody>
-              {pagedOrders.map((r) => (
-                <TableRow key={r.id} hover>
-                  <TableCell>{r.order_no || r.id.slice(0, 8)}</TableCell>
-                  <TableCell>{r.created_at ? new Date(r.created_at).toLocaleDateString('th-TH') : '-'}</TableCell>
-                  {/*     <TableCell>{r.customer_po_no || '-'}</TableCell> */}
-                  <TableCell>{receiveMethodThai(r.receive_method)}</TableCell>
-                  <TableCell>
+          <Box sx={{ display: { xs: 'none', md: 'block' } }}>
+            <Table size='small'>
+              <TableHead>
+                <TableRow>
+                  <TableCell>เลขที่คำสั่งซื้อ</TableCell>
+                  <TableCell>วันที่สั่งซื้อ</TableCell>
+                  {/* <TableCell>PO ลูกค้า</TableCell> */}
+                  <TableCell>วิธีรับ</TableCell>
+                  <TableCell>เอกสาร DO</TableCell>
+                  <TableCell align='right'>รวมเงิน</TableCell>
+                  <TableCell align='right'>รวมลิตร</TableCell>
+                  <TableCell>สถานะ</TableCell>
+                  <TableCell align='right'>จัดการ</TableCell>
+                </TableRow>
+              </TableHead>
+              <TableBody>
+                {pagedOrders.map((r) => (
+                  <TableRow key={r.id} hover>
+                    <TableCell>{r.order_no || r.id.slice(0, 8)}</TableCell>
+                    <TableCell>{r.created_at ? new Date(r.created_at).toLocaleDateString('th-TH') : '-'}</TableCell>
+                    <TableCell>{receiveMethodThai(r.receive_method)}</TableCell>
+                    <TableCell>
+                      {r.delivery_order_no || r.delivery_order_file_url ? (
+                        <Stack spacing={0.3}>
+                          <Typography sx={{ fontSize: 12.5, fontWeight: 700 }}>{r.delivery_order_no || '-'}</Typography>
+                          {r.delivery_order_file_url ? (
+                            <Button
+                              size='small'
+                              variant='outlined'
+                              component='a'
+                              href={r.delivery_order_file_url}
+                              target='_blank'
+                              rel='noopener noreferrer'
+                              sx={{ alignSelf: 'flex-start', minWidth: 0, px: 1, py: 0.1, fontSize: 11 }}
+                            >
+                              เปิดเอกสาร DO
+                            </Button>
+                          ) : null}
+                        </Stack>
+                      ) : (
+                        '-'
+                      )}
+                    </TableCell>
+                    <TableCell align='right'>{money(Number(r.total_amount || 0))}</TableCell>
+                    <TableCell align='right'>{Number(r.total_liters || 0).toLocaleString('th-TH')}</TableCell>
+                    <TableCell>{orderStatusThai(r.order_status)}</TableCell>
+                    <TableCell align='right'>
+                      <IconButton onClick={() => void openEdit(r.id)}><Edit fontSize='small' /></IconButton>
+                      <IconButton color='error' onClick={() => setDeleteId(r.id)}><Delete fontSize='small' /></IconButton>
+                    </TableCell>
+                  </TableRow>
+                ))}
+                {!orders.length && !loading ? <TableRow><TableCell colSpan={9} align='center'>ยังไม่มีคำสั่งซื้อ</TableCell></TableRow> : null}
+              </TableBody>
+            </Table>
+          </Box>
+          <Stack sx={{ display: { xs: 'flex', md: 'none' }, p: 1 }} spacing={0.9}>
+            {pagedOrders.map((r) => (
+              <Card
+                key={r.id}
+                variant='outlined'
+                sx={{
+                  borderColor: '#e2e8f0',
+                  borderRadius: 2,
+                  boxShadow: '0 1px 2px rgba(15, 23, 42, 0.04)',
+                  bgcolor: '#fff',
+                }}
+              >
+                <CardContent sx={{ p: 1.15, '&:last-child': { pb: 1.15 } }}>
+                  <Stack spacing={0.65}>
+                    <Stack direction='row' justifyContent='space-between' alignItems='flex-start'
+                      sx={{ px: 1, py: 0.9, borderBottom: '1px solid #e2e8f0' }}>
+                      <Box sx={{ minWidth: 0 }}>
+                        <Typography sx={{ fontSize: 14, fontWeight: 800, color: '#1e3a8a', lineHeight: 1.2 }}>
+                          {r.order_no || r.id.slice(0, 8)}
+                        </Typography>
+                        <Stack direction='row' spacing={0.5} alignItems='center' sx={{ mt: 0.35 }}>
+                          <CalendarTodayOutlined sx={{ fontSize: 12, color: '#94a3b8' }} />
+                          <Typography sx={{ fontSize: 12, color: '#64748b' }}>
+                            {r.created_at ? new Date(r.created_at).toLocaleDateString('th-TH') : '-'}
+                          </Typography>
+                        </Stack>
+                      </Box>
+                      <Box sx={{ px: 1.1, py: 0.35, borderRadius: 999, bgcolor: '#dbeafe' }}>
+                        <Typography sx={{ fontSize: 11.5, fontWeight: 700, color: '#1d4ed8', whiteSpace: 'nowrap' }}>
+                          {orderStatusThai(r.order_status)}
+                        </Typography>
+                      </Box>
+                    </Stack>
+                    <Stack direction='row' justifyContent='space-between' spacing={1}>
+                      <Typography sx={{ fontSize: 11.5, color: '#64748b' }}>วิธีรับ</Typography>
+                      <Typography sx={{ fontSize: 12.5, color: '#1f2937' }}>{receiveMethodThai(r.receive_method)}</Typography>
+                    </Stack>
+
+                    <Stack direction='row' justifyContent='space-between' spacing={1}>
+                      <Typography sx={{ fontSize: 11.5, color: '#64748b' }}>รวมลิตร</Typography>
+                      <Typography sx={{ fontSize: 13, fontWeight: 700, color: '#0f172a' }}>{Number(r.total_liters || 0).toLocaleString('th-TH')} L</Typography>
+                    </Stack>
+                    <Stack direction='row' justifyContent='space-between' spacing={1}>
+                      <Typography sx={{ fontSize: 11.5, color: '#64748b' }}>รวมเงิน</Typography>
+                      <Typography sx={{ fontSize: 13, fontWeight: 800, color: '#0f172a' }}>{money(Number(r.total_amount || 0))}</Typography>
+                    </Stack>
+
+                    {/*    <Stack direction='row' justifyContent='space-between' spacing={1}>
+                      <Typography sx={{ fontSize: 11.5, color: '#64748b' }}>สถานะ</Typography>
+                      <Typography sx={{ fontSize: 12.5, fontWeight: 600, color: '#0f172a' }}>{orderStatusThai(r.order_status)}</Typography>
+                    </Stack> */}
                     {r.delivery_order_no || r.delivery_order_file_url ? (
-                      <Stack spacing={0.3}>
-                        <Typography sx={{ fontSize: 12.5, fontWeight: 700 }}>{r.delivery_order_no || '-'}</Typography>
+                      <Stack spacing={0.35}>
+                        <Typography sx={{ fontSize: 11.5, color: '#64748b' }}>เอกสาร DO</Typography>
+                        <Typography sx={{ fontSize: 12.5, fontWeight: 700, color: '#0f172a' }}>{r.delivery_order_no || '-'}</Typography>
                         {r.delivery_order_file_url ? (
                           <Button
                             size='small'
@@ -552,28 +639,27 @@ export default function CustomerOrdersPage() {
                             href={r.delivery_order_file_url}
                             target='_blank'
                             rel='noopener noreferrer'
-                            sx={{ alignSelf: 'flex-start', minWidth: 0, px: 1, py: 0.1, fontSize: 11 }}
+                            sx={{ alignSelf: 'flex-start', minWidth: 0, px: 1, py: 0.1, fontSize: 11, borderColor: '#cbd5e1', color: '#334155' }}
                           >
                             เปิดเอกสาร DO
                           </Button>
                         ) : null}
                       </Stack>
-                    ) : (
-                      '-'
-                    )}
-                  </TableCell>
-                  <TableCell align='right'>{money(Number(r.total_amount || 0))}</TableCell>
-                  <TableCell align='right'>{Number(r.total_liters || 0).toLocaleString('th-TH')}</TableCell>
-                  <TableCell>{orderStatusThai(r.order_status)}</TableCell>
-                  <TableCell align='right'>
-                    <IconButton onClick={() => void openEdit(r.id)}><Edit fontSize='small' /></IconButton>
-                    <IconButton color='error' onClick={() => setDeleteId(r.id)}><Delete fontSize='small' /></IconButton>
-                  </TableCell>
-                </TableRow>
-              ))}
-              {!orders.length && !loading ? <TableRow><TableCell colSpan={9} align='center'>ยังไม่มีคำสั่งซื้อ</TableCell></TableRow> : null}
-            </TableBody>
-          </Table>
+                    ) : null}
+                    <Stack direction='row' justifyContent='flex-end' spacing={0.75} sx={{ pt: 0.1 }}>
+                      <IconButton onClick={() => void openEdit(r.id)} sx={{ border: '1px solid #e2e8f0', borderRadius: 1.5 }}>
+                        <Edit fontSize='small' />
+                      </IconButton>
+                      <IconButton color='error' onClick={() => setDeleteId(r.id)} sx={{ border: '1px solid #fecaca', borderRadius: 1.5 }}>
+                        <Delete fontSize='small' />
+                      </IconButton>
+                    </Stack>
+                  </Stack>
+                </CardContent>
+              </Card>
+            ))}
+            {!orders.length && !loading ? <Alert severity='info'>ยังไม่มีคำสั่งซื้อ</Alert> : null}
+          </Stack>
           <TablePagination
             component='div'
             count={orders.length}
@@ -601,13 +687,15 @@ export default function CustomerOrdersPage() {
         open={open}
         onClose={() => setOpen(false)}
         sx={{
+          zIndex: 1600,
           '& .MuiDrawer-paper': {
+            zIndex: 1600,
             top: '64px',
             height: 'calc(100% - 64px)',
           },
         }}
       >
-        <Stack spacing={2} sx={{ width: { xs: '100vw', sm: 700, md: 1120 }, maxWidth: '100vw', p: { xs: 1.25, md: 2.5 } }}>
+        <Stack spacing={2} sx={{ width: { xs: '100vw', sm: 700, md: 1120 }, maxWidth: '100vw', p: { xs: 1.25, md: 2.5 }, pb: { xs: 11, md: 2.5 } }}>
           <Typography variant='h6'>{form.order_no ? `แก้ไขคำสั่งซื้อ ${form.order_no}` : 'รายละเอียดเพิ่มเติมสำหรับคำสั่งซื้อ'}</Typography>
 
           <Stack direction={{ xs: 'column', md: 'row' }} spacing={1.2}>
@@ -675,6 +763,11 @@ export default function CustomerOrdersPage() {
                 select
                 label='เลือกคลังรับน้ำมัน'
                 value={form.selected_depot_id}
+                SelectProps={{
+                  MenuProps: {
+                    disablePortal: true,
+                  },
+                }}
                 onChange={(e) => {
                   const depotId = e.target.value;
                   setForm((p) => {
@@ -705,36 +798,79 @@ export default function CustomerOrdersPage() {
           </Paper>
 
           <Paper sx={{ border: '1px solid #d7e0ea' }}>
-            <Table size='small'>
-              <TableHead>
-                <TableRow sx={{ '& th': { bgcolor: '#2f6175', color: '#fff' } }}>
-                  <TableCell width={48}><Checkbox size='small' /></TableCell>
-                  <TableCell width={180}>รหัสสินค้า</TableCell>
-                  <TableCell>รายละเอียดสินค้า</TableCell>
-                  <TableCell width={140}>ราคาต่อลิตร</TableCell>
-                  <TableCell width={150}>จำนวนเงิน</TableCell>
-                  <TableCell width={180}>ปริมาณสินค้า (L)</TableCell>
-                </TableRow>
-              </TableHead>
-              <TableBody>
-                {visibleItemEntries.map(({ item: it, idx }) => (
-                  <TableRow key={it.key}>
-                    <TableCell>
-                      <Checkbox checked={it.selected} onChange={(e) => setForm((p) => {
-                        const next = [...p.items];
-                        next[idx] = { ...next[idx], selected: e.target.checked };
-                        return { ...p, items: next };
-                      })} />
-                    </TableCell>
-                    <TableCell>{it.product_code}</TableCell>
-                    <TableCell>{it.product_name}</TableCell>
-                    <TableCell>{money(Number(it.unit_price || 0))}</TableCell>
-                    <TableCell>{money(Number(it.liters || 0) * Number(it.unit_price || 0))}</TableCell>
-                    <TableCell>
+            <Box sx={{ display: { xs: 'none', md: 'block' } }}>
+              <Table size='small'>
+                <TableHead>
+                  <TableRow sx={{ '& th': { bgcolor: '#2f6175', color: '#fff' } }}>
+                    <TableCell width={48}><Checkbox size='small' /></TableCell>
+                    <TableCell width={180}>รหัสสินค้า</TableCell>
+                    <TableCell>รายละเอียดสินค้า</TableCell>
+                    <TableCell width={140}>ราคาต่อลิตร</TableCell>
+                    <TableCell width={150}>จำนวนเงิน</TableCell>
+                    <TableCell width={180}>ปริมาณสินค้า (L)</TableCell>
+                  </TableRow>
+                </TableHead>
+                <TableBody>
+                  {visibleItemEntries.map(({ item: it, idx }) => (
+                    <TableRow key={it.key}>
+                      <TableCell>
+                        <Checkbox checked={it.selected} onChange={(e) => setForm((p) => {
+                          const next = [...p.items];
+                          next[idx] = { ...next[idx], selected: e.target.checked };
+                          return { ...p, items: next };
+                        })} />
+                      </TableCell>
+                      <TableCell>{it.product_code}</TableCell>
+                      <TableCell>{it.product_name}</TableCell>
+                      <TableCell>{money(Number(it.unit_price || 0))}</TableCell>
+                      <TableCell>{money(Number(it.liters || 0) * Number(it.unit_price || 0))}</TableCell>
+                      <TableCell>
+                        <TextField
+                          size='small'
+                          type='number'
+                          placeholder='ใส่ปริมาณสินค้า'
+                          value={it.liters || ''}
+                          onChange={(e) => setForm((p) => {
+                            const next = [...p.items];
+                            next[idx] = { ...next[idx], liters: Number(e.target.value || 0), selected: true };
+                            return { ...p, items: next };
+                          })}
+                          inputProps={{ min: 0 }}
+                        />
+                      </TableCell>
+                    </TableRow>
+                  ))}
+                  {!form.selected_depot_id ? <TableRow><TableCell colSpan={6} align='center'>กรุณาเลือกคลังรับน้ำมันก่อน</TableCell></TableRow> : null}
+                  {form.selected_depot_id && !visibleItemEntries.length ? <TableRow><TableCell colSpan={6} align='center'>คลังนี้ยังไม่มีรายการน้ำมันที่ได้รับสิทธิ์</TableCell></TableRow> : null}
+                </TableBody>
+              </Table>
+            </Box>
+            <Stack sx={{ display: { xs: 'flex', md: 'none' }, p: 1 }} spacing={1}>
+              {visibleItemEntries.map(({ item: it, idx }) => (
+                <Card key={it.key} variant='outlined' sx={{ borderColor: '#d7e0ea' }}>
+                  <CardContent sx={{ p: 1.1, '&:last-child': { pb: 1.1 } }}>
+                    <Stack spacing={0.7}>
+                      <Stack direction='row' justifyContent='space-between' alignItems='center' spacing={1}>
+                        <Typography sx={{ fontSize: 13, fontWeight: 700 }}>{it.product_code}</Typography>
+                        <Checkbox checked={it.selected} onChange={(e) => setForm((p) => {
+                          const next = [...p.items];
+                          next[idx] = { ...next[idx], selected: e.target.checked };
+                          return { ...p, items: next };
+                        })} />
+                      </Stack>
+                      <Typography sx={{ fontSize: 12.5, color: '#475569' }}>{it.product_name}</Typography>
+                      <Stack direction='row' justifyContent='space-between' spacing={1}>
+                        <Typography sx={{ fontSize: 12, color: '#64748b' }}>ราคาต่อลิตร</Typography>
+                        <Typography sx={{ fontSize: 12.5, fontWeight: 700 }}>{money(Number(it.unit_price || 0))}</Typography>
+                      </Stack>
+                      <Stack direction='row' justifyContent='space-between' spacing={1}>
+                        <Typography sx={{ fontSize: 12, color: '#64748b' }}>จำนวนเงิน</Typography>
+                        <Typography sx={{ fontSize: 12.5, fontWeight: 700 }}>{money(Number(it.liters || 0) * Number(it.unit_price || 0))}</Typography>
+                      </Stack>
                       <TextField
                         size='small'
                         type='number'
-                        placeholder='ใส่ปริมาณสินค้า'
+                        label='ปริมาณสินค้า (L)'
                         value={it.liters || ''}
                         onChange={(e) => setForm((p) => {
                           const next = [...p.items];
@@ -743,13 +879,13 @@ export default function CustomerOrdersPage() {
                         })}
                         inputProps={{ min: 0 }}
                       />
-                    </TableCell>
-                  </TableRow>
-                ))}
-                {!form.selected_depot_id ? <TableRow><TableCell colSpan={6} align='center'>กรุณาเลือกคลังรับน้ำมันก่อน</TableCell></TableRow> : null}
-                {form.selected_depot_id && !visibleItemEntries.length ? <TableRow><TableCell colSpan={6} align='center'>คลังนี้ยังไม่มีรายการน้ำมันที่ได้รับสิทธิ์</TableCell></TableRow> : null}
-              </TableBody>
-            </Table>
+                    </Stack>
+                  </CardContent>
+                </Card>
+              ))}
+              {!form.selected_depot_id ? <Alert severity='info'>กรุณาเลือกคลังรับน้ำมันก่อน</Alert> : null}
+              {form.selected_depot_id && !visibleItemEntries.length ? <Alert severity='warning'>คลังนี้ยังไม่มีรายการน้ำมันที่ได้รับสิทธิ์</Alert> : null}
+            </Stack>
             <Box sx={{ bgcolor: '#2f6175', color: '#fff', px: 1.5, py: 0.8 }}>
               <Stack direction={{ xs: 'column', sm: 'row' }} justifyContent='space-between' spacing={0.5}>
                 <Typography>รายการสินค้าที่เลือกไว้ {selectedCount} ผลิตภัณฑ์</Typography>
@@ -785,6 +921,11 @@ export default function CustomerOrdersPage() {
                   select
                   label='เลือกรถบรรทุกของฉัน (ถ้ามี)'
                   value={form.customer_vehicle_id}
+                  SelectProps={{
+                    MenuProps: {
+                      disablePortal: true,
+                    },
+                  }}
                   onChange={(e) => {
                     const id = e.target.value;
                     const selected = vehicles.find((v) => v.id === id);
@@ -843,10 +984,20 @@ export default function CustomerOrdersPage() {
 
           <TextField label='เพิ่มเติม' value={form.delivery_location} onChange={(e) => setForm((p) => ({ ...p, delivery_location: e.target.value }))} />
 
-          <Stack direction='row' spacing={1} justifyContent='flex-end'>
-            <Button onClick={() => setOpen(false)}>ยกเลิก</Button>
-            <Button variant='contained' onClick={() => void onSave()} disabled={!form.payment_condition_id || !form.selected_depot_id || !selectedCount || (form.receive_method === 'PICKUP_BY_TRUCK' && !form.vehicle_license_plate.trim())}>บันทึกคำสั่งซื้อ</Button>
-          </Stack>
+          <Box
+            sx={{
+              position: 'sticky',
+              bottom: 0,
+              py: 1,
+              bgcolor: '#fff',
+              borderTop: '1px solid #e2e8f0',
+            }}
+          >
+            <Stack direction='row' spacing={1} justifyContent='flex-end'>
+              <Button onClick={() => setOpen(false)}>ยกเลิก</Button>
+              <Button variant='contained' onClick={() => void onSave()} disabled={!form.payment_condition_id || !form.selected_depot_id || !selectedCount || (form.receive_method === 'PICKUP_BY_TRUCK' && !form.vehicle_license_plate.trim())}>บันทึกคำสั่งซื้อ</Button>
+            </Stack>
+          </Box>
         </Stack>
       </Drawer>
 

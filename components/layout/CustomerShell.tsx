@@ -2,6 +2,7 @@
 
 import { ReactNode, useEffect, useMemo, useState } from 'react';
 import Link from 'next/link';
+import { usePathname } from 'next/navigation';
 import MenuRounded from '@mui/icons-material/MenuRounded';
 import ChevronLeftRounded from '@mui/icons-material/ChevronLeftRounded';
 import ChevronRightRounded from '@mui/icons-material/ChevronRightRounded';
@@ -17,6 +18,8 @@ import {
   Avatar,
   Badge,
   Box,
+  BottomNavigation,
+  BottomNavigationAction,
   Button,
   Divider,
   Drawer,
@@ -60,6 +63,7 @@ const sidebarWidth = 244;
 const topbarHeight = 64;
 
 export default function CustomerShell({ children, title = 'พอร์ทัลลูกค้า', subtitle = 'Oil Jobber' }: Props) {
+  const pathname = usePathname();
   const [mobileOpen, setMobileOpen] = useState(false);
   const [sidebarOpen, setSidebarOpen] = useState(true);
   const [notifOpen, setNotifOpen] = useState(false);
@@ -246,6 +250,7 @@ export default function CustomerShell({ children, title = 'พอร์ทัล
           sx={{
             flex: 1,
             p: { xs: 1.25, md: 2.5 },
+            pb: { xs: 10, md: 2.5 },
             ml: { md: sidebarOpen ? `${sidebarWidth}px` : 0 },
             transition: 'margin-left 0.2s ease',
             minWidth: 0,
@@ -254,6 +259,27 @@ export default function CustomerShell({ children, title = 'พอร์ทัล
           {children}
         </Box>
       </Box>
+
+      <Paper
+        elevation={8}
+        sx={{
+          display: { xs: 'block', md: 'none' },
+          position: 'fixed',
+          left: 0,
+          right: 0,
+          bottom: 0,
+          zIndex: 1400,
+          borderTop: '1px solid #dbe4f0',
+          borderRadius: 0,
+        }}
+      >
+        <BottomNavigation showLabels value={pathname}>
+          <BottomNavigationAction label='ราคา' value='/customer' icon={<SellRounded />} component={Link} href='/customer' />
+          <BottomNavigationAction label='สั่งซื้อ' value='/customer/orders' icon={<ReceiptLongRounded />} component={Link} href='/customer/orders' />
+          <BottomNavigationAction label='รถ' value='/customer/vehicles' icon={<DirectionsCarFilledRounded />} component={Link} href='/customer/vehicles' />
+          <BottomNavigationAction label='ตั้งค่า' value='/customer/settings' icon={<SettingsRounded />} component={Link} href='/customer/settings' />
+        </BottomNavigation>
+      </Paper>
     </Box>
   );
 }

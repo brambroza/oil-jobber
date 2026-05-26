@@ -235,7 +235,7 @@ export default function CustomerHomePage() {
         return;
       }
 
-   ;
+      ;
 
       setData(json);
       setLoading(false);
@@ -312,7 +312,7 @@ export default function CustomerHomePage() {
             </Stack>
           </Box>
 
-          <Box sx={{ overflowX: 'auto' }}>
+          <Box sx={{ display: { xs: 'none', md: 'block' }, overflowX: 'auto' }}>
             <Table size='small' sx={{ minWidth: 980 }}>
               <TableHead>
                 <TableRow sx={{ '& th': { bgcolor: '#0f3c8b', color: '#fff', borderRight: '1px solid rgba(255,255,255,0.2)' } }}>
@@ -453,6 +453,80 @@ export default function CustomerHomePage() {
               </TableBody>
             </Table>
           </Box>
+
+          <Stack sx={{ display: { xs: 'flex', md: 'none' }, p: 1.1 }} spacing={1}>
+            {refiners.map((r) => {
+              const depotsForRefinery = depotGrid
+                .map((depot) => ({
+                  depot,
+                  products: depot.products.filter((product) => priceMap.get(`${r.refineryId}__${depot.depotKey}__${product.key}`) != null),
+                }))
+                .filter((x) => x.products.length > 0);
+
+              if (!depotsForRefinery.length) return null;
+
+              return (
+                <Paper key={`mobile-refinery-${r.refineryId}`} variant='outlined' sx={{ borderColor: '#dbe4f0', borderRadius: 1.5, overflow: 'hidden' }}>
+                  <Box sx={{ px: 1.1, py: 0.9, bgcolor: '#eaf1ff', borderBottom: '1px solid #dbe4f0' }}>
+                    <Stack direction='row' spacing={0.7} alignItems='center'>
+                      <Avatar src={r.refineryImg || undefined} sx={{ width: 22, height: 22, bgcolor: '#dbeafe', color: '#1e3a8a' }}>
+                        <PersonRounded sx={{ fontSize: 13 }} />
+                      </Avatar>
+                      <Typography sx={{ fontSize: 12.5, fontWeight: 800, color: '#1e3a8a' }}>{r.refineryName}</Typography>
+                    </Stack>
+                  </Box>
+
+                  <Stack spacing={0.8} sx={{ p: 1 }}>
+                    {depotsForRefinery.map(({ depot, products }) => (
+                      <Paper key={`mobile-${r.refineryId}-${depot.depotKey}`} variant='outlined' sx={{ borderColor: '#e2e8f0', borderRadius: 1.3 }}>
+                        <Box sx={{ px: 1, py: 0.8, borderBottom: '1px solid #eef2f7', bgcolor: '#f8fafc' }}>
+                          <Stack direction='row' spacing={0.5} alignItems='center'>
+                            <PlaceRounded sx={{ color: '#1d4ed8', fontSize: 13 }} />
+                            <Typography sx={{ fontSize: 12, fontWeight: 700, color: '#334155' }}>
+                              {depot.depotCode} ({depot.depotName || '-'})
+                            </Typography>
+                          </Stack>
+                        </Box>
+
+                        <Stack spacing={0.75} sx={{ p: 1 }}>
+                          {(paymentTerms.length ? paymentTerms : [{ id: 'default', label: 'ราคาขาย', extra: 0 }]).map((term) => (
+                            <Box key={`term-${r.refineryId}-${depot.depotKey}-${term.id}`}>
+                              <Box sx={{ px: 1, py: 0.8, border: '1px solid #eef2f7', bgcolor: '#4289d0', borderRadius: 1 }}>
+                                <Typography sx={{ fontSize: 13, fontWeight: 700, color: '#ffffff', mb: 0.5 }}>{term.label}</Typography>
+                              </Box>
+                              <Stack spacing={0.45}>
+                                {products.map((product) => {
+                                  const base = priceMap.get(`${r.refineryId}__${depot.depotKey}__${product.key}`);
+                                  const value = paymentTerms.length
+                                    ? (base == null || base === 0 ? 0 : Number(base) + Number(term.extra || 0))
+                                    : base;
+                                  const cellKey = paymentTerms.length
+                                    ? `${depot.depotKey}__${r.refineryId}__${term.id}`
+                                    : `${depot.depotKey}__${r.refineryId}__default`;
+                                  const isCheapest = cheapestCellMap.get(product.key) === cellKey;
+                                  return (
+                                    <Stack sx={{ px: 1, py: 0.8 }} key={`price-${r.refineryId}-${depot.depotKey}-${product.key}-${term.id}`} direction='row' justifyContent='space-between' spacing={1}>
+                                      <Typography sx={{ fontSize: 12, color: product.color_hex ?? '#334155' }}>
+                                        {product.code}{product.name ? ` ${product.name}` : ''}
+                                      </Typography>
+                                      <Stack direction='row' spacing={0.35} alignItems='center'>
+                                        <Typography sx={{ fontSize: 12.5, fontWeight: 800, color: product.color_hex ?? '#2563eb' }}>{fmtPrice(value as number | undefined)}</Typography>
+                                        {isCheapest ? <Chip size='small' label='ถูกสุด' sx={{ height: 16, fontSize: 10, bgcolor: '#facc15', color: '#111827' }} /> : null}
+                                      </Stack>
+                                    </Stack>
+                                  );
+                                })}
+                              </Stack>
+                            </Box>
+                          ))}
+                        </Stack>
+                      </Paper>
+                    ))}
+                  </Stack>
+                </Paper>
+              );
+            })}
+          </Stack>
         </Paper>
       </Stack>
     </CustomerShell>

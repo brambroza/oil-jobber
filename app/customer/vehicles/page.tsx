@@ -9,6 +9,8 @@ import {
   Alert,
   Box,
   Button,
+  Card,
+  CardContent,
   Dialog,
   DialogActions,
   DialogContent,
@@ -116,7 +118,7 @@ export default function CustomerVehiclesPage() {
         <Stack direction='row' justifyContent='space-between' alignItems='center'>
           <Stack direction='row' spacing={1} alignItems='center'>
             <DirectionsCarFilledRounded sx={{ color: '#1e3a8a' }} />
-            <Typography sx={{ fontSize: 24, fontWeight: 800, color: '#0f2f6e' }}>รถบรรทุกน้ำมันของลูกค้า</Typography>
+            <Typography sx={{  display: { xs: 'none', md: 'flex' }, fontSize: 24, fontWeight: 800, color: '#0f2f6e' }}>รถบรรทุกน้ำมันของลูกค้า</Typography>
           </Stack>
           <Button variant='contained' startIcon={<AddRounded />} onClick={() => { setForm(emptyForm); setOpen(true); }}>
             เพิ่มรถ
@@ -127,7 +129,7 @@ export default function CustomerVehiclesPage() {
         {loading ? <Alert severity='info'>กำลังโหลดข้อมูลรถ...</Alert> : null}
 
         <Paper sx={{ borderRadius: 2, border: '1px solid #d7e1ef', overflow: 'hidden' }}>
-          <Box sx={{ overflowX: 'auto' }}>
+          <Box sx={{ display: { xs: 'none', md: 'block' }, overflowX: 'auto' }}>
             <Table size='small'>
               <TableHead>
                 <TableRow sx={{ '& th': { bgcolor: '#f8fbff', fontWeight: 800 } }}>
@@ -161,6 +163,41 @@ export default function CustomerVehiclesPage() {
               </TableBody>
             </Table>
           </Box>
+          <Stack sx={{ display: { xs: 'flex', md: 'none' }, p: 1 }} spacing={0.9}>
+            {rows.map((r) => (
+              <Card key={r.id} variant='outlined' sx={{ borderColor: '#e2e8f0', borderRadius: 2, boxShadow: '0 1px 2px rgba(15, 23, 42, 0.04)' }}>
+                <CardContent sx={{ p: 1.15, '&:last-child': { pb: 1.15 } }}>
+                  <Stack spacing={0.6}>
+                    <Stack direction='row' justifyContent='space-between' spacing={1}>
+                      <Typography sx={{ fontSize: 11.5, color: '#64748b' }}>ทะเบียนรถ</Typography>
+                      <Typography sx={{ fontSize: 13, fontWeight: 700, color: '#0f172a' }}>{r.license_plate}</Typography>
+                    </Stack>
+                    <Stack direction='row' justifyContent='space-between' spacing={1}>
+                      <Typography sx={{ fontSize: 11.5, color: '#64748b' }}>ชื่อคนขับ</Typography>
+                      <Typography sx={{ fontSize: 12.5, color: '#1f2937' }}>{r.driver_name || '-'}</Typography>
+                    </Stack>
+                    <Stack direction='row' justifyContent='space-between' spacing={1}>
+                      <Typography sx={{ fontSize: 11.5, color: '#64748b' }}>เบอร์คนขับ</Typography>
+                      <Typography sx={{ fontSize: 12.5, color: '#1f2937' }}>{r.driver_phone || '-'}</Typography>
+                    </Stack>
+                    <Stack direction='row' justifyContent='space-between' spacing={1}>
+                      <Typography sx={{ fontSize: 11.5, color: '#64748b' }}>เลขใบอนุญาตรับสินค้า</Typography>
+                      <Typography sx={{ fontSize: 12.5, color: '#1f2937' }}>{r.pickup_license_number || '-'}</Typography>
+                    </Stack>
+                    <Stack direction='row' justifyContent='flex-end' spacing={0.75} sx={{ pt: 0.1 }}>
+                      <IconButton onClick={() => { setForm({ id: r.id, license_plate: r.license_plate, driver_name: r.driver_name || '', driver_phone: r.driver_phone || '', pickup_license_number: r.pickup_license_number || '' }); setOpen(true); }} sx={{ border: '1px solid #e2e8f0', borderRadius: 1.5 }}>
+                        <EditRounded fontSize='small' />
+                      </IconButton>
+                      <IconButton color='error' onClick={() => setDeleteId(r.id)} sx={{ border: '1px solid #fecaca', borderRadius: 1.5 }}>
+                        <DeleteRounded fontSize='small' />
+                      </IconButton>
+                    </Stack>
+                  </Stack>
+                </CardContent>
+              </Card>
+            ))}
+            {!rows.length && !loading ? <Alert severity='info'>ยังไม่มีข้อมูลรถบรรทุก</Alert> : null}
+          </Stack>
         </Paper>
       </Stack>
 
