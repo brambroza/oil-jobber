@@ -279,8 +279,9 @@ export default function SellingPricesPage() {
       ? visibleConditions
       : [{ id: 'base', name: 'ราคาขาย', extra_cost_per_liter: 0 } as any];
 
-    const bubbles = groupedSelectedItems.slice(0, 5).map((group) => {
+    const groupBlocks = groupedSelectedItems.slice(0, 5).map((group) => {
       const visibleItems = group.items.filter((it) => Number(it.base_cost_price || 0) > 0);
+      if (!visibleItems.length) return null;
       const conditionBlocks = conditionsToUse.map((pc: any) => {
         const productRows = visibleItems.slice(0, 4).map((item) => ({
           type: 'box',
@@ -325,6 +326,36 @@ export default function SellingPricesPage() {
       });
 
       return {
+        type: 'box',
+        layout: 'vertical',
+        margin: 'md',
+        paddingAll: '10px',
+        backgroundColor: '#eef2ff',
+        cornerRadius: '10px',
+        contents: [
+          {
+            type: 'text',
+            text: `${group.depotCode}${group.depotName ? ` (${group.depotName})` : ''}`,
+            size: 'sm',
+            weight: 'bold',
+            color: '#1e3a8a',
+            wrap: true,
+          },
+          ...conditionBlocks,
+        ],
+      };
+    });
+    const safeGroupBlocks = groupBlocks.filter((b: any) => {
+      const contents = b?.contents;
+      return Array.isArray(contents) && contents.length > 0;
+    });
+
+    if (!safeGroupBlocks.length) return [] as Array<Record<string, unknown>>;
+
+    return [{
+      type: 'flex',
+      altText: `ราคาน้ำมัน ${refineryName} มีผล ${effectiveText} หมดอายุ ${expireText}`,
+      contents: {
         type: 'bubble',
         size: 'mega',
         body: {
@@ -339,18 +370,6 @@ export default function SellingPricesPage() {
               layout: 'vertical',
               margin: 'sm',
               paddingAll: '8px',
-              backgroundColor: '#eef2ff',
-              cornerRadius: '8px',
-              contents: [
-                { type: 'text', text: 'คลัง', size: 'xxs', color: '#64748b' },
-                { type: 'text', text: `${group.depotCode}${group.depotName ? ` (${group.depotName})` : ''}`, size: 'sm', weight: 'bold', color: '#1e3a8a', wrap: true },
-              ],
-            },
-            {
-              type: 'box',
-              layout: 'vertical',
-              margin: 'sm',
-              paddingAll: '8px',
               backgroundColor: '#fff1f2',
               cornerRadius: '8px',
               contents: [
@@ -358,24 +377,9 @@ export default function SellingPricesPage() {
                 { type: 'text', text: expireText, size: 'xs', color: '#dc2626', weight: 'bold' },
               ],
             },
-            ...conditionBlocks,
+            ...safeGroupBlocks,
           ],
         },
-      };
-    });
-    const safeBubbles = bubbles.filter((b: any) => {
-      const contents = b?.body?.contents;
-      return Array.isArray(contents) && contents.length > 0;
-    });
-
-    if (!safeBubbles.length) return [] as Array<Record<string, unknown>>;
-
-    return [{
-      type: 'flex',
-      altText: `ราคาน้ำมัน ${refineryName} มีผล ${effectiveText} หมดอายุ ${expireText}`,
-      contents: {
-        type: 'carousel',
-        contents: safeBubbles,
       },
     }];
   };
