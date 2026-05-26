@@ -79,27 +79,44 @@ export async function GET() {
 
   if (roundsRes.error) return NextResponse.json({ error: roundsRes.error.message }, { status: 400 });
 
-  const toBangkokMs = (value: string): number => {
-    const text = String(value || '').trim();
-    if (!text) return Number.NaN;
-    const normalized = text.includes('T') ? text : `${text}T00:00:00`;
-    const localText = normalized.replace(/(Z|[+-]\d{2}:\d{2})$/, '');
-    return new Date(`${localText}+07:00`).getTime();
+  // Parse datetime consistently across local/Vercel:
+  // - if source already has timezone (Z/+07:00) => keep absolute instant
+  // - if source has no timezone => treat as Bangkok local time (+07:00)
+  const parseBangkokMs = (value: string): number => {
+    const raw = String(value || '').trim();
+    if (!raw) return Number.NaN;
+    const normalized = raw.includes('T') ? raw : raw.replace(' ', 'T');
+    if (/(Z|[+-]\d{2}:\d{2})$/.test(normalized)) {
+      return new Date(normalized).getTime();
+    }
+    return new Date(`${normalized}+07:00`).getTime();
   };
-  const nowBangkok = new Date(new Date().toLocaleString('en-US', { timeZone: 'Asia/Bangkok' }));
-  const nowMs = nowBangkok.getTime();
- 
+  const mergeDateTime = (
+    dateValue: string | null | undefined,
+    dateTimeValue: string | null | undefined,
+    fallbackTime: '00:00:00' | '23:59:59',
+  ): number => {
+    const dtText = String(dateTimeValue || '').trim();
+    if (dtText) {
+      // Handle "HH:mm:ss" style by combining with date when available.
+      if (!dtText.includes('T') && !dtText.includes(' ') && dateValue) {
+        return parseBangkokMs(`${dateValue}T${dtText.slice(0, 8)}`);
+      }
+      return parseBangkokMs(dtText);
+    }
+    if (!dateValue) return Number.NaN;
+    return parseBangkokMs(`${dateValue}T${fallbackTime}`);
+  };
+  const nowMs = Date.now();
 
 
   const latestByRefinery = new Map<string, any>();
   for (const row of roundsRes.data ?? []) {
-    const effectiveMs = row.effective_at
-      ? toBangkokMs(String(row.effective_at))
-      : (row.effective_date ? toBangkokMs(`${row.effective_date}T00:00:00`) : Number.NaN);
+    const effectiveMs = mergeDateTime(row.effective_date, row.effective_at, '00:00:00');
     if (Number.isNaN(effectiveMs) || effectiveMs > nowMs) continue;
-    const expiresMs = row.expires_at
-      ? toBangkokMs(String(row.expires_at))
-      : (row.expires_date ? toBangkokMs(`${row.expires_date}T23:59:59`) : Number.POSITIVE_INFINITY);
+    const expiresMs = row.expires_date || row.expires_at
+      ? mergeDateTime(row.expires_date, row.expires_at, '23:59:59')
+      : Number.POSITIVE_INFINITY;
    
 
     if (!Number.isNaN(expiresMs) && expiresMs <= nowMs) continue;
