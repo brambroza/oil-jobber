@@ -5,7 +5,7 @@ import { getLineProfile } from '@/lib/services/line';
 
 export async function POST(req: NextRequest) {
   const payload = await req.json();
-  const companyId = resolveCompanyId(payload.company_id);
+  const companyId = resolveCompanyId(req.nextUrl.searchParams.get('company_id') || payload.company_id);
   if (!companyId) return NextResponse.json({ error: 'กรุณาตั้งค่า company_id หรือ DEFAULT_COMPANY_ID' }, { status: 422 });
 
   const events = payload.events ?? [];
