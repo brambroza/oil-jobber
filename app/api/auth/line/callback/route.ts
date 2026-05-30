@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { createSupabaseServerClient } from '@/lib/supabase/server-client';
 import { getDefaultHomeByContext, getUserContext } from '@/lib/auth/user-context';
 import { supabaseAdmin } from '@/lib/supabase/server';
+import { pushLineMessage } from '@/lib/services/line';
 
 type LineTokenResponse = {
   access_token?: string;
@@ -153,6 +154,15 @@ export async function GET(req: NextRequest) {
   const ctx = await getUserContext(user.id);
   const home = getDefaultHomeByContext(ctx);
   const redirectPath = safeNext || home;
+
+  // Best-effort: send a welcome ping from OA after successful LINE auth.
+  // This doesn't block login flow if LINE push is temporarily unavailable.
+  try {
+    await pushLineMessage(lineUserId, 'เข้าสู่ระบบสำเร็จแล้ว');
+  } catch {
+    // ignore push errors to keep auth callback stable
+  }
+
   const response = NextResponse.redirect(new URL(redirectPath, origin));
   response.cookies.delete('line_oauth_state');
   response.cookies.delete('line_oauth_next');
