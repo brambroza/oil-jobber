@@ -88,7 +88,7 @@ function formatTime(isoDateTime?: string | null): string {
 }
 
 function formatMoney(value: number): string {
-  return Number(value || 0).toFixed(4);
+  return Number(value || 0).toFixed(2);
 }
 
 export default function SellingPricesPage() {

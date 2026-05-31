@@ -49,6 +49,7 @@ type LineCustomer = {
 type CustomerWithPayment = Customer & {
   payment_conditions?: { name?: string; code?: string } | null;
 };
+type OutstandingRow = { customer_id: string; outstanding_amount: number };
 
 type CustomerAccessForm = {
   allowed_refinery_ids: string[];
@@ -106,6 +107,7 @@ export default function CustomersPage() {
   const [portalEmail, setPortalEmail] = useState('');
   const [portalPassword, setPortalPassword] = useState('');
   const [lineCustomers, setLineCustomers] = useState<LineCustomer[]>([]);
+  const [outstandingRows, setOutstandingRows] = useState<OutstandingRow[]>([]);
   const [selectedLineCustomerId, setSelectedLineCustomerId] = useState('');
   const [lineMapSaving, setLineMapSaving] = useState(false);
   const [deleteId, setDeleteId] = useState<string | null>(null);
@@ -134,25 +136,35 @@ export default function CustomersPage() {
     return filteredRows.slice(start, start + rowsPerPage);
   }, [filteredRows, page, rowsPerPage]);
 
+  const outstandingByCustomer = useMemo(() => {
+    return outstandingRows.reduce<Record<string, number>>((acc, row) => {
+      if (!row.customer_id) return acc;
+      acc[row.customer_id] = (acc[row.customer_id] || 0) + Number(row.outstanding_amount || 0);
+      return acc;
+    }, {});
+  }, [outstandingRows]);
+
   const load = async () => {
     if (!companyId) return;
     setLoading(true);
     setError('');
     try {
-      const [customerRes, paymentRes, refineryRes, depotRes, productRes] = await Promise.all([
+      const [customerRes, paymentRes, refineryRes, depotRes, productRes, outstandingRes] = await Promise.all([
         fetch(`/api/customers?company_id=${companyId}`),
         fetch(`/api/payment-conditions?company_id=${companyId}`),
         fetch(`/api/refineries?company_id=${companyId}`),
         fetch(`/api/depots?company_id=${companyId}`),
         fetch(`/api/oil-products?company_id=${companyId}`),
+        fetch(`/api/accounting/outstanding?company_id=${companyId}`),
       ]);
 
-      const [customerData, paymentData, refineryData, depotData, productData] = await Promise.all([
+      const [customerData, paymentData, refineryData, depotData, productData, outstandingData] = await Promise.all([
         customerRes.json(),
         paymentRes.json(),
         refineryRes.json(),
         depotRes.json(),
         productRes.json(),
+        outstandingRes.json(),
       ]);
 
       if (!customerRes.ok) throw new Error(customerData.error || 'โหลดข้อมูลลูกค้าไม่สำเร็จ');
@@ -160,12 +172,14 @@ export default function CustomersPage() {
       if (!refineryRes.ok) throw new Error(refineryData.error || 'โหลดโรงกลั่นไม่สำเร็จ');
       if (!depotRes.ok) throw new Error(depotData.error || 'โหลดคลังไม่สำเร็จ');
       if (!productRes.ok) throw new Error(productData.error || 'โหลดสินค้าน้ำมันไม่สำเร็จ');
+      if (!outstandingRes.ok) throw new Error(outstandingData.error || 'โหลดยอดค้างชำระไม่สำเร็จ');
 
       setRows(customerData);
       setPaymentConditions(paymentData);
       setRefineries(refineryData);
       setDepots(depotData);
       setOilProducts(productData);
+      setOutstandingRows(outstandingData || []);
     } catch (e) {
       setError((e as Error).message);
     } finally {
@@ -434,6 +448,7 @@ export default function CustomersPage() {
               <TableCell>ที่อยู่</TableCell>
               <TableCell>เบอร์โทร</TableCell>
               <TableCell align='right'>วงเงินเครดิต</TableCell>
+              <TableCell align='right'>ยอดเงินคงเหลือ</TableCell>
               <TableCell>เงื่อนไขชำระเงิน</TableCell>
               <TableCell>สถานะ</TableCell>
               <TableCell align='right'>จัดการ</TableCell>
@@ -447,6 +462,7 @@ export default function CustomersPage() {
                 <TableCell sx={{ minWidth: 180 }}>{r.address ?? '-'}</TableCell>
                 <TableCell>{r.phone ?? '-'}</TableCell>
                 <TableCell align='right'>{Number(r.credit_limit).toFixed(2)}</TableCell>
+                <TableCell align='right'>{(Number(r.credit_limit) - Number(outstandingByCustomer[r.id] || 0)).toFixed(2)}</TableCell>
                 <TableCell>{r.payment_conditions?.name ?? '-'}</TableCell>
                 <TableCell><Chip size='small' label={r.status} color={r.status === 'ACTIVE' ? 'success' : 'default'} /></TableCell>
                 <TableCell align='right'>
@@ -470,7 +486,7 @@ export default function CustomersPage() {
                 </TableCell>
               </TableRow>
             ))}
-            {!filteredRows.length && !loading ? <TableRow><TableCell colSpan={8} align='center'>ไม่มีข้อมูล</TableCell></TableRow> : null}
+            {!filteredRows.length && !loading ? <TableRow><TableCell colSpan={9} align='center'>ไม่มีข้อมูล</TableCell></TableRow> : null}
           </TableBody>
         </Table>
         <TablePagination
