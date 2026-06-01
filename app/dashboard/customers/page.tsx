@@ -136,6 +136,16 @@ export default function CustomersPage() {
     return filteredRows.slice(start, start + rowsPerPage);
   }, [filteredRows, page, rowsPerPage]);
 
+  const currencyFormatter = useMemo(
+    () =>
+      new Intl.NumberFormat('th-TH', {
+        style: 'decimal',
+        minimumFractionDigits: 2,
+        maximumFractionDigits: 2,
+      }),
+    []
+  );
+
   const outstandingByCustomer = useMemo(() => {
     return outstandingRows.reduce<Record<string, number>>((acc, row) => {
       if (!row.customer_id) return acc;
@@ -346,64 +356,64 @@ export default function CustomersPage() {
     const shown = qv ? options.filter((x) => `${x.group || ''} ${x.label}`.toLowerCase().includes(qv)) : options;
 
     return (
-    <Paper variant='outlined' sx={{ p: 1.25, borderColor: '#dbe4f0', borderRadius: 2 }}>
-      <Stack spacing={0.8}>
-        <Stack direction='row' justifyContent='space-between' alignItems='center' spacing={1}>
-          <Stack spacing={0.2}>
-            <Typography fontWeight={700}>{title}</Typography>
-            <Typography variant='caption' color='text.secondary'>เลือกแล้ว {selected.length} รายการ</Typography>
+      <Paper variant='outlined' sx={{ p: 1.25, borderColor: '#dbe4f0', borderRadius: 2 }}>
+        <Stack spacing={0.8}>
+          <Stack direction='row' justifyContent='space-between' alignItems='center' spacing={1}>
+            <Stack spacing={0.2}>
+              <Typography fontWeight={700}>{title}</Typography>
+              <Typography variant='caption' color='text.secondary'>เลือกแล้ว {selected.length} รายการ</Typography>
+            </Stack>
+            <Stack direction='row' spacing={0.5}>
+              <Button size='small' onClick={() => onChange(options.map((o) => o.id))}>เลือกทั้งหมด</Button>
+              <Button size='small' color='inherit' onClick={() => onChange([])}>ล้าง</Button>
+            </Stack>
           </Stack>
-          <Stack direction='row' spacing={0.5}>
-            <Button size='small' onClick={() => onChange(options.map((o) => o.id))}>เลือกทั้งหมด</Button>
-            <Button size='small' color='inherit' onClick={() => onChange([])}>ล้าง</Button>
-          </Stack>
+          <Typography variant='caption' color='text.secondary'>{helper}</Typography>
+          {searchable ? (
+            <TextField
+              size='small'
+              placeholder='ค้นหาในรายการนี้'
+              value={q}
+              onChange={(e) => setQ(e.target.value)}
+            />
+          ) : null}
+          <FormGroup sx={{ maxHeight, overflowY: 'auto', pr: 0.5, border: '1px solid #edf2f7', borderRadius: 1, p: 0.6 }}>
+            {shown.map((opt, idx) => {
+              const prev = shown[idx - 1];
+              const showGroup = Boolean(opt.group) && (idx === 0 || prev?.group !== opt.group);
+              return (
+                <Box key={opt.id}>
+                  {showGroup ? (
+                    <Typography
+                      variant='caption'
+                      sx={{
+                        color: '#1e3a8a',
+                        fontWeight: 800,
+                        mt: 0.5,
+                        mb: 0.2,
+                        display: 'block',
+                        position: 'sticky',
+                        top: 0,
+                        zIndex: 1,
+                        bgcolor: '#f8fbff',
+                        py: 0.2,
+                      }}
+                    >
+                      {opt.group}
+                    </Typography>
+                  ) : null}
+                  <FormControlLabel
+                    control={<Checkbox size='small' checked={selected.includes(opt.id)} onChange={() => onChange(toggleInArray(selected, opt.id))} />}
+                    label={<Typography variant='body2'>{opt.label}</Typography>}
+                  />
+                </Box>
+              );
+            })}
+            {!shown.length ? <Typography variant='caption' color='text.secondary'>ไม่พบข้อมูล</Typography> : null}
+          </FormGroup>
         </Stack>
-        <Typography variant='caption' color='text.secondary'>{helper}</Typography>
-        {searchable ? (
-          <TextField
-            size='small'
-            placeholder='ค้นหาในรายการนี้'
-            value={q}
-            onChange={(e) => setQ(e.target.value)}
-          />
-        ) : null}
-        <FormGroup sx={{ maxHeight, overflowY: 'auto', pr: 0.5, border: '1px solid #edf2f7', borderRadius: 1, p: 0.6 }}>
-          {shown.map((opt, idx) => {
-            const prev = shown[idx - 1];
-            const showGroup = Boolean(opt.group) && (idx === 0 || prev?.group !== opt.group);
-            return (
-              <Box key={opt.id}>
-                {showGroup ? (
-                  <Typography
-                    variant='caption'
-                    sx={{
-                      color: '#1e3a8a',
-                      fontWeight: 800,
-                      mt: 0.5,
-                      mb: 0.2,
-                      display: 'block',
-                      position: 'sticky',
-                      top: 0,
-                      zIndex: 1,
-                      bgcolor: '#f8fbff',
-                      py: 0.2,
-                    }}
-                  >
-                    {opt.group}
-                  </Typography>
-                ) : null}
-                <FormControlLabel
-                  control={<Checkbox size='small' checked={selected.includes(opt.id)} onChange={() => onChange(toggleInArray(selected, opt.id))} />}
-                  label={<Typography variant='body2'>{opt.label}</Typography>}
-                />
-              </Box>
-            );
-          })}
-          {!shown.length ? <Typography variant='caption' color='text.secondary'>ไม่พบข้อมูล</Typography> : null}
-        </FormGroup>
-      </Stack>
-    </Paper>
-  );
+      </Paper>
+    );
   };
 
   return (
@@ -449,7 +459,7 @@ export default function CustomersPage() {
               <TableCell>เบอร์โทร</TableCell>
               <TableCell align='right'>วงเงินเครดิต</TableCell>
               <TableCell align='right'>ยอดเงินคงเหลือ</TableCell>
-              <TableCell>เงื่อนไขชำระเงิน</TableCell>
+              {/*     <TableCell>เงื่อนไขชำระเงิน</TableCell> */}
               <TableCell>สถานะ</TableCell>
               <TableCell align='right'>จัดการ</TableCell>
             </TableRow>
@@ -461,9 +471,13 @@ export default function CustomersPage() {
                 <TableCell>{r.tax_id ?? '-'}</TableCell>
                 <TableCell sx={{ minWidth: 180 }}>{r.address ?? '-'}</TableCell>
                 <TableCell>{r.phone ?? '-'}</TableCell>
-                <TableCell align='right'>{Number(r.credit_limit).toFixed(2)}</TableCell>
-                <TableCell align='right'>{(Number(r.credit_limit) - Number(outstandingByCustomer[r.id] || 0)).toFixed(2)}</TableCell>
-                <TableCell>{r.payment_conditions?.name ?? '-'}</TableCell>
+                <TableCell align='right'>{currencyFormatter.format(Number(r.credit_limit || 0))}</TableCell>
+                <TableCell align='right'>
+
+                  <Chip size='small' label={currencyFormatter.format(Number(r.credit_limit || 0) - Number(outstandingByCustomer[r.id] || 0))} color={r.status === 'ACTIVE' ? 'warning' : 'default'} />
+
+                </TableCell>
+                {/*     <TableCell>{r.payment_conditions?.name ?? '-'}</TableCell> */}
                 <TableCell><Chip size='small' label={r.status} color={r.status === 'ACTIVE' ? 'success' : 'default'} /></TableCell>
                 <TableCell align='right'>
                   <IconButton onClick={() => {
@@ -505,8 +519,8 @@ export default function CustomersPage() {
       </Box>
 
       <Drawer anchor='right' open={drawerOpen} onClose={() => setDrawerOpen(false)}>
-       <Stack spacing={2} sx={{ width: { xs: '100vw', sm: 700, md: 1120 }, maxWidth: '100vw', p: { xs: 1.25, md: 2.5 } }}>
-      
+        <Stack spacing={2} sx={{ width: { xs: '100vw', sm: 700, md: 1120 }, maxWidth: '100vw', p: { xs: 1.25, md: 2.5 } }}>
+
           <Typography variant='h6'>{isEdit ? 'แก้ไขลูกค้า' : 'เพิ่มลูกค้า'}</Typography>
           <Paper variant='outlined' sx={{ p: 1.25, borderColor: '#dbe4f0', borderRadius: 2 }}>
             <Stack spacing={1.1}>
@@ -621,7 +635,7 @@ export default function CustomersPage() {
                             <Typography variant='body2' noWrap sx={{ fontWeight: 600 }}>
                               {lc.display_name || '-'}
                             </Typography>
-                           {/*  <Typography variant='caption' color='text.secondary' noWrap>
+                            {/*  <Typography variant='caption' color='text.secondary' noWrap>
                               {lc.line_user_id}
                             </Typography> */}
                           </Box>

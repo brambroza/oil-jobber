@@ -491,6 +491,7 @@ export default function SellingPricesPage() {
                   <TableCell>{r.item_count}</TableCell>
                   <TableCell align='right'>
                     <Button
+                   
                       size='small'
                       variant='contained'
                       startIcon={<VisibilityOutlined fontSize='small' />}
