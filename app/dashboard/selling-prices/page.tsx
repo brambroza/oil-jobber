@@ -53,6 +53,12 @@ type PaymentCondition = {
   extra_cost_per_liter: number;
 };
 
+type OilProduct = {
+  id: string;
+  code: string;
+  name: string;
+};
+
 type PriceRoundDetail = {
   base: {
     id: string;
@@ -73,6 +79,13 @@ type LineCustomer = {
   profile_image_url: string | null;
   customers?: { company_name?: string } | null;
 };
+
+type CustomerAccess = {
+  allowed_refinery_ids?: string[] | null;
+  allowed_depot_ids?: string[] | null;
+  allowed_oil_product_ids?: string[] | null;
+  allowed_payment_condition_ids?: string[] | null;
+} | null;
 
 function formatDate(isoDate: string): string {
   if (!isoDate) return '-';
@@ -95,6 +108,7 @@ export default function SellingPricesPage() {
   const [companyId] = useState(process.env.NEXT_PUBLIC_DEFAULT_COMPANY_ID ?? '');
   const [rounds, setRounds] = useState<PriceRound[]>([]);
   const [paymentConditions, setPaymentConditions] = useState<PaymentCondition[]>([]);
+  const [oilProducts, setOilProducts] = useState<OilProduct[]>([]);
   const [selected, setSelected] = useState<PriceRoundDetail | null>(null);
   const [lineCustomers, setLineCustomers] = useState<LineCustomer[]>([]);
   const [selectedCustomerIds, setSelectedCustomerIds] = useState<string[]>([]);
@@ -109,6 +123,14 @@ export default function SellingPricesPage() {
   const [searchDate, setSearchDate] = useState('');
   const [page, setPage] = useState(0);
   const [rowsPerPage, setRowsPerPage] = useState(10);
+  const accessCache = useMemo(() => new Map<string, CustomerAccess>(), []);
+  const productIdByCode = useMemo(() => {
+    const map = new Map<string, string>();
+    for (const product of oilProducts) {
+      map.set(String(product.code || '').trim().toUpperCase(), String(product.id || '').trim());
+    }
+    return map;
+  }, [oilProducts]);
 
   const sortedConditions = useMemo(
     () =>
@@ -169,12 +191,13 @@ export default function SellingPricesPage() {
     setLoading(true);
     setError('');
 
-    const [rRounds, rConditions] = await Promise.all([
+    const [rRounds, rConditions, rProducts] = await Promise.all([
       fetch(`/api/prices?company_id=${companyId}`),
       fetch(`/api/payment-conditions?company_id=${companyId}`),
+      fetch(`/api/oil-products?company_id=${companyId}`),
     ]);
 
-    const [dRounds, dConditions] = await Promise.all([rRounds.json(), rConditions.json()]);
+    const [dRounds, dConditions, dProducts] = await Promise.all([rRounds.json(), rConditions.json(), rProducts.json()]);
 
     if (!rRounds.ok) {
       setError(dRounds.error || 'โหลดรอบราคาน้ำมันไม่สำเร็จ');
@@ -186,6 +209,12 @@ export default function SellingPricesPage() {
       setError((prev) => prev || dConditions.error || 'โหลดเงื่อนไขชำระเงินไม่สำเร็จ');
     } else {
       setPaymentConditions((dConditions || []).map((x: any) => ({ ...x, extra_cost_per_liter: Number(x.extra_cost_per_liter || 0) })));
+    }
+
+    if (!rProducts.ok) {
+      setError((prev) => prev || dProducts.error || 'โหลดสินค้าน้ำมันไม่สำเร็จ');
+    } else {
+      setOilProducts(dProducts || []);
     }
 
     setLoading(false);
@@ -224,6 +253,17 @@ export default function SellingPricesPage() {
     setLineCustomers(data || []);
   };
 
+  const loadCustomerAccess = async (customerId: string): Promise<CustomerAccess> => {
+    const cached = accessCache.get(customerId);
+    if (cached !== undefined) return cached;
+
+    const res = await fetch(`/api/customer-portal/access/${customerId}?company_id=${companyId}`);
+    const data = await res.json();
+    const access: CustomerAccess = res.ok ? (data.access ?? null) : null;
+    accessCache.set(customerId, access);
+    return access;
+  };
+
   const toggleCustomer = (id: string, checked: boolean) => {
     setSelectedCustomerIds((prev) => {
       if (checked) return prev.includes(id) ? prev : [...prev, id];
@@ -240,21 +280,65 @@ export default function SellingPricesPage() {
   const selectAll = () => setSelectedCustomerIds(lineCustomers.map((c) => c.id));
   const clearAll = () => setSelectedCustomerIds([]);
 
-  const buildBroadcastMessage = (allowedPaymentConditionIds?: string[] | null): string => {
+  const normalizeIds = (values?: string[] | null) => (values || []).map((x) => String(x || '').trim()).filter(Boolean);
+
+  const isAllowedByAccess = (access: CustomerAccess, baseRefineryId: string, depotId: string, productCode: string) => {
+    const refineryIds = normalizeIds(access?.allowed_refinery_ids);
+    const depotIds = normalizeIds(access?.allowed_depot_ids);
+    const productIds = normalizeIds(access?.allowed_oil_product_ids);
+
+    if (refineryIds.length && !refineryIds.includes(baseRefineryId)) return false;
+    if (depotIds.length && !depotIds.includes(depotId)) return false;
+    if (productIds.length) {
+      const productId = productIdByCode.get(String(productCode || '').trim().toUpperCase()) || '';
+      if (!productId || !productIds.includes(productId)) return false;
+    }
+    return true;
+  };
+
+  const getVisibleDataForAccess = (access: CustomerAccess) => {
+    if (!selected) return null;
+
+    const baseRefineryId = String(selected.base.refinery_id || '').trim();
+    if (normalizeIds(access?.allowed_refinery_ids).length && !baseRefineryId) return null;
+
+    const visiblePaymentConditions = (() => {
+      const allowedIds = normalizeIds(access?.allowed_payment_condition_ids);
+      if (!allowedIds.length) return sortedConditions;
+      return sortedConditions.filter((pc) => allowedIds.includes(pc.id));
+    })();
+
+    const visibleGroups = groupedSelectedItems
+      .map((group) => {
+        const items = group.items.filter((item) => isAllowedByAccess(access, baseRefineryId, String(item.depot_id || '').trim(), String(item.product_code || '').trim()));
+        return { ...group, items };
+      })
+      .filter((group) => group.items.length > 0);
+
+    if (!visibleGroups.length) return null;
+
+    return {
+      visibleGroups,
+      visiblePaymentConditions: visiblePaymentConditions.length
+        ? visiblePaymentConditions
+        : [{ id: 'base', name: 'ราคาขาย', extra_cost_per_liter: 0 } as any],
+    };
+  };
+
+  const buildBroadcastMessage = (access: CustomerAccess): string => {
     if (!selected) return '';
-    const allowedSet = new Set((allowedPaymentConditionIds || []).map((x) => String(x)));
-    const visibleConditions = (allowedPaymentConditionIds && allowedPaymentConditionIds.length)
-      ? sortedConditions.filter((pc) => allowedSet.has(pc.id))
-      : sortedConditions;
+    const visibleData = getVisibleDataForAccess(access);
+    if (!visibleData) return '';
+    const { visibleGroups, visiblePaymentConditions } = visibleData;
     const header = `อัปเดตราคาขาย ${selected.base.refineries?.name || '-'} วันที่ ${formatDate(selected.base.effective_date)} เวลา ${formatTime(selected.base.effective_at)}`;
     const lines: string[] = [header, ''];
-    for (const g of groupedSelectedItems.slice(0, 4)) {
+    for (const g of visibleGroups.slice(0, 4)) {
       const visibleItems = g.items.filter((it) => Number(it.base_cost_price || 0) > 0);
       if (!visibleItems.length) continue;
       lines.push(`${g.depotCode}${g.depotName ? ` (${g.depotName})` : ''}`);
       for (const item of visibleItems.slice(0, 3)) {
         lines.push(`${item.product_code} ${item.product_name || ''}`.trim());
-        const parts = (visibleConditions.length ? visibleConditions : [{ id: 'base', name: 'ราคาขาย', extra_cost_per_liter: 0 } as any]).map(
+        const parts = visiblePaymentConditions.map(
           (pc: any) => `${pc.name}: ${(Number(item.base_cost_price || 0) + Number(pc.extra_cost_per_liter || 0)).toFixed(2)}`,
         );
         lines.push(parts.join(' | '));
@@ -266,20 +350,17 @@ export default function SellingPricesPage() {
     return lines.join('\n');
   };
 
-  const buildPriceFlexMessages = (allowedPaymentConditionIds?: string[] | null) => {
+  const buildPriceFlexMessages = (access: CustomerAccess) => {
     if (!selected) return [] as Array<Record<string, unknown>>;
+    const visibleData = getVisibleDataForAccess(access);
+    if (!visibleData) return [] as Array<Record<string, unknown>>;
+    const { visibleGroups, visiblePaymentConditions } = visibleData;
     const refineryName = selected.base.refineries?.name || '-';
     const effectiveText = `${formatDate(selected.base.effective_date)} ${formatTime(selected.base.effective_at)} น.`;
     const expireText = `${selected.base.expires_date ? formatDate(selected.base.expires_date) : '-'} ${formatTime(selected.base.expires_at)} น.`;
-    const allowedSet = new Set((allowedPaymentConditionIds || []).map((x) => String(x)));
-    const visibleConditions = (allowedPaymentConditionIds && allowedPaymentConditionIds.length)
-      ? sortedConditions.filter((pc) => allowedSet.has(pc.id))
-      : sortedConditions;
-    const conditionsToUse = visibleConditions.length
-      ? visibleConditions
-      : [{ id: 'base', name: 'ราคาขาย', extra_cost_per_liter: 0 } as any];
+    const conditionsToUse = visiblePaymentConditions;
 
-    const groupBlocks = groupedSelectedItems.slice(0, 5).map((group) => {
+    const groupBlocks = visibleGroups.slice(0, 5).map((group) => {
       const visibleItems = group.items.filter((it) => Number(it.base_cost_price || 0) > 0);
       if (!visibleItems.length) return null;
       const conditionBlocks = conditionsToUse.map((pc: any) => {
@@ -396,11 +477,11 @@ export default function SellingPricesPage() {
     for (const recipient of recipients) {
       const lc = lineCustomers.find((x) => x.id === recipient.lineCustomerId);
       const customerId = String(lc?.customer_id || '').trim();
-      let allowedPaymentConditionIds: string[] = [];
-      if (customerId) {
-        const accessRes = await fetch(`/api/customer-portal/access/${customerId}?company_id=${companyId}`);
-        const accessData = await accessRes.json();
-        if (accessRes.ok) allowedPaymentConditionIds = accessData.access?.allowed_payment_condition_ids || [];
+      const access = customerId ? await loadCustomerAccess(customerId) : null;
+      const visibleData = getVisibleDataForAccess(access);
+      if (!visibleData) {
+        fail += 1;
+        continue;
       }
 
       const res = await fetch('/api/line/broadcast-price', {
@@ -409,8 +490,8 @@ export default function SellingPricesPage() {
         body: JSON.stringify({
           company_id: companyId,
           title: `ราคาขาย ${selected.base.refineries?.name || '-'}`,
-          message: buildBroadcastMessage(allowedPaymentConditionIds),
-          messages: buildPriceFlexMessages(allowedPaymentConditionIds),
+          message: buildBroadcastMessage(access),
+          messages: buildPriceFlexMessages(access),
           recipients: [recipient],
         }),
       });
