@@ -312,7 +312,7 @@ export default function PricesPage() {
       </Box>
 
       <Drawer anchor='right' open={openEditor} onClose={() => setOpenEditor(false)}>
-        <Stack spacing={2} sx={{ width: { xs: 640, sm: 640 }, p: 2 }}>
+        <Stack spacing={2} sx={{ width: { xs: '100%', sm: 840 }, p: 2 }}>
           <Typography variant='h6'>{editingId ? 'แก้ไขราคาน้ำมัน' : 'เพิ่มราคาน้ำมัน'}</Typography>
           <TextField select label='โรงกลั่น' value={refineryId} onChange={(e) => setRefineryId(e.target.value)}>
             {refineries.map((r) => <MenuItem key={r.id} value={r.id}>{r.name}</MenuItem>)}
