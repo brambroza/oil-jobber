@@ -127,8 +127,8 @@ export default function OilProductsPage() {
       <Typography variant='h4'>จัดการข้อมูลน้ำมัน</Typography>
       <Typography variant='body2' color='text.secondary'>จัดการข้อมูลรหัสน้ำมันเพื่อใช้เชื่อมกับราคาและใบสั่งซื้อ</Typography>
 
-      <Stack direction={{ xs: 'column', sm: 'row' }} spacing={1}>
-        <TextField fullWidth label='Company ID' value={companyId} onChange={(e) => setCompanyId(e.target.value)} />
+      <Stack direction={{ xs: 'column', sm: 'row'  }} spacing={1}>
+        <TextField sx={{ display :'none'}} fullWidth label='Company ID' value={companyId} onChange={(e) => setCompanyId(e.target.value)} />
         <Button variant='outlined' onClick={() => void load()}>รีเฟรช</Button>
         <Button variant='contained' startIcon={<Add />} onClick={() => { setForm(emptyForm); setOpen(true); }}>เพิ่มน้ำมัน</Button>
       </Stack>

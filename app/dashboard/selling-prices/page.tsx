@@ -106,12 +106,26 @@ function formatMoney(value: number): string {
   return Number(value || 0).toFixed(2);
 }
 
+function formatDateTimeNow(): string {
+  const now = new Date();
+  const dd = String(now.getDate()).padStart(2, '0');
+  const mm = String(now.getMonth() + 1).padStart(2, '0');
+  const yyyy = now.getFullYear();
+  const hh = String(now.getHours()).padStart(2, '0');
+  const min = String(now.getMinutes()).padStart(2, '0');
+  return `${dd}-${mm}-${yyyy} ${hh}:${min}`;
+}
+
+const MAX_BROADCAST_ROUNDS = 10;
+
 export default function SellingPricesPage() {
   const [companyId] = useState(process.env.NEXT_PUBLIC_DEFAULT_COMPANY_ID ?? '');
   const [rounds, setRounds] = useState<PriceRound[]>([]);
   const [paymentConditions, setPaymentConditions] = useState<PaymentCondition[]>([]);
   const [oilProducts, setOilProducts] = useState<OilProduct[]>([]);
   const [selected, setSelected] = useState<PriceRoundDetail | null>(null);
+  const [selectedRoundIds, setSelectedRoundIds] = useState<string[]>([]);
+  const [broadcastRounds, setBroadcastRounds] = useState<PriceRoundDetail[]>([]);
   const [lineCustomers, setLineCustomers] = useState<LineCustomer[]>([]);
   const [selectedCustomerIds, setSelectedCustomerIds] = useState<string[]>([]);
   const [openSendDialog, setOpenSendDialog] = useState(false);
@@ -146,11 +160,10 @@ export default function SellingPricesPage() {
       }),
     [paymentConditions],
   );
-  const groupedSelectedItems = useMemo(() => {
-    const list = selected?.items ?? [];
+  const groupItemsByDepot = (items: PriceItem[]) => {
     const groups = new Map<string, { depotCode: string; depotName: string; items: PriceItem[] }>();
 
-    for (const item of list) {
+    for (const item of items) {
       const depotCode = item.depots?.code?.trim() || '-';
       const depotName = item.depots?.name?.trim() || '';
       const key = `${depotCode}__${depotName}`;
@@ -166,7 +179,8 @@ export default function SellingPricesPage() {
         items: [...group.items].sort((a, b) => a.product_code.localeCompare(b.product_code)),
       }))
       .sort((a, b) => a.depotCode.localeCompare(b.depotCode));
-  }, [selected]);
+  };
+  const groupedSelectedItems = useMemo(() => groupItemsByDepot(selected?.items ?? []), [selected]);
   const filteredRounds = useMemo(() => {
     const q = searchText.trim().toLowerCase();
     const d = searchDate.trim();
@@ -232,23 +246,29 @@ export default function SellingPricesPage() {
     void load();
   }, [companyId]);
 
-  const openView = async (id: string) => {
-    setLoadingView(true);
-    setError('');
-
+  const fetchPriceRoundDetail = async (id: string): Promise<PriceRoundDetail> => {
     const res = await fetch(`/api/prices/${id}?company_id=${companyId}`);
     const data = await res.json();
 
     if (!res.ok) {
-      setError(data.error || 'โหลดรายละเอียดราคาขายไม่สำเร็จ');
-      setLoadingView(false);
-      return;
+      throw new Error(data.error || 'โหลดรายละเอียดราคาขายไม่สำเร็จ');
     }
 
-    setSelected({
+    return {
       base: data.base,
       items: (data.items || []).map((x: any) => ({ ...x, base_cost_price: Number(x.base_cost_price || 0) })),
-    });
+    };
+  };
+
+  const openView = async (id: string) => {
+    setLoadingView(true);
+    setError('');
+
+    try {
+      setSelected(await fetchPriceRoundDetail(id));
+    } catch (e) {
+      setError((e as Error).message);
+    }
     setLoadingView(false);
   };
 
@@ -324,10 +344,42 @@ export default function SellingPricesPage() {
     });
   };
 
-  const openBroadcastDialog = async () => {
-    await loadLineCustomers();
-    setSelectedCustomerIds([]);
-    setOpenSendDialog(true);
+  const toggleRound = (id: string, checked: boolean) => {
+    setSelectedRoundIds((prev) => {
+      if (checked) return prev.includes(id) ? prev : [...prev, id];
+      return prev.filter((x) => x !== id);
+    });
+  };
+
+  const selectPagedRounds = () => {
+    setSelectedRoundIds((prev) => {
+      const next = new Set(prev);
+      for (const round of pagedRounds) next.add(round.id);
+      return [...next].slice(0, MAX_BROADCAST_ROUNDS);
+    });
+  };
+
+  const clearSelectedRounds = () => setSelectedRoundIds([]);
+
+  const openBroadcastDialog = async (roundIds?: string[]) => {
+    const ids = (roundIds?.length ? roundIds : selectedRoundIds).slice(0, MAX_BROADCAST_ROUNDS);
+    if (!ids.length) return;
+
+    setLoadingView(true);
+    setError('');
+    setSendResult(null);
+
+    try {
+      const details = await Promise.all(ids.map((id) => fetchPriceRoundDetail(id)));
+      setBroadcastRounds(details);
+      await loadLineCustomers();
+      setSelectedCustomerIds([]);
+      setOpenSendDialog(true);
+    } catch (e) {
+      setError((e as Error).message);
+    }
+
+    setLoadingView(false);
   };
 
   const selectAll = () => setSelectedCustomerIds(lineCustomers.map((c) => c.id));
@@ -349,10 +401,8 @@ export default function SellingPricesPage() {
     return true;
   };
 
-  const getVisibleDataForAccess = (access: CustomerAccess) => {
-    if (!selected) return null;
-
-    const baseRefineryId = String(selected.base.refinery_id || '').trim();
+  const getVisibleDataForAccess = (round: PriceRoundDetail, access: CustomerAccess) => {
+    const baseRefineryId = String(round.base.refinery_id || '').trim();
     if (normalizeIds(access?.allowed_refinery_ids).length && !baseRefineryId) return null;
 
     const visiblePaymentConditions = (() => {
@@ -361,7 +411,7 @@ export default function SellingPricesPage() {
       return sortedConditions.filter((pc) => allowedIds.includes(pc.id));
     })();
 
-    const visibleGroups = groupedSelectedItems
+    const visibleGroups = groupItemsByDepot(round.items)
       .map((group) => {
         const items = group.items.filter((item) => isAllowedByAccess(access, baseRefineryId, String(item.depot_id || '').trim(), String(item.product_code || '').trim()));
         return { ...group, items };
@@ -378,48 +428,74 @@ export default function SellingPricesPage() {
     };
   };
 
-  const buildBroadcastMessage = (access: CustomerAccess): string => {
-    if (!selected) return '';
-    const visibleData = getVisibleDataForAccess(access);
-    if (!visibleData) return '';
-    const { visibleGroups, visiblePaymentConditions } = visibleData;
-    const remark = String(selected.base.remark || '').trim();
-    const header = `อัปเดตราคาขาย ${selected.base.refineries?.name || '-'} วันที่ ${formatDate(selected.base.effective_date)} เวลา ${formatTime(selected.base.effective_at)}`;
-    const lines: string[] = [header, ''];
-    for (const g of visibleGroups.slice(0, 4)) {
-      const visibleItems = g.items.filter((it) => Number(it.base_cost_price || 0) > 0);
-      if (!visibleItems.length) continue;
-      lines.push(`${g.depotCode}${g.depotName ? ` (${g.depotName})` : ''}`);
-      for (const item of visibleItems.slice(0, 3)) {
-        lines.push(`${item.product_code} ${item.product_name || ''}`.trim());
-        const visiblePrices = visiblePaymentConditions.map((pc: any) => Number(item.base_cost_price || 0) + Number(pc.extra_cost_per_liter || 0));
-        const cheapestPrice = visiblePrices.length ? Math.min(...visiblePrices) : null;
-        const parts = visiblePaymentConditions.map((pc: any, idx: number) => {
-          const price = visiblePrices[idx] ?? 0;
-          const isCheapest = cheapestPrice != null && Math.abs(price - cheapestPrice) < 0.0001;
-          return `${pc.name}: ${price.toFixed(2)}${isCheapest ? ' (ถูกสุด)' : ''}`;
-        });
-        lines.push(parts.join(' | '));
+  const getCheapestPriceKey = (productCode: string) => String(productCode || '').trim().toUpperCase();
+
+  const buildCheapestPriceMap = (access: CustomerAccess, roundsToSend: PriceRoundDetail[]) => {
+    const cheapest = new Map<string, number>();
+
+    for (const round of roundsToSend) {
+      const visibleData = getVisibleDataForAccess(round, access);
+      if (!visibleData) continue;
+
+      for (const group of visibleData.visibleGroups) {
+        for (const item of group.items) {
+          if (Number(item.base_cost_price || 0) <= 0) continue;
+
+          for (const pc of visibleData.visiblePaymentConditions as any[]) {
+            const key = getCheapestPriceKey(item.product_code);
+            const price = Number(item.base_cost_price || 0) + Number(pc.extra_cost_per_liter || 0);
+            const current = cheapest.get(key);
+            if (current == null || price < current) cheapest.set(key, price);
+          }
+        }
       }
     }
-    lines.push('');
-    lines.push(`ราคาถึง: ${selected.base.expires_date ? formatDate(selected.base.expires_date) : '-'} ${formatTime(selected.base.expires_at)}`);
-    if (remark) {
-      lines.push('', 'หมายเหตุ', remark);
-    }
-    lines.push('', 'ดูรายละเอียดเพิ่มเติมในระบบ');
-    return lines.join('\n');
+
+    return cheapest;
   };
 
-  const buildPriceFlexMessages = (access: CustomerAccess) => {
-    if (!selected) return [] as Array<Record<string, unknown>>;
-    const visibleData = getVisibleDataForAccess(access);
+  const buildBroadcastMessage = (access: CustomerAccess, roundsToSend: PriceRoundDetail[], cheapestPriceByKey: Map<string, number>): string => {
+    const lines: string[] = [`อัปเดตราคาขาย ${roundsToSend.length} รอบ`];
+
+    for (const round of roundsToSend) {
+      const visibleData = getVisibleDataForAccess(round, access);
+      if (!visibleData) continue;
+      const { visibleGroups, visiblePaymentConditions } = visibleData;
+      const remark = String(round.base.remark || '').trim();
+      lines.push('', `รอบ ${round.base.refineries?.name || '-'} วันที่ ${formatDate(round.base.effective_date)} เวลา ${formatTime(round.base.effective_at)}`);
+
+      for (const g of visibleGroups.slice(0, 3)) {
+        const visibleItems = g.items.filter((it) => Number(it.base_cost_price || 0) > 0);
+        if (!visibleItems.length) continue;
+        lines.push(`${g.depotCode}${g.depotName ? ` (${g.depotName})` : ''}`);
+        for (const item of visibleItems.slice(0, 3)) {
+          lines.push(`${item.product_code} ${item.product_name || ''}`.trim());
+          const parts = visiblePaymentConditions.map((pc: any) => {
+            const price = Number(item.base_cost_price || 0) + Number(pc.extra_cost_per_liter || 0);
+            const cheapestPrice = cheapestPriceByKey.get(getCheapestPriceKey(item.product_code));
+            const isCheapest = cheapestPrice != null && Math.abs(price - cheapestPrice) < 0.0001;
+            return `${pc.name}: ${price.toFixed(2)}${isCheapest ? ' (ถูกสุด)' : ''}`;
+          });
+          lines.push(parts.join(' | '));
+        }
+      }
+
+      lines.push(`ราคาถึง: ${round.base.expires_date ? formatDate(round.base.expires_date) : '-'} ${formatTime(round.base.expires_at)}`);
+      if (remark) lines.push('หมายเหตุ', remark);
+    }
+
+    lines.push('', 'ดูรายละเอียดเพิ่มเติมในระบบ');
+    return lines.join('\n').slice(0, 4900);
+  };
+
+  const buildPriceRoundSection = (access: CustomerAccess, round: PriceRoundDetail, cheapestPriceByKey: Map<string, number>) => {
+    const visibleData = getVisibleDataForAccess(round, access);
     if (!visibleData) return [] as Array<Record<string, unknown>>;
     const { visibleGroups, visiblePaymentConditions } = visibleData;
-    const refineryName = selected.base.refineries?.name || '-';
-    const effectiveText = `${formatDate(selected.base.effective_date)} ${formatTime(selected.base.effective_at)} น.`;
-    const expireText = `${selected.base.expires_date ? formatDate(selected.base.expires_date) : '-'} ${formatTime(selected.base.expires_at)} น.`;
-    const remark = String(selected.base.remark || '').trim();
+    const refineryName = round.base.refineries?.name || '-';
+    const effectiveText = `${formatDate(round.base.effective_date)} ${formatTime(round.base.effective_at)} น.`;
+    const expireText = `${round.base.expires_date ? formatDate(round.base.expires_date) : '-'} ${formatTime(round.base.expires_at)} น.`;
+    const remark = String(round.base.remark || '').trim();
     const conditionsToUse = visiblePaymentConditions;
 
     const groupBlocks = visibleGroups.slice(0, 5).map((group) => {
@@ -428,8 +504,7 @@ export default function SellingPricesPage() {
       const conditionBlocks = conditionsToUse.map((pc: any) => {
         const productRows = visibleItems.slice(0, 4).map((item) => {
           const basePrice = Number(item.base_cost_price || 0) + Number(pc.extra_cost_per_liter || 0);
-          const allPrices = conditionsToUse.map((condition: any) => Number(item.base_cost_price || 0) + Number(condition.extra_cost_per_liter || 0));
-          const cheapestPrice = allPrices.length ? Math.min(...allPrices) : null;
+          const cheapestPrice = cheapestPriceByKey.get(getCheapestPriceKey(item.product_code));
           const isCheapest = cheapestPrice != null && Math.abs(basePrice - cheapestPrice) < 0.0001;
 
           return {
@@ -447,16 +522,16 @@ export default function SellingPricesPage() {
                 justifyContent: 'flex-start',
                 flex: 4,
                 contents: [
-                  { type: 'text', text: basePrice.toFixed(2), size: 'sm', color: '#111827', weight: 'bold', align: 'start', flex: 3 },
+                  { type: 'text', text: basePrice.toFixed(2), size: 'sm', color: '#111827', weight: 'bold', align: 'start', flex: 4 },
                   isCheapest ? {
                     type: 'box',
                     layout: 'vertical',
-                    paddingAll: '2px',
+                    paddingAll: '1px',
                     cornerRadius: '4px',
                     backgroundColor: '#facc15',
-                    flex: 1,
+                    flex: 4,
                     contents: [
-                      { type: 'text', text: 'ถูกสุด', size: 'xxs', color: '#111827', weight: 'bold', align: 'center' },
+                      { type: 'text', text: 'ถูกสุด', size: 'xs', color: '#111827', weight: 'bold', align: 'center' },
                     ],
                   } : null,
                 ].filter(Boolean),
@@ -469,7 +544,7 @@ export default function SellingPricesPage() {
           type: 'box',
           layout: 'vertical',
           margin: 'md',
-          paddingAll: '10px',
+          paddingAll: '1px',
           cornerRadius: '10px',
           backgroundColor: '#f8fafc',
           contents: [
@@ -491,7 +566,7 @@ export default function SellingPricesPage() {
         type: 'box',
         layout: 'vertical',
         margin: 'md',
-        paddingAll: '10px',
+        paddingAll: '2px',
         backgroundColor: '#eef2ff',
         cornerRadius: '10px',
         contents: [
@@ -514,9 +589,56 @@ export default function SellingPricesPage() {
 
     if (!safeGroupBlocks.length) return [] as Array<Record<string, unknown>>;
 
+    return {
+      type: 'box',
+      layout: 'vertical',
+      margin: 'lg',
+      paddingAll: '10px',
+      backgroundColor: '#f8fafc',
+      cornerRadius: '10px',
+      contents: [
+        { type: 'text', text: refineryName, size: 'md', weight: 'bold', color: '#1e3a8a', wrap: true },
+        { type: 'text', text: `อัปเดต ${effectiveText}`, size: 'xs', color: '#64748b' },
+        {
+          type: 'box',
+          layout: 'vertical',
+          margin: 'sm',
+          paddingAll: '8px',
+          backgroundColor: '#fff1f2',
+          cornerRadius: '8px',
+          contents: [
+            { type: 'text', text: 'วันหมดอายุราคา', size: 'xxs', color: '#64748b' },
+            { type: 'text', text: expireText, size: 'xs', color: '#dc2626', weight: 'bold' },
+          ],
+        },
+
+        ...safeGroupBlocks,
+
+        remark ? {
+          type: 'box',
+          layout: 'vertical',
+          margin: 'sm',
+          paddingAll: '8px',
+          backgroundColor: '#ffffff',
+          cornerRadius: '8px',
+          contents: [
+            { type: 'text', text: 'หมายเหตุ', size: 'xxs', color: '#64748b' },
+            { type: 'text', text: remark, size: 'xs', color: '#334155', weight: 'bold', wrap: true },
+          ],
+        } : null,
+      ].filter(Boolean),
+    };
+  };
+
+  const buildPriceFlexMessages = (access: CustomerAccess, roundsToSend: PriceRoundDetail[], cheapestPriceByKey: Map<string, number>) => {
+    const roundSections = roundsToSend
+      .map((round) => buildPriceRoundSection(access, round, cheapestPriceByKey))
+      .filter((section: any) => section?.type === 'box');
+    if (!roundSections.length) return [] as Array<Record<string, unknown>>;
+
     return [{
       type: 'flex',
-      altText: `ราคาน้ำมัน ${refineryName} มีผล ${effectiveText} หมดอายุ ${expireText}`,
+      altText: `ราคาน้ำมันรอบ ${formatDateTimeNow()}`,
       contents: {
         type: 'bubble',
         size: 'mega',
@@ -525,43 +647,17 @@ export default function SellingPricesPage() {
           layout: 'vertical',
           spacing: 'sm',
           contents: [
-            { type: 'text', text: refineryName, size: 'lg', weight: 'bold', color: '#1e3a8a' },
-            { type: 'text', text: `อัปเดต ${effectiveText}`, size: 'xs', color: '#64748b' },
-            {
-              type: 'box',
-              layout: 'vertical',
-              margin: 'sm',
-              paddingAll: '8px',
-              backgroundColor: '#fff1f2',
-              cornerRadius: '8px',
-              contents: [
-                { type: 'text', text: 'วันหมดอายุราคา', size: 'xxs', color: '#64748b' },
-                { type: 'text', text: expireText, size: 'xs', color: '#dc2626', weight: 'bold' },
-              ],
-            },
-
-            ...safeGroupBlocks,
-
-            remark ? {
-              type: 'box',
-              layout: 'vertical',
-              margin: 'sm',
-              paddingAll: '8px',
-              backgroundColor: '#f8fafc',
-              cornerRadius: '8px',
-              contents: [
-                { type: 'text', text: 'หมายเหตุ', size: 'xxs', color: '#64748b' },
-                { type: 'text', text: remark, size: 'xs', color: '#334155', weight: 'bold', wrap: true },
-              ],
-            } : null,
-          ].filter(Boolean),
+            { type: 'text', text: `ราคาน้ำมันรอบ ${formatDateTimeNow()}`, size: 'lg', weight: 'bold', color: '#1e3a8a' },
+            
+            ...roundSections,
+          ],
         },
       },
     }];
   };
 
   const sendToLineOA = async () => {
-    if (!selected || !selectedCustomerIds.length) return;
+    if (!broadcastRounds.length || !selectedCustomerIds.length) return;
     setSending(true);
     setSendResult(null);
     const recipients = lineCustomers
@@ -573,20 +669,21 @@ export default function SellingPricesPage() {
       const lc = lineCustomers.find((x) => x.id === recipient.lineCustomerId);
       const customerId = String(lc?.customer_id || '').trim();
       const access = customerId ? await loadCustomerAccess(customerId) : null;
-      const visibleData = getVisibleDataForAccess(access);
-      if (!visibleData) {
+      const visibleRounds = broadcastRounds.filter((round) => getVisibleDataForAccess(round, access));
+      if (!visibleRounds.length) {
         fail += 1;
         continue;
       }
+      const cheapestPriceByKey = buildCheapestPriceMap(access, visibleRounds);
 
       const res = await fetch('/api/line/broadcast-price', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           company_id: companyId,
-          title: `ราคาขาย ${selected.base.refineries?.name || '-'}`,
-          message: buildBroadcastMessage(access),
-          messages: buildPriceFlexMessages(access),
+          title: `ราคาขาย ${visibleRounds.length} รอบ`,
+          message: buildBroadcastMessage(access, visibleRounds, cheapestPriceByKey),
+          messages: buildPriceFlexMessages(access, visibleRounds, cheapestPriceByKey),
           recipients: [recipient],
         }),
       });
@@ -639,6 +736,23 @@ export default function SellingPricesPage() {
             sx={{ minWidth: { xs: '100%', md: 220 } }}
           />
         </Stack>
+        <Stack direction={{ xs: 'column', sm: 'row' }} spacing={1} alignItems={{ xs: 'stretch', sm: 'center' }}>
+          <Button size='small' variant='outlined' onClick={selectPagedRounds} disabled={!pagedRounds.length || selectedRoundIds.length >= MAX_BROADCAST_ROUNDS}>
+            เลือกรอบในหน้านี้
+          </Button>
+          <Button size='small' variant='outlined' onClick={clearSelectedRounds} disabled={!selectedRoundIds.length}>
+            ล้างรอบที่เลือก
+          </Button>
+          <Button
+            size='small'
+            variant='contained'
+            onClick={() => void openBroadcastDialog()}
+            disabled={!selectedRoundIds.length || loadingView}
+          >
+            ส่งราคาที่เลือกผ่าน LINE OA
+          </Button>
+          <Chip size='small' label={`เลือกรอบแล้ว ${selectedRoundIds.length} / ${MAX_BROADCAST_ROUNDS}`} />
+        </Stack>
 
         {error ? <Alert severity='error'>{error}</Alert> : null}
         {loading ? <Alert severity='info'>กำลังโหลดข้อมูล...</Alert> : null}
@@ -647,6 +761,7 @@ export default function SellingPricesPage() {
           <Table size='small'>
             <TableHead>
               <TableRow>
+                <TableCell width={48}>เลือก</TableCell>
                 <TableCell sx={{ fontWeight: 700 }}>วันที่</TableCell>
                 <TableCell sx={{ fontWeight: 700 }}>เวลา</TableCell>
                 <TableCell sx={{ fontWeight: 700 }}>ราคาถึงวันที่</TableCell>
@@ -658,37 +773,44 @@ export default function SellingPricesPage() {
               </TableRow>
             </TableHead>
             <TableBody>
-              {pagedRounds.map((r) => (
-                <TableRow key={r.id} hover>
-                  <TableCell>{formatDate(r.effective_date)}</TableCell>
-                  <TableCell>{formatTime(r.effective_at)}</TableCell>
-                  <TableCell>{r.expires_date ? formatDate(r.expires_date) : '-'}</TableCell>
-                  <TableCell>{formatTime(r.expires_at)}</TableCell>
-                  <TableCell>{r.refinery_name || '-'}</TableCell>
-                  <TableCell sx={{ maxWidth: 280 }}>
-                    <Typography variant='body2' sx={{ whiteSpace: 'pre-wrap', color: 'text.secondary' }}>
-                      {String(r.remark || '').trim() || '-'}
-                    </Typography>
-                  </TableCell>
-                  <TableCell>{r.item_count}</TableCell>
-                  <TableCell align='right'>
-                    <Button
+              {pagedRounds.map((r) => {
+                const checked = selectedRoundIds.includes(r.id);
+                const disabled = !checked && selectedRoundIds.length >= MAX_BROADCAST_ROUNDS;
+                return (
+                  <TableRow key={r.id} hover>
+                    <TableCell padding='checkbox'>
+                      <Checkbox checked={checked} disabled={disabled} onChange={(e) => toggleRound(r.id, e.target.checked)} />
+                    </TableCell>
+                    <TableCell>{formatDate(r.effective_date)}</TableCell>
+                    <TableCell>{formatTime(r.effective_at)}</TableCell>
+                    <TableCell>{r.expires_date ? formatDate(r.expires_date) : '-'}</TableCell>
+                    <TableCell>{formatTime(r.expires_at)}</TableCell>
+                    <TableCell>{r.refinery_name || '-'}</TableCell>
+                    <TableCell sx={{ maxWidth: 280 }}>
+                      <Typography variant='body2' sx={{ whiteSpace: 'pre-wrap', color: 'text.secondary' }}>
+                        {String(r.remark || '').trim() || '-'}
+                      </Typography>
+                    </TableCell>
+                    <TableCell>{r.item_count}</TableCell>
+                    <TableCell align='right'>
+                      <Button
 
-                      size='small'
-                      variant='contained'
-                      startIcon={<VisibilityOutlined fontSize='small' />}
-                      onClick={() => void openView(r.id)}
-                      disabled={loadingView}
-                      sx={{ textTransform: 'none' }}
-                    >
-                      ดูราคาขาย
-                    </Button>
-                  </TableCell>
-                </TableRow>
-              ))}
+                        size='small'
+                        variant='contained'
+                        startIcon={<VisibilityOutlined fontSize='small' />}
+                        onClick={() => void openView(r.id)}
+                        disabled={loadingView}
+                        sx={{ textTransform: 'none' }}
+                      >
+                        ดูราคาขาย
+                      </Button>
+                    </TableCell>
+                  </TableRow>
+                );
+              })}
               {!filteredRounds.length && !loading ? (
                 <TableRow>
-                  <TableCell colSpan={8} align='center'>
+                  <TableCell colSpan={9} align='center'>
                     ไม่มีรอบบันทึกราคาน้ำมัน
                   </TableCell>
                 </TableRow>
@@ -805,7 +927,7 @@ export default function SellingPricesPage() {
                           <TableRow key={it.id} hover>
                             <TableCell sx={{ color: 'text.secondary' }}>{it.depots?.code || '-'}</TableCell>
                             <TableCell>{it.product_code}</TableCell>
-                            <TableCell>{formatMoney(it.base_cost_price)}</TableCell>
+                            <TableCell>{formatMoney(it.base_cost_price + (it.base_cost_price * 0.07))}</TableCell>
                             {sortedConditions.map((pc) => {
                               const sellingPrice = Number(it.base_cost_price || 0) + Number(pc.extra_cost_per_liter || 0);
                               return <TableCell key={`${it.id}-${pc.id}`}>{formatMoney(sellingPrice)}</TableCell>;
@@ -826,7 +948,7 @@ export default function SellingPricesPage() {
           </DialogContent>
           <DialogActions sx={{ px: 3, pb: 2 }}>
             <Button onClick={() => setSelected(null)}>ปิด</Button>
-            <Button variant='contained' onClick={() => void openBroadcastDialog()} disabled={!selected}>
+            <Button variant='contained' onClick={() => selected && void openBroadcastDialog([selected.base.id])} disabled={!selected || loadingView}>
               ส่งราคาไปลูกค้าผ่าน LINE OA
             </Button>
           </DialogActions>
@@ -861,6 +983,9 @@ export default function SellingPricesPage() {
           <DialogContent>
             <Stack spacing={1.5}>
               {sendResult ? <Alert severity={sendResult.ok ? 'success' : 'error'}>{sendResult.message}</Alert> : null}
+              <Alert severity='info'>
+                กำลังส่งราคาที่เลือก {broadcastRounds.length} รอบใน LINE message เดียว
+              </Alert>
               <Stack direction='row' spacing={1}>
                 <Button size='small' variant='outlined' onClick={selectAll}>เลือกทั้งหมด</Button>
                 <Button size='small' variant='outlined' onClick={clearAll}>ล้างการเลือก</Button>
