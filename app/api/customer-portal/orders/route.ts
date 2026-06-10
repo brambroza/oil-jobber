@@ -101,6 +101,32 @@ async function generateOrderNo(companyId: string): Promise<string> {
   return `${prefix}${String(run).padStart(4, '0')}`;
 }
 
+async function validateCreditLimit(ctx: { customerId: string; companyId: string }, orderAmount: number, replacingOrderAmount = 0) {
+  const [customerRes, creditRes] = await Promise.all([
+    supabaseAdmin
+      .from('customers')
+      .select('credit_limit')
+      .eq('id', ctx.customerId)
+      .eq('company_id', ctx.companyId)
+      .eq('is_deleted', false)
+      .single(),
+    supabaseAdmin.rpc('get_customer_credit_status', { p_customer: ctx.customerId }),
+  ]);
+
+  if (customerRes.error) return { error: customerRes.error.message, status: 400 } as const;
+  if (creditRes.error) return { error: creditRes.error.message, status: 400 } as const;
+
+  const creditLimit = Number(customerRes.data?.credit_limit || 0);
+  const usedCredit = Number((creditRes.data ?? [])[0]?.used_credit || 0);
+  const available = Math.max(0, creditLimit - usedCredit + Number(replacingOrderAmount || 0));
+
+  if (Number(orderAmount || 0) > available) {
+    return { error: `ยอดคำสั่งซื้อเกินเครดิตคงเหลือ (${available.toLocaleString('th-TH', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} บาท)`, status: 422 } as const;
+  }
+
+  return { ok: true } as const;
+}
+
 export async function GET() {
   const ctx = await resolvePortalContext();
   if ('error' in ctx) return NextResponse.json({ error: ctx.error }, { status: ctx.status });
@@ -146,6 +172,23 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: 'ไม่พบเงื่อนไขการชำระเงินที่เลือก' }, { status: 422 });
     }
   }
+  const payload = items
+    .filter((x: any) => Number(x.liters || 0) > 0)
+    .map((x: any) => ({
+      company_id: ctx.companyId,
+      refinery_id: x.refinery_id || null,
+      depot_id: x.depot_id || null,
+      product_code: String(x.product_code ?? '').trim(),
+      product_name: String(x.product_name ?? '').trim(),
+      liters: Number(x.liters || 0),
+      unit_price: Number(x.unit_price || 0),
+    }));
+
+  if (!payload.length) return NextResponse.json({ error: 'กรุณากรอกปริมาณสินค้าอย่างน้อย 1 รายการ' }, { status: 422 });
+  const orderAmount = payload.reduce((sum: number, x: any) => sum + Number(x.liters || 0) * Number(x.unit_price || 0), 0);
+  const creditCheck = await validateCreditLimit(ctx, orderAmount);
+  if ('error' in creditCheck) return NextResponse.json({ error: creditCheck.error }, { status: creditCheck.status });
+
   const orderNo = await generateOrderNo(ctx.companyId);
   const vehicleId = isPickupByTruck ? await ensureVehicleFromPayload(ctx, body) : null;
   const vehicleLicensePlate = isPickupByTruck ? String(body.vehicle_license_plate ?? '').trim() || null : null;
@@ -181,22 +224,9 @@ export async function POST(req: NextRequest) {
 
   if (orderErr) return NextResponse.json({ error: orderErr.message }, { status: 400 });
 
-  const payload = items
-    .filter((x: any) => Number(x.liters || 0) > 0)
-    .map((x: any) => ({
-      company_id: ctx.companyId,
-      sale_order_id: order.id,
-      refinery_id: x.refinery_id || null,
-      depot_id: x.depot_id || null,
-      product_code: String(x.product_code ?? '').trim(),
-      product_name: String(x.product_name ?? '').trim(),
-      liters: Number(x.liters || 0),
-      unit_price: Number(x.unit_price || 0),
-    }));
+  const itemPayload = payload.map((x: any) => ({ ...x, sale_order_id: order.id }));
 
-  if (!payload.length) return NextResponse.json({ error: 'กรุณากรอกปริมาณสินค้าอย่างน้อย 1 รายการ' }, { status: 422 });
-
-  const { error: itemErr } = await supabaseAdmin.from('sale_order_items').insert(payload);
+  const { error: itemErr } = await supabaseAdmin.from('sale_order_items').insert(itemPayload);
   if (itemErr) return NextResponse.json({ error: itemErr.message }, { status: 400 });
 
   return NextResponse.json(order);

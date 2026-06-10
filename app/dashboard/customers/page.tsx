@@ -86,6 +86,20 @@ const emptyAccess: CustomerAccessForm = {
   can_place_order: true,
 };
 
+const normalizeCurrencyInput = (value: string) => {
+  const cleaned = value.replace(/,/g, '').replace(/[^\d.]/g, '');
+  const [whole, ...decimalParts] = cleaned.split('.');
+  const decimal = decimalParts.join('');
+  return decimalParts.length ? `${whole}.${decimal}` : whole;
+};
+
+const formatCurrencyInput = (value: string) => {
+  const normalized = normalizeCurrencyInput(value);
+  const [whole = '', decimal] = normalized.split('.');
+  const formattedWhole = whole ? Number(whole).toLocaleString('th-TH') : '';
+  return decimal !== undefined ? `${formattedWhole}.${decimal}` : formattedWhole;
+};
+
 export default function CustomersPage() {
   const [companyId] = useState(process.env.NEXT_PUBLIC_DEFAULT_COMPANY_ID ?? '');
   const [rows, setRows] = useState<CustomerWithPayment[]>([]);
@@ -102,6 +116,7 @@ export default function CustomersPage() {
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [drawerTab, setDrawerTab] = useState<'portal' | 'login' | 'line-map'>('portal');
   const [form, setForm] = useState<CustomerForm>(emptyForm);
+  const [creditLimitInput, setCreditLimitInput] = useState('0.00');
   const [accessForm, setAccessForm] = useState<CustomerAccessForm>(emptyAccess);
   const [portalUserId, setPortalUserId] = useState<string | null>(null);
   const [portalEmail, setPortalEmail] = useState('');
@@ -145,6 +160,7 @@ export default function CustomersPage() {
       }),
     []
   );
+  const formatCurrency = (value: number) => currencyFormatter.format(Number(value || 0));
 
   const outstandingByCustomer = useMemo(() => {
     return outstandingRows.reduce<Record<string, number>>((acc, row) => {
@@ -443,7 +459,7 @@ export default function CustomersPage() {
           sx={{ minWidth: { xs: '100%', md: 220 } }}
         />
         <Button variant='outlined' onClick={() => void load()}>รีเฟรช</Button>
-        <Button variant='contained' startIcon={<Add />} onClick={() => { setForm(emptyForm); setAccessForm(emptyAccess); setPortalUserId(null); setPortalEmail(''); setPortalPassword(''); setSelectedLineCustomerId(''); setDrawerTab('portal'); setDrawerOpen(true); }}>เพิ่มลูกค้า</Button>
+        <Button variant='contained' startIcon={<Add />} onClick={() => { setForm(emptyForm); setCreditLimitInput(formatCurrency(emptyForm.credit_limit)); setAccessForm(emptyAccess); setPortalUserId(null); setPortalEmail(''); setPortalPassword(''); setSelectedLineCustomerId(''); setDrawerTab('portal'); setDrawerOpen(true); }}>เพิ่มลูกค้า</Button>
       </Stack>
 
       {error ? <Alert severity='error'>{error}</Alert> : null}
@@ -481,15 +497,17 @@ export default function CustomersPage() {
                 <TableCell><Chip size='small' label={r.status} color={r.status === 'ACTIVE' ? 'success' : 'default'} /></TableCell>
                 <TableCell align='right'>
                   <IconButton onClick={() => {
+                    const creditLimit = Number(r.credit_limit);
                     setForm({
                       id: r.id,
                       company_name: r.company_name,
                       tax_id: r.tax_id ?? '',
                       address: r.address ?? '',
                       phone: r.phone ?? '',
-                      credit_limit: Number(r.credit_limit),
+                      credit_limit: creditLimit,
                       status: r.status,
                     });
+                    setCreditLimitInput(formatCurrency(creditLimit));
                     void loadAccess(r.id);
                     const mapped = lineCustomers.find((lc) => lc.customer_id === r.id);
                     setSelectedLineCustomerId(mapped?.id || '');
@@ -531,7 +549,23 @@ export default function CustomersPage() {
               </Stack>
               <TextField size='small' label='ที่อยู่' multiline minRows={3} value={form.address} onChange={(e) => setForm((p) => ({ ...p, address: e.target.value }))} />
               <Stack direction={{ xs: 'column', md: 'row' }} spacing={1}>
-                <TextField size='small' label='วงเงินเครดิต' type='number' value={form.credit_limit} onChange={(e) => setForm((p) => ({ ...p, credit_limit: Number(e.target.value) }))} fullWidth />
+                <TextField
+                  size='small'
+                  label='วงเงินเครดิต'
+                  value={creditLimitInput}
+                  onChange={(e) => {
+                    const next = normalizeCurrencyInput(e.target.value);
+                    setCreditLimitInput(formatCurrencyInput(next));
+                    setForm((p) => ({ ...p, credit_limit: Number(next || 0) }));
+                  }}
+                  onFocus={(e) => {
+                    setCreditLimitInput(form.credit_limit ? formatCurrencyInput(String(form.credit_limit)) : '');
+                    e.target.select();
+                  }}
+                  onBlur={() => setCreditLimitInput(formatCurrency(form.credit_limit))}
+                  inputProps={{ inputMode: 'decimal' }}
+                  fullWidth
+                />
                 <Box sx={{ display: 'flex', alignItems: 'center', px: 1, border: '1px solid #dbe4f0', borderRadius: 1, minHeight: 40, flex: 1 }}>
                   <FormControlLabel
                     control={

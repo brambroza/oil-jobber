@@ -298,7 +298,6 @@ export default function CustomerHomePage() {
                 {remarkText || 'ราคาน้ำมันอาจมีการเปลี่ยนแปลง กรุณาตรวจสอบก่อนทำรายการ'}
               </Typography>
               <Stack direction='row' justifyContent='space-between' alignItems='center' spacing={1}>
-                <Chip size='small' color='primary' variant='outlined' label={`เครดิตเทอม ${paymentTerms.length} แบบ`} />
                 <Button component={Link} href='/customer/orders' variant='contained' sx={{ textTransform: 'none', bgcolor: '#1d4ed8', '&:hover': { bgcolor: '#1e40af' } }}>
                   สั่งซื้อ
                 </Button>

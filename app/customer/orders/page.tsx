@@ -57,6 +57,12 @@ type OrderRow = {
 };
 
 type PriceHome = {
+  customer: {
+    credit_limit: number;
+  };
+  credit: {
+    used_credit: number;
+  } | null;
   rounds: Array<{ id: string; refinery_id: string | null; refineries?: { name?: string } | null }>;
   allowedPaymentConditions?: Array<{
     id: string;
@@ -188,6 +194,9 @@ export default function CustomerOrdersPage() {
   const [choices, setChoices] = useState<ProductChoice[]>([]);
   const [vehicles, setVehicles] = useState<CustomerVehicle[]>([]);
   const [paymentOptions, setPaymentOptions] = useState<PaymentOption[]>([]);
+  const [creditLimit, setCreditLimit] = useState(0);
+  const [usedCredit, setUsedCredit] = useState(0);
+  const [editingOriginalAmount, setEditingOriginalAmount] = useState(0);
   const [depotChoicesByProduct, setDepotChoicesByProduct] = useState<Record<string, DepotChoice[]>>({});
   const [depotOptions, setDepotOptions] = useState<DepotOption[]>([]);
   const [open, setOpen] = useState(false);
@@ -223,6 +232,14 @@ export default function CustomerOrdersPage() {
   const totalAmount = useMemo(
     () => form.items.filter((x) => x.selected).reduce((s, x) => s + Number(x.liters || 0) * Number(x.unit_price || 0), 0),
     [form.items],
+  );
+  const creditAvailableForCurrentOrder = useMemo(
+    () => Math.max(0, Number(creditLimit || 0) - Number(usedCredit || 0) + Number(editingOriginalAmount || 0)),
+    [creditLimit, editingOriginalAmount, usedCredit],
+  );
+  const creditExceeded = useMemo(
+    () => selectedCount > 0 && totalAmount > creditAvailableForCurrentOrder,
+    [creditAvailableForCurrentOrder, selectedCount, totalAmount],
   );
   const selectedDepotRefinery = useMemo(() => {
     if (!form.selected_depot_id) return null;
@@ -295,6 +312,9 @@ export default function CustomerOrdersPage() {
       setError((raw as any).error || 'โหลดรายการสินค้าไม่สำเร็จ');
       return;
     }
+
+    setCreditLimit(Number(data.customer?.credit_limit || 0));
+    setUsedCredit(Number(data.credit?.used_credit || 0));
 
     const roundsById = new Map<string, { refinery_id: string | null; refinery_name: string }>(
       (data.rounds || []).map((r: any) => [r.id, { refinery_id: r.refinery_id ?? null, refinery_name: r.refineries?.name || '-' }]),
@@ -388,6 +408,7 @@ export default function CustomerOrdersPage() {
   }, []);
 
   const openNew = () => {
+    setEditingOriginalAmount(0);
     setForm({
       requested_delivery_date: new Date().toISOString().slice(0, 10),
       customer_po_no: '',
@@ -421,6 +442,10 @@ export default function CustomerOrdersPage() {
         .map((x: any) => [`${x.product_code}__${x.product_name}`, x]),
     );
     const selectedDepotId = String(detail.sale_order_items?.find((x: any) => !x.is_deleted && x.depot_id)?.depot_id || '');
+    const originalAmount = (detail.sale_order_items || [])
+      .filter((x: any) => !x.is_deleted)
+      .reduce((sum: number, x: any) => sum + Number(x.amount ?? Number(x.liters || 0) * Number(x.unit_price || 0)), 0);
+    setEditingOriginalAmount(originalAmount);
     setForm({
       id: detail.id,
       order_no: detail.order_no,
@@ -452,6 +477,13 @@ export default function CustomerOrdersPage() {
   };
 
   const onSave = async () => {
+    if (creditExceeded) {
+      const message = `ยอดคำสั่งซื้อ ${money(totalAmount)} เกินเครดิตคงเหลือ ${money(creditAvailableForCurrentOrder)}`;
+      setError(message);
+      setSnack({ open: true, message, severity: 'error' });
+      return;
+    }
+
     const payload = {
       requested_delivery_date: form.requested_delivery_date || null,
       customer_po_no: form.customer_po_no || null,
@@ -492,6 +524,7 @@ export default function CustomerOrdersPage() {
     setSnack({ open: true, message: 'สั่งซื้อเรียบร้อยแล้ว', severity: 'success' });
     await loadVehicles();
     await loadOrders();
+    await loadChoices();
   };
 
   const onDelete = async () => {
@@ -504,6 +537,7 @@ export default function CustomerOrdersPage() {
     }
     setDeleteId(null);
     await loadOrders();
+    await loadChoices();
   };
 
   return (
@@ -889,6 +923,10 @@ export default function CustomerOrdersPage() {
               </Stack>
             </Box>
           </Paper>
+          <Alert severity={creditExceeded ? 'error' : 'info'}>
+            เครดิตคงเหลือสำหรับคำสั่งซื้อนี้ {money(creditAvailableForCurrentOrder)} บาท
+            {creditExceeded ? ` ยอดคำสั่งซื้อเกินอยู่ ${money(totalAmount - creditAvailableForCurrentOrder)} บาท` : ''}
+          </Alert>
 
           <Stack spacing={1}>
             <Typography sx={{ fontSize: 32, fontWeight: 800 }}>วิธีการรับ</Typography>
@@ -990,7 +1028,7 @@ export default function CustomerOrdersPage() {
           >
             <Stack direction='row' spacing={1} justifyContent='flex-end'>
               <Button onClick={() => setOpen(false)}>ยกเลิก</Button>
-              <Button variant='contained' onClick={() => void onSave()} disabled={!form.payment_condition_id || !form.selected_depot_id || !selectedCount || (form.receive_method === 'PICKUP_BY_TRUCK' && !form.vehicle_license_plate.trim())}>บันทึกคำสั่งซื้อ</Button>
+              <Button variant='contained' onClick={() => void onSave()} disabled={!form.payment_condition_id || !form.selected_depot_id || !selectedCount || creditExceeded || (form.receive_method === 'PICKUP_BY_TRUCK' && !form.vehicle_license_plate.trim())}>บันทึกคำสั่งซื้อ</Button>
             </Stack>
           </Box>
         </Stack>

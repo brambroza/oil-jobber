@@ -80,6 +80,32 @@ async function ensureVehicleFromPayload(ctx: { customerId: string; companyId: st
   return inserted?.id ?? null;
 }
 
+async function validateCreditLimit(ctx: { customerId: string; companyId: string }, orderAmount: number, replacingOrderAmount = 0) {
+  const [customerRes, creditRes] = await Promise.all([
+    supabaseAdmin
+      .from('customers')
+      .select('credit_limit')
+      .eq('id', ctx.customerId)
+      .eq('company_id', ctx.companyId)
+      .eq('is_deleted', false)
+      .single(),
+    supabaseAdmin.rpc('get_customer_credit_status', { p_customer: ctx.customerId }),
+  ]);
+
+  if (customerRes.error) return { error: customerRes.error.message, status: 400 } as const;
+  if (creditRes.error) return { error: creditRes.error.message, status: 400 } as const;
+
+  const creditLimit = Number(customerRes.data?.credit_limit || 0);
+  const usedCredit = Number((creditRes.data ?? [])[0]?.used_credit || 0);
+  const available = Math.max(0, creditLimit - usedCredit + Number(replacingOrderAmount || 0));
+
+  if (Number(orderAmount || 0) > available) {
+    return { error: `ยอดคำสั่งซื้อเกินเครดิตคงเหลือ (${available.toLocaleString('th-TH', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} บาท)`, status: 422 } as const;
+  }
+
+  return { ok: true } as const;
+}
+
 export async function GET(_: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
   const ctx = await resolvePortalContext();
@@ -126,7 +152,7 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
 
   const { data: current, error: checkErr } = await supabaseAdmin
     .from('sale_orders')
-    .select('id, order_status')
+    .select('id, order_status, sale_order_items(liters, unit_price, amount, is_deleted)')
     .eq('id', id)
     .eq('company_id', ctx.companyId)
     .eq('customer_id', ctx.customerId)
@@ -136,6 +162,21 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
   if (checkErr) return NextResponse.json({ error: checkErr.message }, { status: 400 });
   if (!['DRAFT', 'SUBMITTED', 'ADMIN_REVIEW'].includes(String(current.order_status))) {
     return NextResponse.json({ error: 'สถานะปัจจุบันไม่อนุญาตให้ลูกค้าแก้ไข' }, { status: 409 });
+  }
+
+  if (Array.isArray(body.items)) {
+    const nextPayload = body.items
+      .filter((x: any) => Number(x.liters || 0) > 0)
+      .map((x: any) => ({
+        liters: Number(x.liters || 0),
+        unit_price: Number(x.unit_price || 0),
+      }));
+    const nextAmount = nextPayload.reduce((sum: number, x: any) => sum + Number(x.liters || 0) * Number(x.unit_price || 0), 0);
+    const currentAmount = (current.sale_order_items || [])
+      .filter((x: any) => !x.is_deleted)
+      .reduce((sum: number, x: any) => sum + Number(x.amount ?? Number(x.liters || 0) * Number(x.unit_price || 0)), 0);
+    const creditCheck = await validateCreditLimit(ctx, nextAmount, currentAmount);
+    if ('error' in creditCheck) return NextResponse.json({ error: creditCheck.error }, { status: creditCheck.status });
   }
 
   const { error: orderErr } = await supabaseAdmin
