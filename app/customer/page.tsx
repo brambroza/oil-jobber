@@ -88,6 +88,10 @@ function productColor(code: string) {
   return '#475569';
 }
 
+function depotGroupName(depot?: { code?: string; name?: string } | null): string {
+  return String(depot?.name || depot?.code || '-').trim() || '-';
+}
+
 export default function CustomerHomePage() {
   const [data, setData] = useState<HomeData | null>(null);
   const [loading, setLoading] = useState(true);
@@ -118,14 +122,12 @@ export default function CustomerHomePage() {
   const depotGrid = useMemo(() => {
     if (!data) return [] as GridDepot[];
 
-    console.log("data", data);
-
     const m = new Map<string, GridDepot>();
 
     for (const item of data.items) {
       const depotCode = item.depots?.code || '-';
-      const depotName = item.depots?.name || '';
-      const depotKey = `${depotCode}__${depotName}`;
+      const depotName = depotGroupName(item.depots);
+      const depotKey = depotName;
       const productKey = `${item.product_code}__${item.product_name}`;
       if (!m.has(depotKey)) {
         m.set(depotKey, {
@@ -143,7 +145,7 @@ export default function CustomerHomePage() {
 
     return [...m.values()]
       .map((d) => ({ ...d, products: [...d.products].sort((a, b) => a.code.localeCompare(b.code)) }))
-      .sort((a, b) => a.depotCode.localeCompare(b.depotCode));
+      .sort((a, b) => a.depotName.localeCompare(b.depotName));
   }, [data]);
 
   const priceMap = useMemo(() => {
@@ -152,9 +154,14 @@ export default function CustomerHomePage() {
     for (const item of data.items) {
       const round = data.rounds.find((r) => r.id === item.oil_base_price_id);
       const refineryId = String(round?.refinery_id ?? '');
-      const depotKey = `${item.depots?.code || '-'}__${item.depots?.name || ''}`;
+      const depotKey = depotGroupName(item.depots);
       const productKey = `${item.product_code}__${item.product_name}`;
-      m.set(`${refineryId}__${depotKey}__${productKey}`, Number(item.base_cost_price || 0));
+      const key = `${refineryId}__${depotKey}__${productKey}`;
+      const nextPrice = Number(item.base_cost_price || 0);
+      const currentPrice = m.get(key);
+      if (currentPrice == null || (currentPrice <= 0 && nextPrice > 0) || (currentPrice > 0 && nextPrice > 0 && nextPrice < currentPrice)) {
+        m.set(key, nextPrice);
+      }
     }
     return m;
   }, [data]);
@@ -235,7 +242,6 @@ export default function CustomerHomePage() {
         return;
       }
 
-      ;
 
       setData(json);
       setLoading(false);
@@ -380,7 +386,7 @@ export default function CustomerHomePage() {
                         <Stack spacing={0.3}>
                           <Stack direction='row' spacing={0.6} alignItems='center'>
                             <PlaceRounded sx={{ color: '#1d4ed8', fontSize: 12 }} />
-                            <Typography sx={{ color: '#1e3a8a' }}>{depot.depotCode}({depot.depotName || '-'})</Typography>
+                            <Typography sx={{ color: '#1e3a8a' }}>({depot.depotName || '-'})</Typography>
                           </Stack>
 
                         </Stack>
@@ -483,7 +489,7 @@ export default function CustomerHomePage() {
                           <Stack direction='row' spacing={0.5} alignItems='center'>
                             <PlaceRounded sx={{ color: '#1d4ed8', fontSize: 13 }} />
                             <Typography sx={{ fontSize: 12, fontWeight: 700, color: '#334155' }}>
-                              {depot.depotCode} ({depot.depotName || '-'})
+                              ({depot.depotName || '-'})
                             </Typography>
                           </Stack>
                         </Box>

@@ -56,11 +56,12 @@ export async function POST(req: NextRequest) {
     .select('id')
     .eq('company_id', companyId)
     .eq('code', code)
+    .eq('refinery_id', refineryId)
     .eq('is_deleted', false)
     .limit(1);
 
   if (duplicate.data && duplicate.data.length > 0) {
-    return NextResponse.json({ error: `รหัสเดปอต์ ${code} ถูกใช้งานแล้ว` }, { status: 409 });
+    return NextResponse.json({ error: `รหัสเดปอต์ ${code} ถูกใช้งานในโรงกลั่นนี้แล้ว` }, { status: 409 });
   }
 
   const { data, error } = await supabaseAdmin

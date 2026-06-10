@@ -35,6 +35,12 @@ type PriceRow = {
   price: number;
 };
 
+type ParsedDepotPrice = {
+  depotCode: string;
+  depotName?: string;
+  prices: Record<string, number>;
+};
+
 function fileToBase64(file: File): Promise<string> {
   return new Promise((resolve, reject) => {
     const reader = new FileReader();
@@ -79,13 +85,13 @@ function cleanRaw(raw: string): string {
   return raw.replace(/\r/g, '').replace(/\s+/g, ' ').replace(/\*+/g, '').trim();
 }
 
-function parseIrpc(raw: string): Array<{ depotCode: string; prices: Record<string, number> }> {
+function parseIrpc(raw: string): ParsedDepotPrice[] {
   const lines = raw.split('\n').map((l) => l.trim()).filter(Boolean);
   const headerLine = lines.find((l) => l.includes('IRPC-PRICE')) || '';
   const productsPart = headerLine.split(':')[1] || 'G95/G91/B7';
   const products = productsPart.split('/').map((s) => s.trim()).filter(Boolean);
 
-  const result: Array<{ depotCode: string; prices: Record<string, number> }> = [];
+  const result: ParsedDepotPrice[] = [];
   const buildRow = (depotCode: string, vals: number[]) => {
     const prices: Record<string, number> = {};
     products.forEach((p, idx) => {
@@ -119,7 +125,7 @@ function parseIrpc(raw: string): Array<{ depotCode: string; prices: Record<strin
   return result;
 }
 
-function parseCartex(raw: string): Array<{ depotCode: string; prices: Record<string, number> }> {
+function parseCartex(raw: string): ParsedDepotPrice[] {
   const oneLine = cleanRaw(raw);
   const headerMatch = oneLine.match(/Price\s*=\s*([A-Z0-9/ ]+)-/i);
   const products = (headerMatch?.[1] || 'ULG/G95/G91/E20/B7/B20')
@@ -129,7 +135,7 @@ function parseCartex(raw: string): Array<{ depotCode: string; prices: Record<str
     .filter(Boolean);
 
   const regex = /([A-Z]{2,10})\s*=\s*([0-9._ ]+)-/g;
-  const result: Array<{ depotCode: string; prices: Record<string, number> }> = [];
+  const result: ParsedDepotPrice[] = [];
   let match: RegExpExecArray | null;
 
   while ((match = regex.exec(oneLine)) !== null) {
@@ -140,6 +146,78 @@ function parseCartex(raw: string): Array<{ depotCode: string; prices: Record<str
       prices[p] = nums[idx] ?? 0;
     });
     result.push({ depotCode, prices });
+  }
+
+  return result;
+}
+
+function parsePTT(raw: string): ParsedDepotPrice[] {
+  const lines = raw.split('\n').map((l) => l.trim()).filter(Boolean);
+  const oneLine = raw.replace(/\r/g, '').replace(/\s+/g, ' ').trim();
+  const productLine =
+    lines.find((line) => /[A-Z][A-Z0-9]*\s*\//i.test(line) && !/[0-9]+\.[0-9]+/.test(line)) ||
+    oneLine.match(/\b[A-Z]+[0-9]*(?:\s*\/\s*[A-Z]+[0-9]*)+\b/i)?.[0] ||
+    '';
+  const products = (productLine?.toUpperCase().match(/[A-Z]+[0-9]*/g) || ['G95', 'G91', 'B7', 'B20'])
+    .map((s) => s.trim())
+    .filter(Boolean);
+
+  const result: ParsedDepotPrice[] = [];
+  const normalizeDepotCode = (depotCode: string, depotName: string) => {
+    const code = depotCode.trim().toUpperCase();
+    if (code === 'BSP' && depotName.trim() === 'มหาชัย') return 'BPSP';
+    return code;
+  };
+
+  const buildRow = (depotCode: string, priceText: string, depotName = '') => {
+    const nums = priceText
+      .replace(/\s+/g, '')
+      .split('/')
+      .map((n) => Number(n || 0));
+    if (!nums.some((n) => n > 0)) return;
+
+    const prices: Record<string, number> = {};
+    products.forEach((p, idx) => {
+      prices[p] = nums[idx] ?? 0;
+    });
+    result.push({ depotCode: normalizeDepotCode(depotCode, depotName), depotName: depotName.trim() || undefined, prices });
+  };
+
+  const inlineMatches = oneLine.matchAll(/([^()=0-9\/.]+?)\s*\(([A-Z0-9]{2,12})\)\s*=\s*([0-9]+(?:\.[0-9]+)?(?:\s*\/\s*[0-9]+(?:\.[0-9]+)?)+)/gi);
+  for (const match of inlineMatches) {
+    const depotName = match[1].replace(/[0-9./]+/g, ' ').trim().split(/\s+/).pop() || '';
+    buildRow(match[2].trim().toUpperCase(), match[3], depotName);
+  }
+  if (result.length) return result;
+
+  for (let i = 0; i < lines.length; i += 1) {
+    const line = lines[i];
+    const depotMatch = line.match(/\(([A-Z0-9]{2,12})\)\s*=\s*([0-9./ ]*)/i);
+    if (!depotMatch) continue;
+
+    const depotCode = depotMatch[1].trim().toUpperCase();
+    const sameLinePrices = depotMatch[2] || '';
+    const nextLinePrices = lines[i + 1] || '';
+    const priceText = /[0-9]+\.[0-9]+/.test(sameLinePrices) ? sameLinePrices : nextLinePrices;
+    const depotName = line.replace(/\([A-Z0-9]{2,12}\).*/i, '').trim();
+    if (/[0-9]+\.[0-9]+/.test(priceText)) buildRow(depotCode, priceText, depotName);
+  }
+
+  return result;
+}
+
+function parseBankchak(raw: string): ParsedDepotPrice[] {
+  const productMatch = raw.toUpperCase().match(/\b(ULG|G95|G91|E20|B7|B10|B20)\b/);
+  const productCode = productMatch?.[1] || 'B7';
+  const result: ParsedDepotPrice[] = [];
+  const oneLine = raw.replace(/\r/g, '').replace(/\s+/g, ' ').trim();
+  const matches = oneLine.matchAll(/\(([A-Z0-9]{2,12})\)\s*=\s*([0-9]+(?:\.[0-9]+)?)/gi);
+
+  for (const match of matches) {
+    result.push({
+      depotCode: match[1].trim().toUpperCase(),
+      prices: { [productCode]: Number(match[2] || 0) },
+    });
   }
 
   return result;
@@ -198,13 +276,21 @@ export default function OCRUploadPage() {
     }
   };
 
-  const buildRowsByMapping = (parsed: Array<{ depotCode: string; prices: Record<string, number> }>): PriceRow[] => {
+  const buildRowsByMapping = (parsed: ParsedDepotPrice[]): PriceRow[] => {
     const depotMap = new Map(depots.map((d) => [d.code.toUpperCase(), d]));
+    const depotNameMap = new Map(depots.map((d) => [d.name.trim(), d]));
     const productMap = new Map(products.map((p) => [p.code.toUpperCase(), p]));
+    const depotCodeAliases: Record<string, string[]> = {
+      BSP: ['BPSP', 'PSP'],
+    };
 
     const out: PriceRow[] = [];
     for (const entry of parsed) {
-      const depot = depotMap.get(entry.depotCode.toUpperCase());
+      const depotCode = entry.depotCode.toUpperCase();
+      const depot =
+        depotMap.get(depotCode) ||
+        depotCodeAliases[depotCode]?.map((code) => depotMap.get(code)).find(Boolean) ||
+        (entry.depotName ? depotNameMap.get(entry.depotName.trim()) : undefined);
       if (!depot) continue;
 
       for (const [productCodeRaw, price] of Object.entries(entry.prices)) {
@@ -230,10 +316,16 @@ export default function OCRUploadPage() {
     const name = refinery.name.toUpperCase();
     if (name.includes('IRPC')) return buildRowsByMapping(parseIrpc(raw));
     if (name.includes('CARTEX')) return buildRowsByMapping(parseCartex(raw));
+    if (name.includes('BANGCHAK') || name.includes('บางจาก') || name.includes('BCP')) return buildRowsByMapping(parseBankchak(raw));
+    if (name.includes('PTT') || name.includes('ESSO') || name.includes('BC')) return buildRowsByMapping(parsePTT(raw));
 
     // fallback: attempt both
     const irpc = buildRowsByMapping(parseIrpc(raw));
     if (irpc.length) return irpc;
+    const bankchak = buildRowsByMapping(parseBankchak(raw));
+    if (bankchak.length) return bankchak;
+    const ptt = buildRowsByMapping(parsePTT(raw));
+    if (ptt.length) return ptt;
     return buildRowsByMapping(parseCartex(raw));
   };
 
