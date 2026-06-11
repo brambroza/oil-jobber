@@ -9,6 +9,7 @@ type AccessRow = {
   allowed_depot_ids: string[];
   allowed_oil_product_ids: string[];
   allowed_payment_condition_ids: string[];
+  depot_transport_fees?: Record<string, number>;
   can_place_order: boolean;
 };
 
@@ -60,6 +61,7 @@ export async function GET() {
     allowed_depot_ids: [],
     allowed_oil_product_ids: [],
     allowed_payment_condition_ids: [],
+    depot_transport_fees: {},
     can_place_order: true,
   }) as AccessRow;
 

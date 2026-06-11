@@ -443,7 +443,7 @@ export default function SellingPricesPage() {
 
           for (const pc of visibleData.visiblePaymentConditions as any[]) {
             const key = getCheapestPriceKey(item.product_code);
-            const price = Number(item.base_cost_price || 0) + Number(pc.extra_cost_per_liter || 0);
+            const price = Number(item.base_cost_price || 0) === 0 ? 0 : ( Number(item.base_cost_price || 0) * 1.07) + Number(pc.extra_cost_per_liter || 0);
             const current = cheapest.get(key);
             if (current == null || price < current) cheapest.set(key, price);
           }
@@ -471,7 +471,7 @@ export default function SellingPricesPage() {
         for (const item of visibleItems.slice(0, 3)) {
           lines.push(`${item.product_code} ${item.product_name || ''}`.trim());
           const parts = visiblePaymentConditions.map((pc: any) => {
-            const price = Number(item.base_cost_price || 0) + Number(pc.extra_cost_per_liter || 0);
+            const price = Number(item.base_cost_price || 0) ===0 ? 0 : (Number(item.base_cost_price || 0) * 1.07) + Number(pc.extra_cost_per_liter || 0);
             const cheapestPrice = cheapestPriceByKey.get(getCheapestPriceKey(item.product_code));
             const isCheapest = cheapestPrice != null && Math.abs(price - cheapestPrice) < 0.0001;
             return `${pc.name}: ${price.toFixed(2)}${isCheapest ? ' (ถูกสุด)' : ''}`;
@@ -501,66 +501,64 @@ export default function SellingPricesPage() {
     const groupBlocks = visibleGroups.slice(0, 5).map((group) => {
       const visibleItems = group.items.filter((it) => Number(it.base_cost_price || 0) > 0);
       if (!visibleItems.length) return null;
-      const conditionBlocks = conditionsToUse.map((pc: any) => {
-        const productRows = visibleItems.slice(0, 4).map((item) => {
-          const basePrice = Number(item.base_cost_price || 0) + Number(pc.extra_cost_per_liter || 0);
-          const cheapestPrice = cheapestPriceByKey.get(getCheapestPriceKey(item.product_code));
-          const isCheapest = cheapestPrice != null && Math.abs(basePrice - cheapestPrice) < 0.0001;
+      const headerRow = {
+        type: 'box',
+        layout: 'horizontal',
+        spacing: 'xs',
+        contents: [
+          { type: 'text', text: 'ชำระเงิน', size: 'xxs', color: '#64748b', weight: 'bold', flex: 3 },
+          ...conditionsToUse.map((pc: any) => ({
+            type: 'text',
+            text: pc.name,
+            size: 'xxs',
+            color: '#64748b',
+            weight: 'bold',
+            align: 'center',
+            wrap: true,
+            flex: 3,
+          })),
+        ],
+      };
+      const productRows = visibleItems.slice(0, 4).map((item) => ({
+        type: 'box',
+        layout: 'horizontal',
+        spacing: 'xs',
+        margin: 'sm',
+        contents: [
+          { type: 'text', text: item.product_code, size: 'xs', color: '#1e3a8a', weight: 'bold', flex: 3 },
+          ...conditionsToUse.map((pc: any) => {
+            const basePrice = Number(item.base_cost_price || 0) === 0 ? 0 : (Number(item.base_cost_price || 0) * 1.07) + Number(pc.extra_cost_per_liter || 0);
+            const cheapestPrice = cheapestPriceByKey.get(getCheapestPriceKey(item.product_code));
+            const isCheapest = cheapestPrice != null && Math.abs(basePrice - cheapestPrice) < 0.0001;
 
-          return {
-            type: 'box',
-            layout: 'horizontal',
-            spacing: 'sm',
-            margin: 'sm',
-            contents: [
-              { type: 'text', text: item.product_code, size: 'xs', color: '#1e3a8a', weight: 'bold', flex: 2 },
-              { type: 'text', text: item.product_name || '-', size: 'xxs', color: '#334155', flex: 5, wrap: true },
-              {
-                type: 'box',
-                layout: 'horizontal',
-                spacing: 'xs',
-                justifyContent: 'flex-start',
-                flex: 4,
-                contents: [
-                  { type: 'text', text: basePrice.toFixed(2), size: 'sm', color: '#111827', weight: 'bold', align: 'start', flex: 4 },
-                  isCheapest ? {
-                    type: 'box',
-                    layout: 'vertical',
-                    paddingAll: '1px',
-                    cornerRadius: '4px',
-                    backgroundColor: '#facc15',
-                    flex: 4,
-                    contents: [
-                      { type: 'text', text: 'ถูกสุด', size: 'xs', color: '#111827', weight: 'bold', align: 'center' },
-                    ],
-                  } : null,
-                ].filter(Boolean),
-              },
-            ],
-          };
-        });
-
-        return {
-          type: 'box',
-          layout: 'vertical',
-          margin: 'md',
-          paddingAll: '1px',
-          cornerRadius: '10px',
-          backgroundColor: '#f8fafc',
-          contents: [
-            {
+            return {
               type: 'box',
-              layout: 'baseline',
+              layout: 'vertical',
+              paddingAll: '2px',
+              cornerRadius: '6px',
+              backgroundColor: isCheapest ? '#fef3c7' : '#ffffff',
+              flex: 3,
               contents: [
-                { type: 'text', text: 'เงื่อนไขการชำระเงิน', size: 'xxs', color: '#64748b', flex: 5 },
-                { type: 'text', text: pc.name, size: 'xs', color: '#111827', weight: 'bold', align: 'end', flex: 5, wrap: true },
-              ],
-            },
-            { type: 'separator', margin: 'sm', color: '#e2e8f0' },
-            ...productRows,
-          ],
-        };
-      });
+                { type: 'text', text: basePrice.toFixed(2), size: 'sm', color: isCheapest ? '#92400e' : '#111827', weight: 'bold', align: 'center' },
+                isCheapest ? { type: 'text', text: 'ถูกสุด', size: 'xxs', color: '#92400e', align: 'center', weight: 'bold' } : null,
+              ].filter(Boolean),
+            };
+          }),
+        ],
+      }));
+      const priceTableBlock = {
+        type: 'box',
+        layout: 'vertical',
+        margin: 'sm',
+        paddingAll: '8px',
+        cornerRadius: '10px',
+        backgroundColor: '#f8fafc',
+        contents: [
+          headerRow,
+          { type: 'separator', margin: 'sm', color: '#e2e8f0' },
+          ...productRows,
+        ],
+      };
 
       return {
         type: 'box',
@@ -578,7 +576,7 @@ export default function SellingPricesPage() {
             color: '#1e3a8a',
             wrap: true,
           },
-          ...conditionBlocks,
+          priceTableBlock,
         ],
       };
     });
@@ -607,7 +605,7 @@ export default function SellingPricesPage() {
           backgroundColor: '#fff1f2',
           cornerRadius: '8px',
           contents: [
-            { type: 'text', text: 'วันหมดอายุราคา', size: 'xxs', color: '#64748b' },
+            { type: 'text', text: 'วันเวลาออก', size: 'xxs', color: '#64748b' },
             { type: 'text', text: expireText, size: 'xs', color: '#dc2626', weight: 'bold' },
           ],
         },
@@ -648,7 +646,7 @@ export default function SellingPricesPage() {
           spacing: 'sm',
           contents: [
             { type: 'text', text: `ราคาน้ำมันรอบ ${formatDateTimeNow()}`, size: 'lg', weight: 'bold', color: '#1e3a8a' },
-            
+
             ...roundSections,
           ],
         },
@@ -855,7 +853,7 @@ export default function SellingPricesPage() {
           </DialogTitle>
           <DialogContent>
             <Stack spacing={1.5}>
-              <Alert severity='info'>สูตรคำนวณในตารางนี้: ราคาขาย = ราคาฐาน + extra_cost_per_liter ตามเงื่อนไขชำระเงิน</Alert>
+              <Alert severity='info'>ราคาฐาน + VAT 7% + กำไรตามเครดิต</Alert>
               {String(selected?.base.remark || '').trim() ? (
                 <Box sx={{ p: 1.5, border: '1px solid', borderColor: 'divider', borderRadius: 2, bgcolor: '#f8fafc' }}>
                   <Stack spacing={0.5}>
@@ -927,9 +925,10 @@ export default function SellingPricesPage() {
                           <TableRow key={it.id} hover>
                             <TableCell sx={{ color: 'text.secondary' }}>{it.depots?.code || '-'}</TableCell>
                             <TableCell>{it.product_code}</TableCell>
-                            <TableCell>{formatMoney(it.base_cost_price + (it.base_cost_price * 0.07))}</TableCell>
+                            <TableCell>{formatMoney(it.base_cost_price)}</TableCell>
                             {sortedConditions.map((pc) => {
-                              const sellingPrice = Number(it.base_cost_price || 0) + Number(pc.extra_cost_per_liter || 0);
+                              const basePriceWithVat = Number(it.base_cost_price || 0) * 1.07;
+                              const sellingPrice = it.base_cost_price > 0 ? basePriceWithVat + Number(pc.extra_cost_per_liter || 0) : 0;
                               return <TableCell key={`${it.id}-${pc.id}`}>{formatMoney(sellingPrice)}</TableCell>;
                             })}
                           </TableRow>

@@ -9,6 +9,17 @@ function toUuidList(input: unknown): string[] {
     .filter((x) => /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(x));
 }
 
+function toTransportFeeMap(input: unknown): Record<string, number> {
+  if (!input || typeof input !== 'object' || Array.isArray(input)) return {};
+  const result: Record<string, number> = {};
+  for (const [key, value] of Object.entries(input as Record<string, unknown>)) {
+    if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(key)) continue;
+    const fee = Number(value || 0);
+    if (Number.isFinite(fee) && fee > 0) result[key] = fee;
+  }
+  return result;
+}
+
 export async function GET(req: NextRequest, { params }: { params: Promise<{ customerId: string }> }) {
   const { customerId } = await params;
   const companyId = resolveCompanyId(req.nextUrl.searchParams.get('company_id'));
@@ -51,6 +62,7 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ cu
     allowed_depot_ids: toUuidList(body.allowed_depot_ids),
     allowed_oil_product_ids: toUuidList(body.allowed_oil_product_ids),
     allowed_payment_condition_ids: toUuidList(body.allowed_payment_condition_ids),
+    depot_transport_fees: toTransportFeeMap(body.depot_transport_fees),
     can_place_order: Boolean(body.can_place_order ?? true),
   };
 

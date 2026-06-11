@@ -321,13 +321,13 @@ export default function PricesPage() {
             <TextField label='วันที่มีผล (dd/MM/yyyy)' value={effectiveDate} onChange={(e) => setEffectiveDate(e.target.value)} />
             <TextField label='เวลา' type='time' value={effectiveTime} onChange={(e) => setEffectiveTime(e.target.value)} InputLabelProps={{ shrink: true }} />
             <TextField
-              label='วันหมดอายุ'
+              label='วันออก'
               type='date'
               value={ddMmYyyyToIso(expiresDate)}
               onChange={(e) => setExpiresDate(isoToDdMmYyyy(e.target.value))}
               InputLabelProps={{ shrink: true }}
             />
-            <TextField label='เวลาหมดอายุ' type='time' value={expiresTime} onChange={(e) => setExpiresTime(e.target.value)} InputLabelProps={{ shrink: true }} />
+            <TextField label='เวลาออก' type='time' value={expiresTime} onChange={(e) => setExpiresTime(e.target.value)} InputLabelProps={{ shrink: true }} />
           </Stack>
 
           <Table size='small'>

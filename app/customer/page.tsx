@@ -2,6 +2,7 @@
 
 import { useEffect, useMemo, useState } from 'react';
 import Link from 'next/link';
+import { useRouter } from 'next/navigation';
 import LocalGasStationRounded from '@mui/icons-material/LocalGasStationRounded';
 import NotificationsRounded from '@mui/icons-material/NotificationsRounded';
 import PersonRounded from '@mui/icons-material/PersonRounded';
@@ -12,6 +13,10 @@ import {
   Box,
   Button,
   Chip,
+  Dialog,
+  DialogActions,
+  DialogContent,
+  DialogTitle,
   LinearProgress,
   Paper,
   Stack,
@@ -61,6 +66,16 @@ type GridDepot = {
   products: Array<{ key: string; code: string; name: string, color_hex: string }>;
 };
 
+type PendingOrderLink = {
+  depotId: string;
+  depotCode: string;
+  depotName: string;
+  paymentConditionId: string;
+  paymentLabel: string;
+  productLabel: string;
+  price: number;
+};
+
 function fmtMoney(v: number) {
   return Number(v || 0).toLocaleString('th-TH', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 }
@@ -68,6 +83,12 @@ function fmtMoney(v: number) {
 function fmtPrice(v?: number | null) {
   if (v == null) return '-';
   return Number(v).toLocaleString('th-TH', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+}
+
+function customerSellingPrice(base?: number | null, extraCostPerLiter = 0) {
+  const baseNumber = Number(base || 0);
+  if (baseNumber <= 0) return 0;
+  return baseNumber * 1.07 + Number(extraCostPerLiter || 0);
 }
 
 function fmtThaiDateTime(date?: string, time?: string | null): string {
@@ -93,9 +114,11 @@ function depotGroupName(depot?: { code?: string; name?: string } | null): string
 }
 
 export default function CustomerHomePage() {
+  const router = useRouter();
   const [data, setData] = useState<HomeData | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
+  const [pendingOrder, setPendingOrder] = useState<PendingOrderLink | null>(null);
 
   const refiners = useMemo(() => {
     if (!data) return [] as Array<{ roundId: string; refineryId: string; refineryName: string; effectiveDate: string; effectiveAt: string | null; refineryImg?: string; }>;
@@ -166,6 +189,47 @@ export default function CustomerHomePage() {
     return m;
   }, [data]);
 
+  const priceDepotMap = useMemo(() => {
+    const m = new Map<string, string>();
+    const priceTracker = new Map<string, number>();
+    if (!data) return m;
+    for (const item of data.items) {
+      if (!item.depot_id) continue;
+      const round = data.rounds.find((r) => r.id === item.oil_base_price_id);
+      const refineryId = String(round?.refinery_id ?? '');
+      const depotKey = depotGroupName(item.depots);
+      const productKey = `${item.product_code}__${item.product_name}`;
+      const key = `${refineryId}__${depotKey}__${productKey}`;
+      const nextPrice = Number(item.base_cost_price || 0);
+      const currentPrice = priceTracker.get(key);
+      if (currentPrice == null || (currentPrice <= 0 && nextPrice > 0) || (currentPrice > 0 && nextPrice > 0 && nextPrice < currentPrice)) {
+        priceTracker.set(key, nextPrice);
+        m.set(key, String(item.depot_id));
+      }
+    }
+    return m;
+  }, [data]);
+
+  const priceDepotCodeMap = useMemo(() => {
+    const m = new Map<string, string>();
+    const priceTracker = new Map<string, number>();
+    if (!data) return m;
+    for (const item of data.items) {
+      const round = data.rounds.find((r) => r.id === item.oil_base_price_id);
+      const refineryId = String(round?.refinery_id ?? '');
+      const depotKey = depotGroupName(item.depots);
+      const productKey = `${item.product_code}__${item.product_name}`;
+      const key = `${refineryId}__${depotKey}__${productKey}`;
+      const nextPrice = Number(item.base_cost_price || 0);
+      const currentPrice = priceTracker.get(key);
+      if (currentPrice == null || (currentPrice <= 0 && nextPrice > 0) || (currentPrice > 0 && nextPrice > 0 && nextPrice < currentPrice)) {
+        priceTracker.set(key, nextPrice);
+        m.set(key, item.depots?.code || '');
+      }
+    }
+    return m;
+  }, [data]);
+
   const cheapestCellMap = useMemo(() => {
     const result = new Map<string, string>();
     const bestByProduct = new Map<string, { value: number; cellKey: string }>();
@@ -177,7 +241,7 @@ export default function CustomerHomePage() {
           if (base == null) continue;
 
           if (!paymentTerms.length) {
-            const value = Number(base);
+            const value = customerSellingPrice(base);
             if (value < 5) continue;
             const cellKey = `${depot.depotKey}__${r.refineryId}__default`;
             const prev = bestByProduct.get(product.key);
@@ -188,7 +252,7 @@ export default function CustomerHomePage() {
           }
 
           for (const term of paymentTerms) {
-            const value = Number(base) + Number(term.extra || 0);
+            const value = customerSellingPrice(base, term.extra);
             if (value < 5) continue;
             const cellKey = `${depot.depotKey}__${r.refineryId}__${term.id}`;
             const prev = bestByProduct.get(product.key);
@@ -228,6 +292,22 @@ export default function CustomerHomePage() {
     if (!limit) return 0;
     return Math.min(100, Math.max(0, (used / limit) * 100));
   }, [data]);
+
+  const requestOrderFromPrice = (next: PendingOrderLink) => {
+    if (!next.depotId) return;
+    setPendingOrder(next);
+  };
+
+  const goToOrderFromPrice = () => {
+    if (!pendingOrder) return;
+    const params = new URLSearchParams();
+    params.set('new', '1');
+    params.set('depot_id', pendingOrder.depotId);
+    if (pendingOrder.paymentConditionId && pendingOrder.paymentConditionId !== 'default') {
+      params.set('payment_condition_id', pendingOrder.paymentConditionId);
+    }
+    router.push(`/customer/orders?${params.toString()}`);
+  };
 
   useEffect(() => {
     const run = async () => {
@@ -295,7 +375,7 @@ export default function CustomerHomePage() {
                 <Typography sx={{ fontSize: 20, fontWeight: 800, color: '#1e3a8a' }}>หมายเหตุ</Typography>
               </Stack>
               <Typography sx={{ fontSize: 14, color: '#1e3a8a' }}>
-                {remarkText || 'ราคาน้ำมันอาจมีการเปลี่ยนแปลง กรุณาตรวจสอบก่อนทำรายการ'}
+                {remarkText || 'ราคาน้ำมันอาจมีการเปลี่ยนแปลง กรุณาตรวจสอบก่อนทำรายการ (ราคานี้รวม vat แล้ว)'}
               </Typography>
               <Stack direction='row' justifyContent='space-between' alignItems='center' spacing={1}>
                 <Button component={Link} href='/customer/orders' variant='contained' sx={{ textTransform: 'none', bgcolor: '#1d4ed8', '&:hover': { bgcolor: '#1e40af' } }}>
@@ -402,17 +482,34 @@ export default function CustomerHomePage() {
                     {refiners.flatMap((r) => {
                       const base = priceMap.get(`${r.refineryId}__${depot.depotKey}__${product.key}`);
                       if (!paymentTerms.length) {
+                        const value = customerSellingPrice(base);
                         const cellKey = `${depot.depotKey}__${r.refineryId}__default`;
                         const isCheapest = cheapestCellMap.get(product.key) === cellKey;
+                        const depotId = priceDepotMap.get(`${r.refineryId}__${depot.depotKey}__${product.key}`) || '';
+                        const depotCode = priceDepotCodeMap.get(`${r.refineryId}__${depot.depotKey}__${product.key}`) || depot.depotCode || '';
                         return [
                           <TableCell
                             key={`${r.refineryId}-${depot.depotKey}-${product.key}-default`}
                             align='center'
+                            onClick={() => {
+                              if (value <= 0 || !depotId) return;
+                              requestOrderFromPrice({
+                                depotId,
+                                depotCode,
+                                depotName: depot.depotName || '-',
+                                paymentConditionId: '',
+                                paymentLabel: 'ราคาขาย',
+                                productLabel: `${product.code}${product.name ? ` ${product.name}` : ''}`,
+                                price: value,
+                              });
+                            }}
                             sx={{
                               color: product.color_hex ?? '#2563eb',
                               fontWeight: 700,
+                              cursor: value > 0 && depotId ? 'pointer' : 'default',
                               bgcolor: isCheapest ? '#fff7cc' : undefined,
                               animation: isCheapest ? 'priceBlink 1.1s ease-in-out infinite' : undefined,
+                              '&:hover': value > 0 && depotId ? { bgcolor: isCheapest ? '#fef3c7' : '#eff6ff' } : undefined,
                               '@keyframes priceBlink': {
                                 '0%, 100%': { boxShadow: 'inset 0 0 0 0 rgba(250, 204, 21, 0.0)' },
                                 '50%': { boxShadow: 'inset 0 0 0 999px rgba(250, 204, 21, 0.22)' },
@@ -420,25 +517,41 @@ export default function CustomerHomePage() {
                             }}
                           >
                             <Stack direction='row' spacing={0.5} justifyContent='center' alignItems='center'>
-                              <span>{fmtPrice(base)}</span>
+                              <span>{fmtPrice(value)}</span>
                               {isCheapest ? <Chip size='small' label='ถูกสุด' sx={{ height: 16, fontSize: 10, bgcolor: '#facc15', color: '#111827' }} /> : null}
                             </Stack>
                           </TableCell>,
                         ];
                       }
                       return paymentTerms.map((term) => {
-                        const value = base == null || base === 0 ? 0 : Number(base) + Number(term.extra || 0);
+                        const value = customerSellingPrice(base, term.extra);
                         const cellKey = `${depot.depotKey}__${r.refineryId}__${term.id}`;
                         const isCheapest = value != null && cheapestCellMap.get(product.key) === cellKey;
+                        const depotId = priceDepotMap.get(`${r.refineryId}__${depot.depotKey}__${product.key}`) || '';
+                        const depotCode = priceDepotCodeMap.get(`${r.refineryId}__${depot.depotKey}__${product.key}`) || depot.depotCode || '';
                         return (
                           <TableCell
                             key={`${r.refineryId}-${depot.depotKey}-${product.key}-${term.id}`}
                             align='center'
+                            onClick={() => {
+                              if (value == null || Number(value || 0) <= 0 || !depotId) return;
+                              requestOrderFromPrice({
+                                depotId,
+                                depotCode,
+                                depotName: depot.depotName || '-',
+                                paymentConditionId: term.id,
+                                paymentLabel: term.label,
+                                productLabel: `${product.code}${product.name ? ` ${product.name}` : ''}`,
+                                price: Number(value || 0),
+                              });
+                            }}
                             sx={{
                               color: product.color_hex ?? '#2563eb',
                               fontWeight: 700,
+                              cursor: value != null && Number(value || 0) > 0 && depotId ? 'pointer' : 'default',
                               bgcolor: isCheapest ? '#fff7cc' : undefined,
                               animation: isCheapest ? 'priceBlink 1.1s ease-in-out infinite' : undefined,
+                              '&:hover': value != null && Number(value || 0) > 0 && depotId ? { bgcolor: isCheapest ? '#fef3c7' : '#eff6ff' } : undefined,
                               '@keyframes priceBlink': {
                                 '0%, 100%': { boxShadow: 'inset 0 0 0 0 rgba(250, 204, 21, 0.0)' },
                                 '50%': { boxShadow: 'inset 0 0 0 999px rgba(250, 204, 21, 0.22)' },
@@ -503,14 +616,41 @@ export default function CustomerHomePage() {
                                 {products.map((product) => {
                                   const base = priceMap.get(`${r.refineryId}__${depot.depotKey}__${product.key}`);
                                   const value = paymentTerms.length
-                                    ? (base == null || base === 0 ? 0 : Number(base) + Number(term.extra || 0))
-                                    : base;
+                                    ? customerSellingPrice(base, term.extra)
+                                    : customerSellingPrice(base);
                                   const cellKey = paymentTerms.length
                                     ? `${depot.depotKey}__${r.refineryId}__${term.id}`
                                     : `${depot.depotKey}__${r.refineryId}__default`;
                                   const isCheapest = cheapestCellMap.get(product.key) === cellKey;
+                                  const depotId = priceDepotMap.get(`${r.refineryId}__${depot.depotKey}__${product.key}`) || '';
+                                  const depotCode = priceDepotCodeMap.get(`${r.refineryId}__${depot.depotKey}__${product.key}`) || depot.depotCode || '';
+                                  const canCreateOrder = value != null && Number(value || 0) > 0 && Boolean(depotId);
                                   return (
-                                    <Stack sx={{ px: 1, py: 0.8 }} key={`price-${r.refineryId}-${depot.depotKey}-${product.key}-${term.id}`} direction='row' justifyContent='space-between' spacing={1}>
+                                    <Stack
+                                      sx={{
+                                        px: 1,
+                                        py: 0.8,
+                                        borderRadius: 1,
+                                        cursor: canCreateOrder ? 'pointer' : 'default',
+                                        '&:hover': canCreateOrder ? { bgcolor: '#eff6ff' } : undefined,
+                                      }}
+                                      key={`price-${r.refineryId}-${depot.depotKey}-${product.key}-${term.id}`}
+                                      direction='row'
+                                      justifyContent='space-between'
+                                      spacing={1}
+                                      onClick={() => {
+                                        if (!canCreateOrder) return;
+                                        requestOrderFromPrice({
+                                          depotId,
+                                          depotCode,
+                                          depotName: depot.depotName || '-',
+                                          paymentConditionId: term.id === 'default' ? '' : term.id,
+                                          paymentLabel: term.label,
+                                          productLabel: `${product.code}${product.name ? ` ${product.name}` : ''}`,
+                                          price: Number(value || 0),
+                                        });
+                                      }}
+                                    >
                                       <Typography sx={{ fontSize: 12, color: product.color_hex ?? '#334155' }}>
                                         {product.code}{product.name ? ` ${product.name}` : ''}
                                       </Typography>
@@ -534,6 +674,43 @@ export default function CustomerHomePage() {
           </Stack>
         </Paper>
       </Stack>
+
+      <Dialog open={Boolean(pendingOrder)} onClose={() => setPendingOrder(null)} maxWidth='xs' fullWidth>
+        <DialogTitle sx={{ fontWeight: 800 }}>สร้างใบสั่งซื้อ</DialogTitle>
+        <DialogContent>
+          <Stack spacing={1.2} sx={{ pt: 0.5 }}>
+            <Alert severity='info' sx={{ borderRadius: 2 }}>
+              ต้องการสร้างใบสั่งซื้อจากราคาที่เลือกใช่ไหม
+            </Alert>
+            <Paper variant='outlined' sx={{ p: 1.5, borderColor: '#dbe4f0', borderRadius: 2, bgcolor: '#f8fbff' }}>
+              <Stack spacing={0.8}>
+                <Stack direction='row' justifyContent='space-between' spacing={1}>
+                  <Typography sx={{ fontSize: 13, color: '#64748b' }}>คลังน้ำมัน</Typography>
+                  <Typography sx={{ fontSize: 13, fontWeight: 800, color: '#0f172a' }}>
+                    {pendingOrder ? `${pendingOrder.depotCode ? `${pendingOrder.depotCode} ` : ''}${pendingOrder.depotName || '-'}` : '-'}
+                  </Typography>
+                </Stack>
+                <Stack direction='row' justifyContent='space-between' spacing={1}>
+                  <Typography sx={{ fontSize: 13, color: '#64748b' }}>เงื่อนไขชำระเงิน</Typography>
+                  <Typography sx={{ fontSize: 13, fontWeight: 800, color: '#0f172a' }}>{pendingOrder?.paymentLabel || '-'}</Typography>
+                </Stack>
+                <Stack direction='row' justifyContent='space-between' spacing={1}>
+                  <Typography sx={{ fontSize: 13, color: '#64748b' }}>สินค้า</Typography>
+                  <Typography sx={{ fontSize: 13, fontWeight: 800, color: '#0f172a' }}>{pendingOrder?.productLabel || '-'}</Typography>
+                </Stack>
+                <Stack direction='row' justifyContent='space-between' spacing={1}>
+                  <Typography sx={{ fontSize: 13, color: '#64748b' }}>ราคา</Typography>
+                  <Typography sx={{ fontSize: 16, fontWeight: 900, color: '#1d4ed8' }}>{fmtPrice(pendingOrder?.price)} บาท</Typography>
+                </Stack>
+              </Stack>
+            </Paper>
+          </Stack>
+        </DialogContent>
+        <DialogActions sx={{ px: 3, pb: 2 }}>
+          <Button onClick={() => setPendingOrder(null)} color='inherit'>ยกเลิก</Button>
+          <Button variant='contained' onClick={goToOrderFromPrice}>สร้างใบสั่งซื้อ</Button>
+        </DialogActions>
+      </Dialog>
     </CustomerShell>
   );
 }

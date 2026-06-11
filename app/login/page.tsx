@@ -3,15 +3,21 @@
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { FormEvent, useState } from 'react';
-import { Alert, Box, Button, Paper, Stack, TextField, Typography } from '@mui/material';
+import { VisibilityOffOutlined, VisibilityOutlined } from '@mui/icons-material';
+import { Alert, Box, Button, Dialog, DialogActions, DialogContent, DialogTitle, IconButton, InputAdornment, Paper, Stack, TextField, Typography } from '@mui/material';
 import { getSupabaseClient } from '@/lib/supabase/client';
 
 export default function LoginPage() {
   const router = useRouter();
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
+  const [showPassword, setShowPassword] = useState(false);
+  const [forgotOpen, setForgotOpen] = useState(false);
+  const [forgotEmail, setForgotEmail] = useState('');
+  const [forgotLoading, setForgotLoading] = useState(false);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
+  const [success, setSuccess] = useState('');
 
   const onSubmit = async (e: FormEvent<HTMLFormElement>) => {
     e.preventDefault();
@@ -33,6 +39,31 @@ export default function LoginPage() {
     }
     router.replace(redirectPath);
     router.refresh();
+  };
+
+  const onForgotPassword = async () => {
+    const targetEmail = forgotEmail.trim() || email.trim();
+    setError('');
+    setSuccess('');
+
+    if (!targetEmail) {
+      setError('กรุณาระบุอีเมลสำหรับกู้คืนรหัสผ่าน');
+      return;
+    }
+
+    setForgotLoading(true);
+    const { error: resetError } = await getSupabaseClient().auth.resetPasswordForEmail(targetEmail, {
+      redirectTo: `${window.location.origin}/auth/callback?next=/reset-password`,
+    });
+    setForgotLoading(false);
+
+    if (resetError) {
+      setError('ส่งอีเมลกู้คืนรหัสผ่านไม่สำเร็จ: ' + resetError.message);
+      return;
+    }
+
+    setForgotOpen(false);
+    setSuccess('ส่งอีเมลสำหรับตั้งรหัสผ่านใหม่แล้ว กรุณาตรวจสอบกล่องจดหมาย');
   };
 
   const search = typeof window !== 'undefined' ? window.location.search : '';
@@ -75,6 +106,7 @@ export default function LoginPage() {
           </Box>
 
           {error ? <Alert severity='error'>{error}</Alert> : null}
+          {success ? <Alert severity='success'>{success}</Alert> : null}
           {!error && lineErrorText ? <Alert severity='warning'>{lineErrorText}</Alert> : null}
 
           <TextField
@@ -89,14 +121,43 @@ export default function LoginPage() {
           />
           <TextField
             label='รหัสผ่าน'
-            type='password'
+            type={showPassword ? 'text' : 'password'}
             value={password}
             onChange={(e) => setPassword(e.target.value)}
             autoComplete='current-password'
             required
             fullWidth
             size='small'
+            InputProps={{
+              endAdornment: (
+                <InputAdornment position='end'>
+                  <IconButton
+                    aria-label={showPassword ? 'ซ่อนรหัสผ่าน' : 'แสดงรหัสผ่าน'}
+                    edge='end'
+                    onClick={() => setShowPassword((v) => !v)}
+                  >
+                    {showPassword ? <VisibilityOffOutlined fontSize='small' /> : <VisibilityOutlined fontSize='small' />}
+                  </IconButton>
+                </InputAdornment>
+              ),
+            }}
           />
+
+          <Box sx={{ display: 'flex', justifyContent: 'flex-end' }}>
+            <Button
+              type='button'
+              variant='text'
+              onClick={() => {
+                setForgotEmail(email);
+                setForgotOpen(true);
+                setError('');
+                setSuccess('');
+              }}
+              sx={{ px: 0, color: '#374151', textTransform: 'none', fontWeight: 600 }}
+            >
+              ลืมรหัสผ่าน?
+            </Button>
+          </Box>
 
           <Button
             type='submit'
@@ -137,6 +198,33 @@ export default function LoginPage() {
           </Typography>
         </Stack>
       </Paper>
+
+      <Dialog open={forgotOpen} onClose={() => setForgotOpen(false)} maxWidth='xs' fullWidth>
+        <DialogTitle>ลืมรหัสผ่าน</DialogTitle>
+        <DialogContent>
+          <Stack spacing={1.5} sx={{ pt: 1 }}>
+            <Typography sx={{ fontSize: 13, color: '#6b7280' }}>
+              ระบุอีเมลของบัญชี ระบบจะส่งลิงก์สำหรับตั้งรหัสผ่านใหม่ให้
+            </Typography>
+            <TextField
+              label='อีเมล'
+              type='email'
+              value={forgotEmail}
+              onChange={(e) => setForgotEmail(e.target.value)}
+              autoComplete='email'
+              fullWidth
+              size='small'
+              autoFocus
+            />
+          </Stack>
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={() => setForgotOpen(false)}>ยกเลิก</Button>
+          <Button variant='contained' disabled={forgotLoading} onClick={() => void onForgotPassword()}>
+            {forgotLoading ? 'กำลังส่ง...' : 'ส่งลิงก์ตั้งรหัสผ่านใหม่'}
+          </Button>
+        </DialogActions>
+      </Dialog>
     </Box>
   );
 }

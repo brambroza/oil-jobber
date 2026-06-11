@@ -38,7 +38,7 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
 
   const { effective_date, effective_time, expires_date, expires_time, refinery_id, rows, remark } = body;
   if ((expires_date && !expires_time) || (!expires_date && expires_time)) {
-    return NextResponse.json({ error: 'กรุณาระบุวันและเวลาหมดอายุให้ครบ' }, { status: 422 });
+    return NextResponse.json({ error: 'กรุณาระบุวันและเวลาออกให้ครบ' }, { status: 422 });
   }
 
   const effectiveAt = effective_date && effective_time

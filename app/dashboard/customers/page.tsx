@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useState, type ReactNode } from 'react';
 import { Add, Delete, Edit } from '@mui/icons-material';
 import {
   Alert,
@@ -56,6 +56,7 @@ type CustomerAccessForm = {
   allowed_depot_ids: string[];
   allowed_oil_product_ids: string[];
   allowed_payment_condition_ids: string[];
+  depot_transport_fees: Record<string, number>;
   can_place_order: boolean;
 };
 
@@ -83,6 +84,7 @@ const emptyAccess: CustomerAccessForm = {
   allowed_depot_ids: [],
   allowed_oil_product_ids: [],
   allowed_payment_condition_ids: [],
+  depot_transport_fees: {},
   can_place_order: true,
 };
 
@@ -239,6 +241,7 @@ export default function CustomersPage() {
       allowed_depot_ids: data.access?.allowed_depot_ids ?? [],
       allowed_oil_product_ids: data.access?.allowed_oil_product_ids ?? [],
       allowed_payment_condition_ids: data.access?.allowed_payment_condition_ids ?? [],
+      depot_transport_fees: data.access?.depot_transport_fees ?? {},
       can_place_order: Boolean(data.access?.can_place_order ?? true),
     });
     setPortalUserId(data.portal_user?.auth_user_id ?? null);
@@ -358,6 +361,7 @@ export default function CustomersPage() {
     searchable = false,
     maxHeight = 260,
     onChange,
+    renderSelectedExtra,
   }: {
     title: string;
     helper: string;
@@ -366,6 +370,7 @@ export default function CustomersPage() {
     searchable?: boolean;
     maxHeight?: number;
     onChange: (next: string[]) => void;
+    renderSelectedExtra?: (option: { id: string; label: string; group?: string }) => ReactNode;
   }) => {
     const [q, setQ] = useState('');
     const qv = q.trim().toLowerCase();
@@ -422,6 +427,7 @@ export default function CustomersPage() {
                     control={<Checkbox size='small' checked={selected.includes(opt.id)} onChange={() => onChange(toggleInArray(selected, opt.id))} />}
                     label={<Typography variant='body2'>{opt.label}</Typography>}
                   />
+                  {selected.includes(opt.id) && renderSelectedExtra ? renderSelectedExtra(opt) : null}
                 </Box>
               );
             })}
@@ -614,7 +620,39 @@ export default function CustomersPage() {
                   .sort((a, b) => `${a.group}|${a.label}`.localeCompare(`${b.group}|${b.label}`))}
                 searchable
                 maxHeight={320}
-                onChange={(next) => setAccessForm((p) => ({ ...p, allowed_depot_ids: next }))}
+                onChange={(next) => setAccessForm((p) => {
+                  const nextFees = Object.fromEntries(
+                    Object.entries(p.depot_transport_fees).filter(([depotId]) => next.includes(depotId)),
+                  ) as Record<string, number>;
+                  for (const depotId of next) {
+                    if (nextFees[depotId] == null) nextFees[depotId] = 0.2;
+                  }
+                  return {
+                    ...p,
+                    allowed_depot_ids: next,
+                    depot_transport_fees: nextFees,
+                  };
+                })}
+                renderSelectedExtra={(opt) => (
+                  <Box sx={{ pl: 4, pr: 1, pb: 0.35, mt: -0.4 }}>
+                    <TextField
+                      size='small'
+                      label='ค่าขนส่ง'
+                      type='number'
+                      value={accessForm.depot_transport_fees[opt.id] ?? 0.2}
+                      onChange={(e) => setAccessForm((p) => ({
+                        ...p,
+                        depot_transport_fees: {
+                          ...p.depot_transport_fees,
+                          [opt.id]: Number(e.target.value || 0),
+                        },
+                      }))}
+                      inputProps={{ step: '0.01', min: 0, style: { padding: '5px 8px', fontSize: 12 } }}
+                      InputLabelProps={{ sx: { fontSize: 12 } }}
+                      sx={{ width: 145 }}
+                    />
+                  </Box>
+                )}
               />
 
               <AccessCheckboxGroup

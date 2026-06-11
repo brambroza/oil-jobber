@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import Add from '@mui/icons-material/Add';
 import CalendarTodayOutlined from '@mui/icons-material/CalendarTodayOutlined';
 import Delete from '@mui/icons-material/Delete';
@@ -62,6 +62,9 @@ type PriceHome = {
   };
   credit: {
     used_credit: number;
+  } | null;
+  access?: {
+    depot_transport_fees?: Record<string, number>;
   } | null;
   rounds: Array<{ id: string; refinery_id: string | null; refineries?: { name?: string } | null }>;
   allowedPaymentConditions?: Array<{
@@ -188,12 +191,14 @@ function paymentExtraById(paymentOptions: PaymentOption[], paymentConditionId: s
 }
 
 export default function CustomerOrdersPage() {
+  const orderPrefillAppliedRef = useRef(false);
   const [orders, setOrders] = useState<OrderRow[]>([]);
   const [page, setPage] = useState(0);
   const [rowsPerPage, setRowsPerPage] = useState<number | 'all'>(15);
   const [choices, setChoices] = useState<ProductChoice[]>([]);
   const [vehicles, setVehicles] = useState<CustomerVehicle[]>([]);
   const [paymentOptions, setPaymentOptions] = useState<PaymentOption[]>([]);
+  const [depotTransportFees, setDepotTransportFees] = useState<Record<string, number>>({});
   const [creditLimit, setCreditLimit] = useState(0);
   const [usedCredit, setUsedCredit] = useState(0);
   const [editingOriginalAmount, setEditingOriginalAmount] = useState(0);
@@ -261,17 +266,22 @@ export default function CustomerOrdersPage() {
     items: FormItem[],
     selectedDepotId: string,
     paymentConditionId: string,
+    receiveMethod: string,
   ): FormItem[] => {
-    const extra = paymentExtraById(paymentOptions, paymentConditionId);
+    const depotTransportFee = receiveMethod === 'PICKUP_BY_TRUCK' ? 0 : Number(depotTransportFees[selectedDepotId] || 0);
+    const extra = paymentExtraById(paymentOptions, paymentConditionId) + depotTransportFee;
     return items.map((it) => {
       const depotOpt = (depotChoicesByProduct[it.key] || []).find((d) => (d.depot_id || '') === selectedDepotId);
       const base = Number(depotOpt?.unit_price || 0);
-      const nextUnitPrice = base > 0 ? base + extra : 0;
+      const baseWithVat = base > 0 ? base * 1.07 : 0;
+      const nextUnitPrice = baseWithVat > 0 ? baseWithVat + extra : 0;
+
+
       return {
         ...it,
         refinery_id: depotOpt?.refinery_id ?? it.refinery_id,
         depot_id: selectedDepotId || '',
-        unit_price: nextUnitPrice,
+        unit_price: Number(nextUnitPrice.toFixed(2)),
       };
     });
   };
@@ -280,6 +290,16 @@ export default function CustomerOrdersPage() {
     if (!paymentOptions.length) return;
     setForm((prev) => (prev.payment_condition_id ? prev : { ...prev, payment_condition_id: paymentOptions[0].id }));
   }, [paymentOptions]);
+
+  useEffect(() => {
+    if (!open) return;
+    if (form.id) return;
+    if (!form.selected_depot_id) return;
+    setForm((prev) => ({
+      ...prev,
+      items: recalcItemsByDepotAndPayment(prev.items, prev.selected_depot_id, prev.payment_condition_id, prev.receive_method),
+    }));
+  }, [depotTransportFees, form.id, form.payment_condition_id, form.receive_method, form.selected_depot_id, open]);
 
   useEffect(() => {
     // On slower environments (e.g. Vercel), choices may load after opening "new order".
@@ -315,6 +335,7 @@ export default function CustomerOrdersPage() {
 
     setCreditLimit(Number(data.customer?.credit_limit || 0));
     setUsedCredit(Number(data.credit?.used_credit || 0));
+    setDepotTransportFees(data.access?.depot_transport_fees || {});
 
     const roundsById = new Map<string, { refinery_id: string | null; refinery_name: string }>(
       (data.rounds || []).map((r: any) => [r.id, { refinery_id: r.refinery_id ?? null, refinery_name: r.refineries?.name || '-' }]),
@@ -407,9 +428,23 @@ export default function CustomerOrdersPage() {
     void loadVehicles();
   }, []);
 
-  const openNew = () => {
-    setEditingOriginalAmount(0);
-    setForm({
+  const buildNewForm = (prefill?: { depotId?: string; paymentConditionId?: string }): FormState => {
+    const nextPaymentId = paymentOptions.some((p) => p.id === prefill?.paymentConditionId)
+      ? String(prefill?.paymentConditionId)
+      : paymentOptions[0]?.id || '';
+    const nextDepotId = depotOptions.some((d) => d.depot_id === prefill?.depotId)
+      ? String(prefill?.depotId)
+      : '';
+    const nextItems = nextDepotId
+      ? recalcItemsByDepotAndPayment(
+        choices.map((c) => ({ ...c, selected: false, liters: 0 })),
+        nextDepotId,
+        nextPaymentId,
+        'DELIVER_BY_TRUCK',
+      )
+      : choices.map((c) => ({ ...c, selected: false, liters: 0 }));
+
+    return {
       requested_delivery_date: new Date().toISOString().slice(0, 10),
       customer_po_no: '',
       order_no: '',
@@ -421,12 +456,33 @@ export default function CustomerOrdersPage() {
       vehicle_driver_name: '',
       vehicle_driver_phone: '',
       vehicle_pickup_license_number: '',
-      payment_condition_id: paymentOptions[0]?.id || '',
-      selected_depot_id: '',
-      items: choices.map((c) => ({ ...c, selected: false, liters: 0 })),
-    });
+      payment_condition_id: nextPaymentId,
+      selected_depot_id: nextDepotId,
+      items: nextItems,
+    };
+  };
+
+  const openNew = () => {
+    setEditingOriginalAmount(0);
+    setForm(buildNewForm());
     setOpen(true);
   };
+
+  useEffect(() => {
+    if (orderPrefillAppliedRef.current) return;
+    if (typeof window === 'undefined') return;
+    const params = new URLSearchParams(window.location.search);
+    if (params.get('new') !== '1') return;
+    if (!choices.length || !paymentOptions.length || !depotOptions.length) return;
+
+    orderPrefillAppliedRef.current = true;
+    setEditingOriginalAmount(0);
+    setForm(buildNewForm({
+      depotId: params.get('depot_id') || '',
+      paymentConditionId: params.get('payment_condition_id') || '',
+    }));
+    setOpen(true);
+  }, [choices, paymentOptions, depotOptions, depotChoicesByProduct, depotTransportFees]);
 
   const openEdit = async (id: string) => {
     const [detailRes] = await Promise.all([fetch(`/api/customer-portal/orders/${id}`, { cache: 'no-store' })]);
@@ -725,7 +781,7 @@ export default function CustomerOrdersPage() {
         }}
       >
         <Stack spacing={2} sx={{ width: { xs: '100vw', sm: 700, md: 1120 }, maxWidth: '100vw', p: { xs: 1.25, md: 2.5 }, pb: { xs: 11, md: 2.5 } }}>
-          <Typography variant='h6'>{form.order_no ? `แก้ไขคำสั่งซื้อ ${form.order_no}` : 'รายละเอียดเพิ่มเติมสำหรับคำสั่งซื้อ'}</Typography>
+          <Typography variant='h6'>{form.order_no ? `แก้ไขคำสั่งซื้อ ${form.order_no} (ราคานี้รวม Vat แล้ว)` : 'รายละเอียดเพิ่มเติมสำหรับคำสั่งซื้อ (ราคานี้รวม Vat แล้ว)'}</Typography>
 
           <Stack direction={{ xs: 'column', md: 'row' }} spacing={1.2}>
             <TextField sx={{ display: 'none' }} label='วันที่ต้องการให้จัดส่ง' type='date' value={form.requested_delivery_date} onChange={(e) => setForm((p) => ({ ...p, requested_delivery_date: e.target.value }))} InputLabelProps={{ shrink: true }} fullWidth />
@@ -747,7 +803,7 @@ export default function CustomerOrdersPage() {
                     return {
                       ...p,
                       payment_condition_id: nextPaymentId,
-                      items: recalcItemsByDepotAndPayment(p.items, p.selected_depot_id, nextPaymentId),
+                      items: recalcItemsByDepotAndPayment(p.items, p.selected_depot_id, nextPaymentId, p.receive_method),
                     };
                   });
                 }}
@@ -800,7 +856,7 @@ export default function CustomerOrdersPage() {
                 onChange={(e) => {
                   const depotId = e.target.value;
                   setForm((p) => {
-                    const nextItems = recalcItemsByDepotAndPayment(p.items, depotId, p.payment_condition_id).map((it) => ({
+                    const nextItems = recalcItemsByDepotAndPayment(p.items, depotId, p.payment_condition_id, p.receive_method).map((it) => ({
                       ...it,
                       selected: false,
                       liters: 0,
@@ -824,6 +880,11 @@ export default function CustomerOrdersPage() {
                 sx={{ minWidth: 280 }}
               />
             </Stack>
+            {form.receive_method !== 'PICKUP_BY_TRUCK' && form.selected_depot_id && Number(depotTransportFees[form.selected_depot_id] || 0) > 0 ? (
+              <Alert severity='info' sx={{ mt: 1 }}>
+                ราคาต่อหน่วยรวมค่าขนส่งเพิ่ม {money(depotTransportFees[form.selected_depot_id])} บาท/ลิตร สำหรับคลังนี้
+              </Alert>
+            ) : null}
           </Paper>
 
           <Paper sx={{ border: '1px solid #d7e0ea' }}>
@@ -933,7 +994,16 @@ export default function CustomerOrdersPage() {
             <Stack direction={{ xs: 'column', md: 'row' }} spacing={1}>
               {receiveMethods.map((m) => (
                 <Card key={m.code} sx={{ flex: 1, border: form.receive_method === m.code ? '2px solid #2563eb' : '1px solid #cfd8e3', bgcolor: form.receive_method === m.code ? '#ebf2ff' : '#fff' }}>
-                  <CardActionArea onClick={() => setForm((p) => ({ ...p, receive_method: m.code, customer_vehicle_id: m.code === 'PICKUP_BY_TRUCK' ? p.customer_vehicle_id : '', vehicle_license_plate: m.code === 'PICKUP_BY_TRUCK' ? p.vehicle_license_plate : '', vehicle_driver_name: m.code === 'PICKUP_BY_TRUCK' ? p.vehicle_driver_name : '', vehicle_driver_phone: m.code === 'PICKUP_BY_TRUCK' ? p.vehicle_driver_phone : '', vehicle_pickup_license_number: m.code === 'PICKUP_BY_TRUCK' ? p.vehicle_pickup_license_number : '' }))}>
+                  <CardActionArea onClick={() => setForm((p) => ({
+                    ...p,
+                    receive_method: m.code,
+                    customer_vehicle_id: m.code === 'PICKUP_BY_TRUCK' ? p.customer_vehicle_id : '',
+                    vehicle_license_plate: m.code === 'PICKUP_BY_TRUCK' ? p.vehicle_license_plate : '',
+                    vehicle_driver_name: m.code === 'PICKUP_BY_TRUCK' ? p.vehicle_driver_name : '',
+                    vehicle_driver_phone: m.code === 'PICKUP_BY_TRUCK' ? p.vehicle_driver_phone : '',
+                    vehicle_pickup_license_number: m.code === 'PICKUP_BY_TRUCK' ? p.vehicle_pickup_license_number : '',
+                    items: p.selected_depot_id ? recalcItemsByDepotAndPayment(p.items, p.selected_depot_id, p.payment_condition_id, m.code) : p.items,
+                  }))}>
                     <CardContent>
                       <Stack spacing={1} alignItems='center'>
                         {m.icon}

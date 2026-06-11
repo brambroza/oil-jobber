@@ -31,7 +31,7 @@ export async function POST(req: NextRequest) {
   if (!effectiveDate) return NextResponse.json({ error: 'กรุณาระบุวันที่มีผล' }, { status: 422 });
   if (!effectiveTime) return NextResponse.json({ error: 'กรุณาระบุเวลา' }, { status: 422 });
   if ((expiresDate && !expiresTime) || (!expiresDate && expiresTime)) {
-    return NextResponse.json({ error: 'กรุณาระบุวันและเวลาหมดอายุให้ครบ' }, { status: 422 });
+    return NextResponse.json({ error: 'กรุณาระบุวันและเวลาออกให้ครบ' }, { status: 422 });
   }
   if (!rows.length) return NextResponse.json({ error: 'ไม่มีรายการราคาให้บันทึก' }, { status: 422 });
 
