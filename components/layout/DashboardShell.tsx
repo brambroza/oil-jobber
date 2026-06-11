@@ -79,6 +79,7 @@ const menuGroups: MenuGroup[] = [
     title: 'LINE',
     items: [
       /*     { label: 'ลูกค้า LINE', href: '/dashboard/line/customers', icon: <TextsmsOutlined fontSize='small' /> }, */
+      { label: 'ส่งข่าวสาร LINE', href: '/dashboard/line/news', icon: <CampaignOutlined fontSize='small' /> },
       { label: 'แชท LINE', href: '/dashboard/line/chat', icon: <TextsmsOutlined fontSize='small' /> },
     ],
   },
