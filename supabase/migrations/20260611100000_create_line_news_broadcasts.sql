@@ -5,7 +5,6 @@ create table if not exists line_news_broadcasts (
   title text not null,
   descriptions text not null,
   flex_payload jsonb,
-  scheduled_at timestamptz,
   sent_at timestamptz,
   status text not null default 'DRAFT',
   created_at timestamptz default now(),
@@ -30,7 +29,7 @@ create table if not exists line_news_broadcast_recipients (
 );
 
 create index if not exists idx_line_news_broadcasts_company_status
-on line_news_broadcasts(company_id, status, scheduled_at desc)
+on line_news_broadcasts(company_id, status, created_at desc)
 where is_deleted = false;
 
 create unique index if not exists uq_line_news_broadcasts_company_seq_active

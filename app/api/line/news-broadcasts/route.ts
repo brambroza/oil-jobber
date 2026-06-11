@@ -17,7 +17,7 @@ export async function GET(req: NextRequest) {
 
   const { data: broadcasts, error } = await supabaseAdmin
     .from('line_news_broadcasts')
-    .select('id, seq, title, descriptions, scheduled_at, sent_at, status, created_at, updated_at')
+    .select('id, seq, title, descriptions, sent_at, status, created_at, updated_at')
     .eq('company_id', companyId)
     .eq('is_deleted', false)
     .order('seq', { ascending: false });
@@ -68,19 +68,15 @@ export async function POST(req: NextRequest) {
   const descriptions = String(body.descriptions || '').trim();
   const recipientIds = Array.isArray(body.recipient_ids) ? body.recipient_ids.map((id: unknown) => String(id)) : [];
   const action = String(body.action || 'DRAFT');
-  const scheduledAt = body.scheduled_at ? new Date(body.scheduled_at).toISOString() : null;
 
   if (!seq) return NextResponse.json({ error: 'กรุณาระบุ seq' }, { status: 422 });
   if (!title) return NextResponse.json({ error: 'กรุณาระบุหัวข้อข่าวสาร' }, { status: 422 });
   if (!descriptions) return NextResponse.json({ error: 'กรุณาระบุรายละเอียดข่าวสาร' }, { status: 422 });
-  if ((action === 'SEND_NOW' || action === 'SCHEDULED') && !recipientIds.length) {
+  if (action === 'SEND_NOW' && !recipientIds.length) {
     return NextResponse.json({ error: 'กรุณาเลือกผู้รับอย่างน้อย 1 รายการ' }, { status: 422 });
   }
-  if (action === 'SCHEDULED' && !scheduledAt) {
-    return NextResponse.json({ error: 'กรุณาระบุเวลาส่ง' }, { status: 422 });
-  }
 
-  const nextStatus = action === 'SEND_NOW' ? 'SENDING' : action === 'SCHEDULED' ? 'SCHEDULED' : 'DRAFT';
+  const nextStatus = action === 'SEND_NOW' ? 'SENDING' : 'DRAFT';
   const { data: news, error } = await supabaseAdmin
     .from('line_news_broadcasts')
     .insert({
@@ -88,11 +84,10 @@ export async function POST(req: NextRequest) {
       seq,
       title,
       descriptions,
-      scheduled_at: action === 'SCHEDULED' ? scheduledAt : null,
       status: nextStatus,
       flex_payload: buildLineNewsFlex({ seq, title, descriptions }),
     })
-    .select('id, seq, title, descriptions, scheduled_at, sent_at, status, created_at, updated_at')
+    .select('id, seq, title, descriptions, sent_at, status, created_at, updated_at')
     .single();
 
   if (error) return NextResponse.json({ error: error.message }, { status: 400 });

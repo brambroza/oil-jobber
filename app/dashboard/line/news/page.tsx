@@ -39,7 +39,6 @@ type NewsBroadcast = {
   seq: number;
   title: string;
   descriptions: string;
-  scheduled_at: string | null;
   sent_at: string | null;
   status: string;
   created_at: string;
@@ -54,7 +53,6 @@ type FormState = {
   seq: number;
   title: string;
   descriptions: string;
-  scheduled_at: string;
   recipient_ids: string[];
 };
 
@@ -62,22 +60,12 @@ const emptyForm: FormState = {
   seq: 1,
   title: '',
   descriptions: '',
-  scheduled_at: '',
   recipient_ids: [],
 };
-
-function toDateTimeLocal(value: string | null) {
-  if (!value) return '';
-  const date = new Date(value);
-  if (Number.isNaN(date.getTime())) return '';
-  const offsetDate = new Date(date.getTime() - date.getTimezoneOffset() * 60000);
-  return offsetDate.toISOString().slice(0, 16);
-}
 
 function statusColor(status: string) {
   if (status === 'SENT') return 'success';
   if (status === 'PARTIAL') return 'warning';
-  if (status === 'SCHEDULED') return 'info';
   if (status === 'SENDING') return 'secondary';
   return 'default';
 }
@@ -124,32 +112,8 @@ export default function LineNewsPage() {
     }
   };
 
-  const runDueBroadcasts = async () => {
-    if (!companyId) return;
-    const res = await fetch('/api/line/news-broadcasts/send-due', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ company_id: companyId }),
-    });
-    const data = await res.json().catch(() => ({}));
-    if (!res.ok) throw new Error(data.error || 'ส่งข่าวสารที่ตั้งเวลาไว้ไม่สำเร็จ');
-    if (Number(data.processed || 0) > 0) {
-      setSuccess(`ส่งข่าวสารที่ถึงเวลาแล้ว ${data.processed} รายการ`);
-      await load();
-    }
-  };
-
   useEffect(() => {
     void load();
-  }, [companyId]);
-
-  useEffect(() => {
-    if (!companyId) return;
-    void runDueBroadcasts().catch((e) => setError((e as Error).message));
-    const timer = window.setInterval(() => {
-      void runDueBroadcasts().catch((e) => setError((e as Error).message));
-    }, 60000);
-    return () => window.clearInterval(timer);
   }, [companyId]);
 
   const openNew = () => {
@@ -165,7 +129,6 @@ export default function LineNewsPage() {
       seq: Number(row.seq || 1),
       title: row.title || '',
       descriptions: row.descriptions || '',
-      scheduled_at: toDateTimeLocal(row.scheduled_at),
       recipient_ids: row.recipient_ids || [],
     });
     setOpen(true);
@@ -182,7 +145,7 @@ export default function LineNewsPage() {
     }));
   };
 
-  const submit = async (action: 'DRAFT' | 'SCHEDULED' | 'SEND_NOW') => {
+  const submit = async (action: 'DRAFT' | 'SEND_NOW') => {
     setSaving(true);
     setError('');
     setSuccess('');
@@ -192,9 +155,8 @@ export default function LineNewsPage() {
         seq: form.seq,
         title: form.title,
         descriptions: form.descriptions,
-        scheduled_at: form.scheduled_at ? new Date(form.scheduled_at).toISOString() : null,
         recipient_ids: form.recipient_ids,
-        status: action === 'SCHEDULED' ? 'SCHEDULED' : 'DRAFT',
+        status: 'DRAFT',
         action,
       };
 
@@ -213,7 +175,7 @@ export default function LineNewsPage() {
           if (!sendRes.ok && sendRes.status !== 207) throw new Error(sendData.error || 'ส่งข่าวสาร LINE ไม่สำเร็จ');
           setSuccess(sendRes.status === 207 ? 'ส่งข่าวสารบางรายการไม่สำเร็จ กรุณาตรวจสอบสถานะ' : 'ส่งข่าวสาร LINE เรียบร้อยแล้ว');
         } else {
-          setSuccess(action === 'SCHEDULED' ? 'ตั้งเวลาส่งข่าวสารเรียบร้อยแล้ว' : 'บันทึก draft เรียบร้อยแล้ว');
+          setSuccess('บันทึก draft เรียบร้อยแล้ว');
         }
       } else {
         const res = await fetch('/api/line/news-broadcasts', {
@@ -223,7 +185,7 @@ export default function LineNewsPage() {
         });
         const data = await res.json();
         if (!res.ok && res.status !== 207) throw new Error(data.error || 'บันทึกข่าวสาร LINE ไม่สำเร็จ');
-        setSuccess(action === 'SEND_NOW' ? (res.status === 207 ? 'ส่งข่าวสารบางรายการไม่สำเร็จ กรุณาตรวจสอบสถานะ' : 'ส่งข่าวสาร LINE เรียบร้อยแล้ว') : action === 'SCHEDULED' ? 'ตั้งเวลาส่งข่าวสารเรียบร้อยแล้ว' : 'บันทึก draft เรียบร้อยแล้ว');
+        setSuccess(action === 'SEND_NOW' ? (res.status === 207 ? 'ส่งข่าวสารบางรายการไม่สำเร็จ กรุณาตรวจสอบสถานะ' : 'ส่งข่าวสาร LINE เรียบร้อยแล้ว') : 'บันทึก draft เรียบร้อยแล้ว');
       }
 
       setOpen(false);
@@ -234,7 +196,7 @@ export default function LineNewsPage() {
       setSaving(false);
     }
   };
-  
+
   const sendExisting = async (id: string) => {
     setSaving(true);
     setError('');
@@ -275,9 +237,6 @@ export default function LineNewsPage() {
     <PageScaffold title='ส่งข่าวสาร LINE'>
       <Stack spacing={2}>
         <Stack direction='row' justifyContent='flex-end' spacing={1}>
-          <Button variant='outlined' disabled={saving} onClick={() => void runDueBroadcasts().catch((e) => setError((e as Error).message))}>
-            ส่งรายการที่ถึงเวลา
-          </Button>
           <Button variant='contained' startIcon={<Add />} onClick={openNew}>สร้างข่าวสาร</Button>
         </Stack>
         {error ? <Alert severity='error'>{error}</Alert> : null}
@@ -291,7 +250,6 @@ export default function LineNewsPage() {
                 <TableCell width={90}>Seq</TableCell>
                 <TableCell>หัวข้อ</TableCell>
                 <TableCell>ผู้รับ</TableCell>
-                <TableCell>เวลาส่ง</TableCell>
                 <TableCell>สถานะ</TableCell>
                 <TableCell align='right'>จัดการ</TableCell>
               </TableRow>
@@ -313,7 +271,6 @@ export default function LineNewsPage() {
                       {row.failed_count ? <Chip size='small' color='warning' label={`ผิดพลาด ${row.failed_count}`} /> : null}
                     </Stack>
                   </TableCell>
-                  <TableCell>{row.scheduled_at ? new Date(row.scheduled_at).toLocaleString('th-TH') : '-'}</TableCell>
                   <TableCell><Chip size='small' color={statusColor(row.status) as any} label={row.status} /></TableCell>
                   <TableCell align='right'>
                     {!['SENT', 'PARTIAL'].includes(row.status) ? (
@@ -327,7 +284,7 @@ export default function LineNewsPage() {
                 </TableRow>
               ))}
               {!rows.length && !loading ? (
-                <TableRow><TableCell colSpan={6} align='center'>ยังไม่มีข่าวสาร LINE</TableCell></TableRow>
+                <TableRow><TableCell colSpan={5} align='center'>ยังไม่มีข่าวสาร LINE</TableCell></TableRow>
               ) : null}
             </TableBody>
           </Table>
@@ -365,15 +322,6 @@ export default function LineNewsPage() {
                 minRows={6}
                 placeholder='พิมพ์รายละเอียดข่าวสาร แยกบรรทัดได้'
               />
-              <TextField
-                size='small'
-                label='ตั้งเวลาส่ง'
-                type='datetime-local'
-                value={form.scheduled_at}
-                onChange={(e) => setForm((prev) => ({ ...prev, scheduled_at: e.target.value }))}
-                InputLabelProps={{ shrink: true }}
-              />
-
               <Paper variant='outlined' sx={{ p: 1.25, borderColor: '#dbe4f0' }}>
                 <Stack spacing={1}>
                   <Stack direction='row' alignItems='center' justifyContent='space-between'>
@@ -433,7 +381,6 @@ export default function LineNewsPage() {
         <DialogActions>
           <Button onClick={() => setOpen(false)}>ยกเลิก</Button>
           <Button disabled={saving} onClick={() => void submit('DRAFT')}>บันทึก Draft</Button>
-          <Button disabled={saving || !form.scheduled_at} variant='outlined' onClick={() => void submit('SCHEDULED')}>ตั้งเวลาส่ง</Button>
           <Button disabled={saving} variant='contained' startIcon={<Send />} onClick={() => void submit('SEND_NOW')}>ส่งทันที</Button>
         </DialogActions>
       </Dialog>

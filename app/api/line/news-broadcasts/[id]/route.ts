@@ -21,14 +21,10 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
   const title = String(body.title || '').trim();
   const descriptions = String(body.descriptions || '').trim();
   const recipientIds = Array.isArray(body.recipient_ids) ? body.recipient_ids.map((recipientId: unknown) => String(recipientId)) : [];
-  const status = String(body.status || 'DRAFT');
-  const scheduledAt = body.scheduled_at ? new Date(body.scheduled_at).toISOString() : null;
 
   if (!seq) return NextResponse.json({ error: 'กรุณาระบุ seq' }, { status: 422 });
   if (!title) return NextResponse.json({ error: 'กรุณาระบุหัวข้อข่าวสาร' }, { status: 422 });
   if (!descriptions) return NextResponse.json({ error: 'กรุณาระบุรายละเอียดข่าวสาร' }, { status: 422 });
-  if (status === 'SCHEDULED' && !recipientIds.length) return NextResponse.json({ error: 'กรุณาเลือกผู้รับอย่างน้อย 1 รายการ' }, { status: 422 });
-  if (status === 'SCHEDULED' && !scheduledAt) return NextResponse.json({ error: 'กรุณาระบุเวลาส่ง' }, { status: 422 });
 
   const { data: current, error: currentError } = await supabaseAdmin
     .from('line_news_broadcasts')
@@ -49,13 +45,12 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
       seq,
       title,
       descriptions,
-      scheduled_at: status === 'SCHEDULED' ? scheduledAt : null,
-      status,
+      status: 'DRAFT',
       flex_payload: buildLineNewsFlex({ seq, title, descriptions }),
     })
     .eq('id', id)
     .eq('company_id', companyId)
-    .select('id, seq, title, descriptions, scheduled_at, sent_at, status, created_at, updated_at')
+    .select('id, seq, title, descriptions, sent_at, status, created_at, updated_at')
     .single();
 
   if (error) return NextResponse.json({ error: error.message }, { status: 400 });

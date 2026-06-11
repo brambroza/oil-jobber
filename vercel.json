@@ -1,8 +1,0 @@
-{
-  "crons": [
-    {
-      "path": "/api/line/news-broadcasts/send-due",
-      "schedule": "*/5 * * * *"
-    }
-  ]
-}
