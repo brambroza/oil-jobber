@@ -185,6 +185,36 @@ function orderStatusThai(status?: string | null): string {
   return map[status] || status;
 }
 
+function doFileKind(url?: string | null): 'pdf' | 'image' | 'file' {
+  const cleanUrl = String(url || '').split('?')[0].toLowerCase();
+  if (cleanUrl.endsWith('.pdf')) return 'pdf';
+  if (/\.(jpe?g|png|webp|gif)$/i.test(cleanUrl)) return 'image';
+  return 'file';
+}
+
+function doOpenLabel(url?: string | null): string {
+  const kind = doFileKind(url);
+  if (kind === 'pdf') return 'เปิด PDF';
+  if (kind === 'image') return 'เปิดรูป';
+  return 'เปิดเอกสาร DO';
+}
+
+function escapeHtml(value: unknown): string {
+  return String(value ?? '')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+}
+
+function dateTh(value?: string | null): string {
+  if (!value) return '-';
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return String(value);
+  return date.toLocaleDateString('th-TH');
+}
+
 function paymentExtraById(paymentOptions: PaymentOption[], paymentConditionId: string): number {
   const selected = paymentOptions.find((p) => p.id === paymentConditionId);
   return Number(selected?.extra_cost_per_liter || 0);
@@ -192,6 +222,7 @@ function paymentExtraById(paymentOptions: PaymentOption[], paymentConditionId: s
 
 export default function CustomerOrdersPage() {
   const orderPrefillAppliedRef = useRef(false);
+  const drFrameRef = useRef<HTMLIFrameElement | null>(null);
   const [orders, setOrders] = useState<OrderRow[]>([]);
   const [page, setPage] = useState(0);
   const [rowsPerPage, setRowsPerPage] = useState<number | 'all'>(15);
@@ -209,6 +240,12 @@ export default function CustomerOrdersPage() {
   const [error, setError] = useState('');
   const [deleteId, setDeleteId] = useState<string | null>(null);
   const [pdfViewerUrl, setPdfViewerUrl] = useState<string | null>(null);
+  const [drGeneratingId, setDrGeneratingId] = useState<string | null>(null);
+  const [drPreview, setDrPreview] = useState<{ open: boolean; title: string; html: string }>({
+    open: false,
+    title: '',
+    html: '',
+  });
   const [snack, setSnack] = useState<{ open: boolean; message: string; severity: 'success' | 'error' }>({
     open: false,
     message: '',
@@ -587,6 +624,176 @@ export default function CustomerOrdersPage() {
     await loadChoices();
   };
 
+  const createDeliveryRecordPdf = async (orderId: string) => {
+    setDrGeneratingId(orderId);
+    try {
+      const [detailRes, customerRes] = await Promise.all([
+        fetch(`/api/customer-portal/orders/${orderId}`, { cache: 'no-store' }),
+        fetch('/api/customer-portal/customer', { cache: 'no-store' }),
+      ]);
+      const detail = await detailRes.json();
+      const customer = await customerRes.json();
+      if (!detailRes.ok) throw new Error(detail.error || 'โหลดรายละเอียดคำสั่งซื้อไม่สำเร็จ');
+      if (!customerRes.ok) throw new Error(customer.error || 'โหลดข้อมูลลูกค้าไม่สำเร็จ');
+
+      const items = (detail.sale_order_items || []).filter((x: any) => !x.is_deleted);
+      const docNo = detail.delivery_order_no || detail.order_no || detail.id?.slice(0, 8) || '-';
+      const refNo = detail.customer_po_no || detail.order_no || detail.id?.slice(0, 8) || '-';
+      const docDate = detail.requested_delivery_date || detail.created_at;
+      const totalLiters = items.reduce((sum: number, x: any) => sum + Number(x.liters || 0), 0);
+      const itemCount = Math.max(items.length, 1);
+      const rowHeightMm = Math.max(18, Math.min(153, Math.floor(153 / itemCount)));
+      const rowsHtml = items.map((it: any, idx: number) => {
+        const liters = Number(it.liters || 0);
+        const productTitle = it.product_name || it.product_code || '-';
+        const depot = it.depots;
+        const refinery = it.refineries;
+        const depotLabel = [depot?.code, depot?.name].filter(Boolean).join(' - ');
+        const location =  detail.delivery_location || receiveMethodThai(detail.receive_method);
+        return `
+          <tr  >
+            <td class="desc">
+              <div><strong>${idx + 1})&nbsp;&nbsp;${escapeHtml(productTitle)}</strong></div>
+              <div>${escapeHtml(depotLabel|| productTitle)}</div>
+              <div>${escapeHtml(location)}</div>
+            </td>
+            <td class="num shade">${liters.toLocaleString('th-TH')}</td>
+            <td class="num">${liters.toLocaleString('th-TH', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</td>
+            <td class="num shade">${liters.toLocaleString('th-TH', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</td>
+            <td class="num">${liters.toLocaleString('th-TH', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</td>
+          </tr>
+        `;
+      }).join('');
+
+      const html = `<!doctype html>
+        <html>
+          <head>
+            <meta charset="utf-8" />
+            <title>Delivery Record ${escapeHtml(docNo)}</title>
+            <style>
+              @page { size: A4 portrait; margin: 0; }
+              * { box-sizing: border-box; }
+              html, body { margin: 0; background: #e5e7eb; font-family: Arial, "Tahoma", sans-serif; color: #111827; font-size: 10.5px; }
+              .page { position: relative; width: 210mm; min-height: 297mm; margin: 0 auto; background: #fff; border: 1px solid #111; overflow: hidden; }
+              .topbar { height: 3px; background: #222; }
+              .content { padding: 11mm 10.5mm 0; }
+              .seller { font-size: 10.5px; line-height: 1.42; }
+              .seller h1 { margin: 0 0 3px; font-size: 14px; font-weight: 700; }
+              .seller .tax { margin-top: 14px; }
+              .divider { border-top: 1px solid #cfcfd4; margin: 7px -10.5mm 9px; }
+              .info { display: grid; grid-template-columns: 0.95fr 1.05fr; gap: 16px; align-items: start; }
+              .customer { line-height: 1.48; }
+              .customer .label { color: #4b4f60; margin-bottom: 7px; }
+              .customer .name { font-weight: 700; }
+              .titleBox { text-align: right; padding-top: 21px; }
+              .titleBox h2 { margin: 0; color: #6d66a8; font-size: 17px; }
+              .titleBox .en { margin-top: 7px; font-size: 12px; color: #444; }
+              .meta { margin-top: 33px; margin-left: auto; width: 380px; display: grid; grid-template-columns: repeat(3, 1fr); background: #716ab0; color: #fff; }
+              .meta div { padding: 8px 12px; min-height: 43px; font-weight: 700; }
+              .meta strong { display: block; margin-bottom: 5px; font-size: 10px; }
+              table { width: calc(100% + 21mm); margin-left: -10.5mm; border-collapse: collapse; margin-top: 9px; table-layout: fixed; }
+              thead th { color: #4e4a78; font-weight: 700; padding: 6px 8px; border-bottom: 1px solid #ececf2; vertical-align: bottom; }
+              thead .descHead { text-align: left ; width: 50%; padding-left : 40px}
+              thead .qty { width: 12.5%; }
+              thead small { display: block; font-size: 8.5px; color: #4e4a78; font-weight: 400; }
+              tbody td { vertical-align: top; padding: 7px 10px; border-top: 1px solid #f2f2f6; }
+              tbody tr.itemRow td { height: ${rowHeightMm}mm; }
+              tbody .desc { font-size: 10.5px; line-height: 1.48; padding-left: 10.5mm; }
+              .num { text-align: right; font-size: 10.5px; }
+              .shade { background: #f0eff7; }
+              .totals { position: absolute; right: 0; bottom: 20mm; width: 79mm; font-size: 10.5px; }
+              .totalRow { display: grid; grid-template-columns: 1fr 1fr; min-height: 10mm; align-items: center; }
+              .totalRow div { padding: 4px 10px; text-align: right; font-weight: 700; }
+              .totalRow.final { background: #716ab0; color: #fff; font-size: 12px; }
+              .footerLine { position: absolute; left: 0; right: 0; bottom: 10mm; border-top: 2px solid #716ab0; }
+              .footer { position: absolute; left: 10.5mm; right: 10.5mm; bottom: 4mm; display: flex; justify-content: space-between; align-items: end; font-size: 7px; color: #333; }
+              @media print {
+                html, body { background: #fff; }
+                .page { border: none; margin: 0; width: 210mm; min-height: 297mm; }
+              }
+            </style>
+          </head>
+          <body>
+            <div class="page">
+              <div class="topbar"></div>
+              <div class="content">
+                <section class="seller">
+                  <h1>บริษัท เจเอฟซี โซลูชั่น จำกัด <span style="font-size:9px;font-weight:400;">(สำนักงานใหญ่)</span></h1>
+                  <div>1000/53 อาคารลิเบอร์ตี้พลาซ่า ชั้น 3 ซอยสุขุมวิท 55 (ทองหล่อ)</div>
+                  <div>แขวงคลองตันเหนือ เขตวัฒนา กรุงเทพมหานคร 10110</div>
+                  <div class="tax">เลขประจำตัวผู้เสียภาษี: 0105564136372</div>
+                </section>
+                <div class="divider"></div>
+                <section class="info">
+                  <div class="customer">
+                    <div class="label">ข้อมูลลูกค้า:</div>
+                    <div class="name">${escapeHtml(customer.company_name || '-')}</div>
+                    <div>${escapeHtml(customer.address || '-')}</div>
+                    <div>T: ${escapeHtml(customer.phone || '-')}</div>
+                    <div style="margin-top:9px;">เลขประจำตัวผู้เสียภาษี: ${escapeHtml(customer.tax_id || '-')}</div>
+                  </div>
+                  <div>
+                    <div class="titleBox">
+                      <h2>บันทึกการส่งของ</h2>
+                      <div class="en">Delivery Record</div>
+                    </div>
+                    <div class="meta">
+                      <div><strong>เอกสารอ้างอิง</strong>${escapeHtml(refNo)}</div>
+                      <div><strong>วันที่</strong>${escapeHtml(dateTh(docDate))}</div>
+                      <div><strong>เลขที่เอกสาร</strong>${escapeHtml(docNo)}</div>
+                    </div>
+                  </div>
+                </section>
+                <table>
+                  <thead>
+                    <tr>
+                      <th class="descHead">รายละเอียด<small>Product Description</small></th>
+                      <th class="qty">จำนวน<small>Quantity</small></th>
+                      <th class="qty">บรรจุแล้ว<small>Packed</small></th>
+                      <th class="qty">ส่งแล้ว<small>Shipped</small></th>
+                      <th class="qty">ได้รับของแล้ว<small>Delivered</small></th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    ${rowsHtml || '<tr><td class="desc">ไม่พบรายการสินค้า</td><td></td><td></td><td></td><td></td></tr>'}
+                  </tbody>
+                </table>
+              </div>
+              <div class="totals">
+                <div class="totalRow"><div>บรรจุแล้ว</div><div>${totalLiters.toLocaleString('th-TH', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</div></div>
+                <div class="totalRow"><div>ส่งแล้ว</div><div>${totalLiters.toLocaleString('th-TH', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</div></div>
+                <div class="totalRow final"><div>ได้รับแล้ว</div><div>${totalLiters.toLocaleString('th-TH', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</div></div>
+              </div>
+              <div class="footerLine"></div>
+              <div class="footer">
+                <div>
+ 
+                  <div>Printed by: ${escapeHtml(customer.company_name || '-')} ${escapeHtml(new Date().toLocaleString('th-TH'))}</div>
+                </div>
+                <div>Page 1 of 1</div>
+              </div>
+            </div>
+          </body>
+        </html>`;
+
+      setDrPreview({ open: true, title: `Delivery Record ${docNo}`, html });
+      setSnack({ open: true, message: 'สร้างตัวอย่าง PDF DR แล้ว', severity: 'success' });
+    } catch (err) {
+      const message = (err as Error).message || 'สร้าง PDF DR ไม่สำเร็จ';
+      setError(message);
+      setSnack({ open: true, message, severity: 'error' });
+    } finally {
+      setDrGeneratingId(null);
+    }
+  };
+
+  const printDeliveryRecordPdf = () => {
+    const contentWindow = drFrameRef.current?.contentWindow;
+    if (!contentWindow) return;
+    contentWindow.focus();
+    contentWindow.print();
+  };
+
   const onDelete = async () => {
     if (!deleteId) return;
     const res = await fetch(`/api/customer-portal/orders/${deleteId}`, { method: 'DELETE' });
@@ -647,7 +854,7 @@ export default function CustomerOrdersPage() {
                               onClick={() => setPdfViewerUrl(r.delivery_order_file_url || null)}
                               sx={{ alignSelf: 'flex-start', minWidth: 0, px: 1, py: 0.1, fontSize: 11 }}
                             >
-                              เปิดเอกสาร DO
+                              {doOpenLabel(r.delivery_order_file_url)}
                             </Button>
                           ) : null}
                         </Stack>
@@ -659,6 +866,15 @@ export default function CustomerOrdersPage() {
                     <TableCell align='right'>{Number(r.total_liters || 0).toLocaleString('th-TH')}</TableCell>
                     <TableCell>{orderStatusThai(r.order_status)}</TableCell>
                     <TableCell align='right'>
+                      <Button
+                        size='small'
+                        variant='outlined'
+                        onClick={() => void createDeliveryRecordPdf(r.id)}
+                        disabled={drGeneratingId === r.id}
+                        sx={{ mr: 0.5, minWidth: 0, px: 1, py: 0.2, fontSize: 11 }}
+                      >
+                        PDF DR
+                      </Button>
                       <IconButton onClick={() => void openEdit(r.id)}><Edit fontSize='small' /></IconButton>
                       <IconButton color='error' onClick={() => setDeleteId(r.id)}><Delete fontSize='small' /></IconButton>
                     </TableCell>
@@ -730,12 +946,21 @@ export default function CustomerOrdersPage() {
                             onClick={() => setPdfViewerUrl(r.delivery_order_file_url || null)}
                             sx={{ alignSelf: 'flex-start', minWidth: 0, px: 1, py: 0.1, fontSize: 11, borderColor: '#cbd5e1', color: '#334155' }}
                           >
-                            เปิดเอกสาร DO
+                            {doOpenLabel(r.delivery_order_file_url)}
                           </Button>
                         ) : null}
                       </Stack>
                     ) : null}
                     <Stack direction='row' justifyContent='flex-end' spacing={0.75} sx={{ pt: 0.1 }}>
+                      <Button
+                        size='small'
+                        variant='outlined'
+                        onClick={() => void createDeliveryRecordPdf(r.id)}
+                        disabled={drGeneratingId === r.id}
+                        sx={{ borderRadius: 1.5, minHeight: 34 }}
+                      >
+                        PDF DR
+                      </Button>
                       <IconButton onClick={() => void openEdit(r.id)} sx={{ border: '1px solid #e2e8f0', borderRadius: 1.5 }}>
                         <Edit fontSize='small' />
                       </IconButton>
@@ -1136,18 +1361,77 @@ export default function CustomerOrdersPage() {
         </DialogActions>
       </Dialog>
 
-      <Dialog open={Boolean(pdfViewerUrl)} onClose={() => setPdfViewerUrl(null)} maxWidth='lg' fullWidth>
-        <DialogTitle>เอกสาร DO</DialogTitle>
-        <DialogContent sx={{ p: 0, height: { xs: '70vh', md: '80vh' } }}>
-          {pdfViewerUrl ? (
+      <Dialog
+        open={drPreview.open}
+        onClose={() => setDrPreview({ open: false, title: '', html: '' })}
+        maxWidth='lg'
+        fullWidth
+      >
+        <DialogTitle>{drPreview.title || 'Delivery Record'}</DialogTitle>
+        <DialogContent sx={{ p: 0, height: { xs: '74vh', md: '82vh' }, bgcolor: '#e5e7eb' }}>
+          {drPreview.html ? (
             <iframe
-              src={pdfViewerUrl}
-              title='DO PDF Viewer'
-              style={{ width: '100%', height: '100%', border: 'none' }}
+              ref={drFrameRef}
+              title='Delivery Record PDF Preview'
+              srcDoc={drPreview.html}
+              style={{ width: '100%', height: '100%', border: 'none', display: 'block' }}
             />
           ) : null}
         </DialogContent>
         <DialogActions>
+          <Button variant='contained' onClick={printDeliveryRecordPdf} disabled={!drPreview.html}>
+            PDF DR
+          </Button>
+          <Button onClick={() => setDrPreview({ open: false, title: '', html: '' })}>ปิด</Button>
+        </DialogActions>
+      </Dialog>
+
+      <Dialog open={Boolean(pdfViewerUrl)} onClose={() => setPdfViewerUrl(null)} maxWidth='lg' fullWidth>
+        <DialogTitle>{pdfViewerUrl && doFileKind(pdfViewerUrl) === 'pdf' ? 'เอกสาร DO (PDF)' : 'เอกสาร DO'}</DialogTitle>
+        <DialogContent sx={{ p: 0, height: { xs: '70vh', md: '80vh' }, bgcolor: '#f8fafc' }}>
+          {pdfViewerUrl && doFileKind(pdfViewerUrl) === 'image' ? (
+            <Box
+              component='img'
+              src={pdfViewerUrl}
+              alt='Delivery Order'
+              sx={{ width: '100%', height: '100%', objectFit: 'contain', display: 'block', bgcolor: '#0f172a' }}
+            />
+          ) : null}
+          {pdfViewerUrl && doFileKind(pdfViewerUrl) === 'pdf' ? (
+            <object
+              data={`${pdfViewerUrl}#toolbar=1&navpanes=0`}
+              type='application/pdf'
+              width='100%'
+              height='100%'
+            >
+              <Stack spacing={1.5} alignItems='center' justifyContent='center' sx={{ height: '100%', p: 3 }}>
+                <Typography color='text.secondary'>ไม่สามารถแสดง PDF ในหน้าต่างนี้ได้</Typography>
+                <Button component='a' href={pdfViewerUrl} target='_blank' rel='noopener noreferrer' variant='contained'>
+                  เปิด PDF
+                </Button>
+              </Stack>
+            </object>
+          ) : null}
+          {pdfViewerUrl && doFileKind(pdfViewerUrl) === 'file' ? (
+            <Stack spacing={1.5} alignItems='center' justifyContent='center' sx={{ height: '100%', p: 3 }}>
+              <Typography color='text.secondary'>ไฟล์นี้ไม่รองรับการ preview ในระบบ</Typography>
+              <Button component='a' href={pdfViewerUrl} target='_blank' rel='noopener noreferrer' variant='contained'>
+                เปิดไฟล์
+              </Button>
+            </Stack>
+          ) : null}
+        </DialogContent>
+        <DialogActions>
+          {pdfViewerUrl && doFileKind(pdfViewerUrl) === 'pdf' ? (
+            <Button component='a' href={pdfViewerUrl} target='_blank' rel='noopener noreferrer' variant='contained'>
+              PDF
+            </Button>
+          ) : null}
+          {pdfViewerUrl ? (
+            <Button component='a' href={pdfViewerUrl} target='_blank' rel='noopener noreferrer'>
+              เปิดแท็บใหม่
+            </Button>
+          ) : null}
           <Button onClick={() => setPdfViewerUrl(null)}>ปิด</Button>
         </DialogActions>
       </Dialog>

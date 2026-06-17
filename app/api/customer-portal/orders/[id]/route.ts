@@ -113,7 +113,7 @@ export async function GET(_: NextRequest, { params }: { params: Promise<{ id: st
 
   const { data, error } = await supabaseAdmin
     .from('sale_orders')
-    .select('*, sale_order_items(*)')
+    .select('*, sale_order_items(*, refineries(id, name), depots(id, code, name))')
     .eq('id', id)
     .eq('company_id', ctx.companyId)
     .eq('customer_id', ctx.customerId)
