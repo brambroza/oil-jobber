@@ -24,7 +24,18 @@ export async function callTyphoonOCR(base64Image: string): Promise<TyphoonOCRRes
         {
           role: 'user',
           content: [
-            { type: 'text', text: 'อ่านข้อความจากภาพนี้และคืนเฉพาะข้อความที่อ่านได้' },
+            {
+              type: 'text',
+              text: [
+                'ถอดข้อความจากภาพนี้แบบ OCR ตรงตามที่เห็น',
+                'คืนเฉพาะข้อความ plain text เท่านั้น ห้ามคืน JSON, markdown, bullet, ตาราง, คำอธิบาย หรือคำแปล',
+                'รักษาอักขระสำคัญ เช่น -, =, /, _, จุดทศนิยม และการขึ้นบรรทัดใหม่ให้ใกล้เคียงภาพที่สุด',
+                'ถ้าเป็นข้อความราคา SFL/Cartex ให้รักษา token รหัสคลังพร้อมเครื่องหมาย เช่น -SPRC=, -SRC=, -SRB=, -BPI=, -LLK=, -PICHIT=, -LAMP=, -KKAEN= อย่าตัดทิ้ง',
+                'ถ้าเป็น IRPC-PRICE หรือ BC-esso ให้รักษารหัสคลังและชุดราคาที่คั่นด้วย / ให้ครบ',
+                'ถ้าเป็น Bangchak ให้รักษาข้อความในวงเล็บให้ถูกต้อง เช่น (PSP), (SRC), (Phichit), (SRB), (SUSR), (SK)',
+                'อย่าแก้ไขหรือจัดรูปแบบข้อความให้เป็น schema ใหม่ เพราะระบบจะนำ raw text ไป parse ต่อ',
+              ].join('\n'),
+            },
             { type: 'image_url', image_url: { url: imageDataUrl } },
           ],
         },
@@ -47,7 +58,10 @@ export async function callTyphoonOCR(base64Image: string): Promise<TyphoonOCRRes
     throw new Error(`OCR ล้มเหลว: ${res.status} ${parsed?.error?.message || parsed?.error || parsed?.message || ''}`.trim());
   }
 
-  const rawText = String(parsed?.choices?.[0]?.message?.content ?? '');
+  const rawText = String(parsed?.choices?.[0]?.message?.content ?? '')
+    .replace(/^```(?:text)?\s*/i, '')
+    .replace(/```$/i, '')
+    .trim();
   const lines = rawText.split('\n').map((v) => v.trim()).filter(Boolean);
   const items = lines.map((line: string) => {
     const [productCode, productName, price] = line.split(',').map((v) => v.trim());

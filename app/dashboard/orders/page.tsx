@@ -218,12 +218,12 @@ export default function OrdersPage() {
     severity: 'info',
   });
 
-  const subTotal = useMemo(
+  const grandTotal = useMemo(
     () => form.items.reduce((sum, it) => sum + Number(it.unit_price || 0) * Number(it.liters || 0), 0),
     [form.items],
   );
-  const vatAmount = useMemo(() => subTotal * 0.07, [subTotal]);
-  const grandTotal = useMemo(() => subTotal + vatAmount, [subTotal, vatAmount]);
+  const subTotal = useMemo(() => grandTotal / 1.07, [grandTotal]);
+  const vatAmount = useMemo(() => grandTotal - subTotal, [grandTotal, subTotal]);
   const totalLiters = useMemo(() => form.items.reduce((sum, it) => sum + Number(it.liters || 0), 0), [form.items]);
 
   const filteredPaymentConditions = useMemo(() => {
@@ -922,9 +922,9 @@ export default function OrdersPage() {
                       <TableCell>โรงกลั่น</TableCell>
                       <TableCell>คลัง</TableCell>
                       <TableCell>รหัสน้ำมัน</TableCell>
-                      <TableCell align="right">ราคาขาย/ลิตร</TableCell>
+                      <TableCell align="right">ราคาขาย/ลิตร (รวม VAT)</TableCell>
                       <TableCell align="right">จำนวนที่ซื้อ</TableCell>
-                      <TableCell align="right">รวม</TableCell>
+                      <TableCell align="right">รวม (รวม VAT)</TableCell>
                       <TableCell align="right">จัดการ</TableCell>
                     </TableRow>
                   </TableHead>
@@ -1044,7 +1044,7 @@ export default function OrdersPage() {
                   </Stack>
                   <Divider />
                   <Stack direction="row" justifyContent="space-between" alignItems="center">
-                    <Typography fontWeight={900}>ยอดรวมสุทธิ</Typography>
+                    <Typography fontWeight={900}>ยอดรวมสุทธิ (รวม VAT)</Typography>
                     <Typography fontWeight={900} fontSize={22}>
                       {money(grandTotal)} บาท
                     </Typography>

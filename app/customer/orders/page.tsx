@@ -220,7 +220,7 @@ export default function CustomerOrdersPage() {
     customer_po_no: '',
     order_no: '',
     delivery_note: '',
-    receive_method: 'DELIVER_BY_TRUCK',
+    receive_method: 'PICKUP_BY_TRUCK',
     delivery_location: '',
     customer_vehicle_id: '',
     vehicle_license_plate: '',
@@ -250,6 +250,10 @@ export default function CustomerOrdersPage() {
     if (!form.selected_depot_id) return null;
     return depotOptions.find((d) => d.depot_id === form.selected_depot_id) || null;
   }, [depotOptions, form.selected_depot_id]);
+  const selectedDepotTransportFee = useMemo(
+    () => Number(depotTransportFees[form.selected_depot_id] || 0),
+    [depotTransportFees, form.selected_depot_id],
+  );
   const visibleItemEntries = useMemo(() => {
     if (!form.selected_depot_id) return [] as Array<{ idx: number; item: FormItem }>;
     return form.items
@@ -449,7 +453,7 @@ export default function CustomerOrdersPage() {
       customer_po_no: '',
       order_no: '',
       delivery_note: '',
-      receive_method: 'DELIVER_BY_TRUCK',
+      receive_method: 'PICKUP_BY_TRUCK',
       delivery_location: '',
       customer_vehicle_id: '',
       vehicle_license_plate: '',
@@ -508,7 +512,7 @@ export default function CustomerOrdersPage() {
       requested_delivery_date: detail.requested_delivery_date || '',
       customer_po_no: detail.customer_po_no || '',
       delivery_note: detail.delivery_note || '',
-      receive_method: detail.receive_method || 'DELIVER_BY_TRUCK',
+      receive_method: detail.receive_method || 'PICKUP_BY_TRUCK',
       delivery_location: detail.delivery_location || '',
       customer_vehicle_id: detail.customer_vehicle_id || '',
       vehicle_license_plate: detail.vehicle_license_plate || '',
@@ -781,7 +785,7 @@ export default function CustomerOrdersPage() {
         }}
       >
         <Stack spacing={2} sx={{ width: { xs: '100vw', sm: 700, md: 1120 }, maxWidth: '100vw', p: { xs: 1.25, md: 2.5 }, pb: { xs: 11, md: 2.5 } }}>
-          <Typography variant='h6'>{form.order_no ? `แก้ไขคำสั่งซื้อ ${form.order_no} (ราคานี้รวม Vat แล้ว)` : 'รายละเอียดเพิ่มเติมสำหรับคำสั่งซื้อ (ราคานี้รวม Vat แล้ว)'}</Typography>
+          <Typography variant='h6'>{form.order_no ? `แก้ไขคำสั่งซื้อ ${form.order_no} (ราคานี้รวมภาษีมูลค่าเพิ่มแล้ว)` : 'รายละเอียดเพิ่มเติมสำหรับคำสั่งซื้อ (ราคานี้รวมภาษีมูลค่าเพิ่มแล้ว)'}</Typography>
 
           <Stack direction={{ xs: 'column', md: 'row' }} spacing={1.2}>
             <TextField sx={{ display: 'none' }} label='วันที่ต้องการให้จัดส่ง' type='date' value={form.requested_delivery_date} onChange={(e) => setForm((p) => ({ ...p, requested_delivery_date: e.target.value }))} InputLabelProps={{ shrink: true }} fullWidth />
@@ -880,9 +884,9 @@ export default function CustomerOrdersPage() {
                 sx={{ minWidth: 280 }}
               />
             </Stack>
-            {form.receive_method !== 'PICKUP_BY_TRUCK' && form.selected_depot_id && Number(depotTransportFees[form.selected_depot_id] || 0) > 0 ? (
+            {form.receive_method !== 'PICKUP_BY_TRUCK' && form.selected_depot_id && selectedDepotTransportFee > 0 ? (
               <Alert severity='info' sx={{ mt: 1 }}>
-                ราคาต่อหน่วยรวมค่าขนส่งเพิ่ม {money(depotTransportFees[form.selected_depot_id])} บาท/ลิตร สำหรับคลังนี้
+                ราคาต่อหน่วยรวมค่าขนส่งเพิ่ม {money(selectedDepotTransportFee)} บาท/ลิตร สำหรับคลังนี้
               </Alert>
             ) : null}
           </Paper>
@@ -895,7 +899,16 @@ export default function CustomerOrdersPage() {
                     <TableCell width={48}><Checkbox size='small' /></TableCell>
                     <TableCell width={180}>รหัสสินค้า</TableCell>
                     <TableCell>รายละเอียดสินค้า</TableCell>
-                    <TableCell width={140}>ราคาต่อลิตร</TableCell>
+                    <TableCell width={140}>
+                      <Stack direction='row' spacing={0.8} alignItems='center'>
+                        <Typography>ราคาต่อลิตร</Typography>
+                        {form.receive_method !== 'PICKUP_BY_TRUCK' && selectedDepotTransportFee > 0 ? (
+                          <Typography sx={{ color: '#ef4444', fontWeight: 800 , fontSize : 12 }}>
+                            + เพิ่ม {money(selectedDepotTransportFee)}
+                          </Typography>
+                        ) : null}
+                      </Stack>
+                    </TableCell>
                     <TableCell width={150}>จำนวนเงิน</TableCell>
                     <TableCell width={180}>ปริมาณสินค้า (L)</TableCell>
                   </TableRow>
@@ -979,7 +992,10 @@ export default function CustomerOrdersPage() {
             <Box sx={{ bgcolor: '#2f6175', color: '#fff', px: 1.5, py: 0.8 }}>
               <Stack direction={{ xs: 'column', sm: 'row' }} justifyContent='space-between' spacing={0.5}>
                 <Typography>รายการสินค้าที่เลือกไว้ {selectedCount} ผลิตภัณฑ์</Typography>
-                <Typography>จำนวนเงินรวม {money(totalAmount)}</Typography>
+                <Stack direction='row' spacing={0.8} alignItems='center'>
+                  <Typography>จำนวนเงินรวม {money(totalAmount)}</Typography>
+                  <Typography sx={{ color: '#ef4444', fontWeight: 800 }}>ราคานี้รวมภาษีมูลค่าเพิ่มแล้ว</Typography>
+                </Stack>
                 <Typography>ปริมาณรวม {Number(totalLiters).toLocaleString('th-TH')} L</Typography>
               </Stack>
             </Box>
@@ -1007,7 +1023,14 @@ export default function CustomerOrdersPage() {
                     <CardContent>
                       <Stack spacing={1} alignItems='center'>
                         {m.icon}
-                        <Typography>{m.label}</Typography>
+                        <Stack direction='row' spacing={0.8} alignItems='center'>
+                          <Typography>{m.label}</Typography>
+                          {m.code !== 'PICKUP_BY_TRUCK' && selectedDepotTransportFee > 0 ? (
+                            <Typography sx={{ color: '#ef4444', fontWeight: 800 }}>
+                              + เพิ่ม {money(selectedDepotTransportFee)}
+                            </Typography>
+                          ) : null}
+                        </Stack>
                       </Stack>
                     </CardContent>
                   </CardActionArea>

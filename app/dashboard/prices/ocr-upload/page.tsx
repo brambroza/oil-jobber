@@ -87,8 +87,9 @@ function cleanRaw(raw: string): string {
 
 function parseIrpc(raw: string): ParsedDepotPrice[] {
   const lines = raw.split('\n').map((l) => l.trim()).filter(Boolean);
+  const oneLine = raw.replace(/\r/g, '').replace(/\s+/g, ' ').trim();
   const headerLine = lines.find((l) => l.includes('IRPC-PRICE')) || '';
-  const productsPart = headerLine.split(':')[1] || 'G95/G91/B7';
+  const productsPart = (headerLine || oneLine).match(/IRPC-PRICE\s*:\s*([A-Z0-9]+(?:\/[A-Z0-9]+)+)/i)?.[1] || 'G95/G91/B7';
   const products = productsPart.split('/').map((s) => s.trim()).filter(Boolean);
 
   const result: ParsedDepotPrice[] = [];
@@ -99,6 +100,12 @@ function parseIrpc(raw: string): ParsedDepotPrice[] {
     });
     result.push({ depotCode, prices });
   };
+
+  const inlineMatches = oneLine.matchAll(/(?:^|\s)([A-Z]{2,10})\s*:?\s*([0-9]+(?:\.[0-9]+)?\/[0-9]+(?:\.[0-9]+)?\/[0-9]+(?:\.[0-9]+)?)/gi);
+  for (const match of inlineMatches) {
+    buildRow(match[1].trim().toUpperCase(), match[2].split('/').map((n) => Number(n || 0)));
+  }
+  if (result.length) return result;
 
   for (let i = 0; i < lines.length; i += 1) {
     const line = lines[i];
@@ -126,29 +133,58 @@ function parseIrpc(raw: string): ParsedDepotPrice[] {
 }
 
 function parseCartex(raw: string): ParsedDepotPrice[] {
-  const oneLine = cleanRaw(raw);
-  const headerMatch = oneLine.match(/Price\s*=\s*([A-Z0-9/ ]+)-/i);
-  const products = (headerMatch?.[1] || 'ULG/G95/G91/E20/B7/B20')
-    .replace(/\s+/g, '')
-    .split('/')
-    .map((s) => s.trim())
-    .filter(Boolean);
+  const oneLine = cleanRaw(raw)
+    .replace(/\bS20\b/g, 'B20')
+    .replace(/\b([A-Z])\s+([A-Z]{2,11})\s*=/g, '$1$2=')
+    .replace(/(\d)\s*-\s*(?=\d)/g, '$1 ');
+  const headerRegex = /Price\s*=\s*([A-Z0-9/ ]+)-/gi;
+  const headers = [...oneLine.matchAll(headerRegex)];
+  const parseProducts = (value: string): string[] =>
+    (value || 'ULG/G95/G91/E20/B7/B20')
+      .replace(/\s+/g, '')
+      .split('/')
+      .map((s) => s.trim())
+      .filter(Boolean);
+  const parseNumbers = (value: string): number[] =>
+    value
+      .replace(/(\d)\s+\.(\d+)/g, '$1.$2')
+      // OCR sometimes splits one decimal with an underscore, e.g. 31.4_2 => 31.42.
+      .replace(/(\d+\.\d)_([0-9])(?=_|\s|$)/g, '$1$2')
+      .replace(/(\d+\.\d)\s+([0-9])(?=\s|$)/g, '$1$2')
+      .replace(/\b(\d)\s+(\d\.\d+)/g, '$1$2')
+      .replace(/_/g, ' ')
+      .trim()
+      .split(/\s+/)
+      .map((n) => Number(n || 0));
 
-  const regex = /([A-Z]{2,10})\s*=\s*([0-9._ ]+)-/g;
-  const result: ParsedDepotPrice[] = [];
-  let match: RegExpExecArray | null;
+  const resultByDepot = new Map<string, ParsedDepotPrice>();
+  const parseBlock = (products: string[], block: string) => {
+    const regex = /-?\s*([A-Z]{2,12})\s*=\s*([0-9._ ]+?)(?=-\s*[A-Z]{2,12}\s*=|-Eff\b|$)/gi;
+    let match: RegExpExecArray | null;
 
-  while ((match = regex.exec(oneLine)) !== null) {
-    const depotCode = match[1].trim();
-    const nums = match[2].replace(/\s+/g, '').split('_').map((n) => Number(n || 0));
-    const prices: Record<string, number> = {};
-    products.forEach((p, idx) => {
-      prices[p] = nums[idx] ?? 0;
+    while ((match = regex.exec(block)) !== null) {
+      const depotCode = match[1].trim().toUpperCase();
+      const nums = parseNumbers(match[2]);
+      const prices: Record<string, number> = {};
+      products.forEach((p, idx) => {
+        prices[p] = nums[idx] ?? 0;
+      });
+      resultByDepot.set(depotCode, { depotCode, prices });
+    }
+  };
+
+  if (headers.length) {
+    headers.forEach((header, idx) => {
+      const products = parseProducts(header[1]);
+      const blockStart = (header.index ?? 0) + header[0].length;
+      const blockEnd = idx + 1 < headers.length ? headers[idx + 1].index ?? oneLine.length : oneLine.length;
+      parseBlock(products, oneLine.slice(blockStart, blockEnd).split(/-Eff\b/i)[0]);
     });
-    result.push({ depotCode, prices });
+  } else {
+    parseBlock(parseProducts(''), oneLine.split(/-Eff\b/i)[0]);
   }
 
-  return result;
+  return [...resultByDepot.values()];
 }
 
 function parsePTT(raw: string): ParsedDepotPrice[] {
@@ -211,12 +247,14 @@ function parseBankchak(raw: string): ParsedDepotPrice[] {
   const productCode = productMatch?.[1] || 'B7';
   const result: ParsedDepotPrice[] = [];
   const oneLine = raw.replace(/\r/g, '').replace(/\s+/g, ' ').trim();
-  const matches = oneLine.matchAll(/\(([A-Z0-9]{2,12})\)\s*=\s*([0-9]+(?:\.[0-9]+)?)/gi);
+  const matches = oneLine.matchAll(/([^()=0-9]+?)\s*\(([A-Z0-9]{2,12})\)\s*=\s*([0-9]+(?:\.[0-9]+)?)/gi);
 
   for (const match of matches) {
+    const depotName = match[1].trim();
+    const depotCode = match[2].trim().toUpperCase();
     result.push({
-      depotCode: match[1].trim().toUpperCase(),
-      prices: { [productCode]: Number(match[2] || 0) },
+      depotCode: depotName.includes('มหาชัย') && depotCode === 'OSP' ? 'PSP' : depotCode === 'PHICHIT' ? 'PICHIT' : depotCode,
+      prices: { [productCode]: Number(match[3] || 0) },
     });
   }
 
@@ -282,6 +320,8 @@ export default function OCRUploadPage() {
     const productMap = new Map(products.map((p) => [p.code.toUpperCase(), p]));
     const depotCodeAliases: Record<string, string[]> = {
       BSP: ['BPSP', 'PSP'],
+      OSP: ['PSP'],
+      PHICHIT: ['PICHIT'],
     };
 
     const out: PriceRow[] = [];

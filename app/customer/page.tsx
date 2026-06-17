@@ -375,7 +375,7 @@ export default function CustomerHomePage() {
                 <Typography sx={{ fontSize: 20, fontWeight: 800, color: '#1e3a8a' }}>หมายเหตุ</Typography>
               </Stack>
               <Typography sx={{ fontSize: 14, color: '#1e3a8a' }}>
-                {remarkText || 'ราคาน้ำมันอาจมีการเปลี่ยนแปลง กรุณาตรวจสอบก่อนทำรายการ (ราคานี้รวม vat แล้ว)'}
+                {remarkText || '-'}
               </Typography>
               <Stack direction='row' justifyContent='space-between' alignItems='center' spacing={1}>
                 <Button component={Link} href='/customer/orders' variant='contained' sx={{ textTransform: 'none', bgcolor: '#1d4ed8', '&:hover': { bgcolor: '#1e40af' } }}>
@@ -390,10 +390,16 @@ export default function CustomerHomePage() {
           <Box sx={{ px: 2, py: 1.25, borderBottom: '1px solid #dbe4f0', bgcolor: '#f7fafd' }}>
             <Stack direction='row' spacing={1.2} alignItems='center'>
               <LocalGasStationRounded sx={{ color: '#103e8a' }} />
-              <Box>
+              <Box sx={{ flex: 1, minWidth: 0 }}>
                 <Typography sx={{ fontSize: 20, fontWeight: 800, color: '#103e8a' }}>ตารางราคาน้ำมันแยกตามจุดรับน้ำมัน</Typography>
-                <Typography sx={{ fontSize: 13, color: '#475569' }}>ประจำวันที่ {latest}</Typography>
+
+                <Stack direction='row' justifyContent='space-between' alignItems='center' spacing={1}>
+                  <Typography sx={{ fontSize: 13, color: '#475569' }}>ประจำวันที่ {latest}</Typography>
+                  <Typography sx={{ fontSize: 13, color: '#fd2e12' }} > ราคาน้ำมันอาจมีการเปลี่ยนแปลง กรุณาตรวจสอบก่อนทำรายการ (ราคานี้รวมภาษีมูลค่าเพิ่มแล้ว)</Typography>
+
+                </Stack>
               </Box>
+
             </Stack>
           </Box>
 

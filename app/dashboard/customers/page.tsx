@@ -639,7 +639,7 @@ export default function CustomersPage() {
                       size='small'
                       label='ค่าขนส่ง'
                       type='number'
-                      value={accessForm.depot_transport_fees[opt.id] ?? 0.2}
+                      value={accessForm.depot_transport_fees[opt.id] ?? 0.0}
                       onChange={(e) => setAccessForm((p) => ({
                         ...p,
                         depot_transport_fees: {
