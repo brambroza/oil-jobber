@@ -11,6 +11,7 @@ export async function GET(req: NextRequest) {
     .select('*, customers(company_name), payment_conditions(name, payment_type, credit_days), sale_order_items(liters, amount, depots(code, name), refineries(name))')
     .eq('company_id', companyId)
     .eq('is_deleted', false)
+    .eq('sale_order_items.is_deleted', false)
     .order('created_at', { ascending: false });
 
   if (error) return NextResponse.json({ error: error.message }, { status: 400 });

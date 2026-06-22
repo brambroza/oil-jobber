@@ -14,6 +14,7 @@ export async function GET(req: NextRequest, { params }: { params: Promise<{ id: 
     .eq('id', id)
     .eq('company_id', companyId)
     .eq('is_deleted', false)
+    .eq('sale_order_items.is_deleted', false)
     .single();
   if (error) return NextResponse.json({ error: error.message }, { status: 400 });
   return NextResponse.json(data);
