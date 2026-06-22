@@ -190,6 +190,38 @@ function parseCartex(raw: string): ParsedDepotPrice[] {
 }
 
 function parsePTT(raw: string): ParsedDepotPrice[] {
+  // Typhoon may return this PTT price-card format as an HTML table. The depot
+  // cell is intentionally blank on subsequent product rows, so carry it forward.
+  if (/<table\b/i.test(raw)) {
+    const rows = [...raw.matchAll(/<tr\b[^>]*>([\s\S]*?)<\/tr>/gi)];
+    const grouped = new Map<string, ParsedDepotPrice>();
+    let currentDepotName = '';
+
+    for (const row of rows) {
+      const cells = [...row[1].matchAll(/<t[dh]\b[^>]*>([\s\S]*?)<\/t[dh]>/gi)]
+        .map((cell) => cell[1].replace(/<[^>]+>/g, '').replace(/&nbsp;/gi, ' ').trim());
+      if (cells.length < 3) continue;
+
+      const [depotCell, productCell, priceCell] = cells;
+      if (depotCell && depotCell !== 'คลัง') currentDepotName = depotCell;
+
+      const productCode = productCell.toUpperCase().match(/\b(?:G95|G91|E20|B7|B10|B20)\b/)?.[0];
+      const price = Number(priceCell.replace(/,/g, ''));
+      if (!currentDepotName || !productCode || !Number.isFinite(price) || price <= 0) continue;
+
+      // Correct a recurring OCR typo so name-based master depot matching works.
+      const depotName = /^(?:ไทยอออล์|ไทยออฟล์)$/.test(currentDepotName) ? 'ไทยออยล์' : currentDepotName;
+      const existing = grouped.get(depotName);
+      if (existing) {
+        existing.prices[productCode] = price;
+      } else {
+        grouped.set(depotName, { depotCode: depotName.toUpperCase(), depotName, prices: { [productCode]: price } });
+      }
+    }
+
+    if (grouped.size) return [...grouped.values()];
+  }
+
   const lines = raw.split('\n').map((l) => l.trim()).filter(Boolean);
   const oneLine = raw.replace(/\r/g, '').replace(/\s+/g, ' ').trim();
   const productLine =
@@ -317,13 +349,18 @@ export default function OCRUploadPage() {
   };
 
   const buildRowsByMapping = (parsed: ParsedDepotPrice[]): PriceRow[] => {
+    const normalizeDepotName = (name: string) => name
+      .trim()
+      .replace(/\s+/g, '')
+      .replace(/ไทย(?:อออล์|ออฟล์)/g, 'ไทยออยล์');
     const depotMap = new Map(depots.map((d) => [d.code.toUpperCase(), d]));
-    const depotNameMap = new Map(depots.map((d) => [d.name.trim(), d]));
+    const depotNameMap = new Map(depots.map((d) => [normalizeDepotName(d.name), d]));
     const productMap = new Map(products.map((p) => [p.code.toUpperCase(), p]));
     const depotCodeAliases: Record<string, string[]> = {
       BSP: ['BPSP', 'PSP'],
       OSP: ['PSP'],
       PHICHIT: ['PICHIT'],
+      'ไทยออยล์': ['TOP'],
     };
 
     const out: PriceRow[] = [];
@@ -332,7 +369,10 @@ export default function OCRUploadPage() {
       const depot =
         depotMap.get(depotCode) ||
         depotCodeAliases[depotCode]?.map((code) => depotMap.get(code)).find(Boolean) ||
-        (entry.depotName ? depotNameMap.get(entry.depotName.trim()) : undefined);
+        (entry.depotName ? depotNameMap.get(normalizeDepotName(entry.depotName)) : undefined) ||
+        (entry.depotName
+          ? depots.find((item) => normalizeDepotName(item.name).includes(normalizeDepotName(entry.depotName!)))
+          : undefined);
       if (!depot) continue;
 
       for (const [productCodeRaw, price] of Object.entries(entry.prices)) {
