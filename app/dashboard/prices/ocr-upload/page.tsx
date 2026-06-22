@@ -101,9 +101,11 @@ function parseIrpc(raw: string): ParsedDepotPrice[] {
     result.push({ depotCode, prices });
   };
 
-  const inlineMatches = oneLine.matchAll(/(?:^|\s)([A-Z]{2,10})\s*:?\s*([0-9]+(?:\.[0-9]+)?\/[0-9]+(?:\.[0-9]+)?\/[0-9]+(?:\.[0-9]+)?)/gi);
+  // OCR may confuse a price separator with `*` when the source line ends in `**`.
+  // Accept either `/` or `*` between the three prices, then normalize before parsing.
+  const inlineMatches = oneLine.matchAll(/(?:^|\s)([A-Z]{2,10})\s*:?\s*([0-9]+(?:\.[0-9]+)?[/*][0-9]+(?:\.[0-9]+)?[/*][0-9]+(?:\.[0-9]+)?)/gi);
   for (const match of inlineMatches) {
-    buildRow(match[1].trim().toUpperCase(), match[2].split('/').map((n) => Number(n || 0)));
+    buildRow(match[1].trim().toUpperCase(), match[2].split(/[/*]/).map((n) => Number(n || 0)));
   }
   if (result.length) return result;
 
@@ -111,7 +113,7 @@ function parseIrpc(raw: string): ParsedDepotPrice[] {
     const line = lines[i];
 
     // case 1: depot and prices in the same line, e.g. "BI : 0.0000/0.0000/35.0748"
-    const sameLine = line.match(/^([A-Z]{2,10})\s*:\s*([0-9.]+)\/([0-9.]+)\/([0-9.]+)/);
+    const sameLine = line.match(/^([A-Z]{2,10})\s*:\s*([0-9.]+)[/*]([0-9.]+)[/*]([0-9.]+)/);
     if (sameLine) {
       buildRow(sameLine[1].trim(), [Number(sameLine[2]), Number(sameLine[3]), Number(sameLine[4])]);
       continue;
@@ -121,7 +123,7 @@ function parseIrpc(raw: string): ParsedDepotPrice[] {
     const depotOnly = line.match(/^([A-Z]{2,10})$/);
     if (depotOnly && i + 1 < lines.length) {
       const next = lines[i + 1];
-      const nextPrice = next.match(/^:?\s*([0-9.]+)\/([0-9.]+)\/([0-9.]+)/);
+      const nextPrice = next.match(/^:?\s*([0-9.]+)[/*]([0-9.]+)[/*]([0-9.]+)/);
       if (nextPrice) {
         buildRow(depotOnly[1].trim(), [Number(nextPrice[1]), Number(nextPrice[2]), Number(nextPrice[3])]);
         i += 1; // consume next line

@@ -44,6 +44,7 @@ export async function callTyphoonOCR(base64Image: string): Promise<TyphoonOCRRes
   });
 
   const text = await res.text();
+  console.log("text" ,text);
   let parsed: any = null;
   try {
     parsed = text ? JSON.parse(text) : null;
