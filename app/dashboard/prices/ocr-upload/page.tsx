@@ -235,7 +235,7 @@ function parsePTT(raw: string): ParsedDepotPrice[] {
   const result: ParsedDepotPrice[] = [];
   const normalizeDepotCode = (depotCode: string, depotName: string) => {
     const code = depotCode.trim().toUpperCase();
-    if (code === 'BSP' && depotName.trim() === 'มหาชัย') return 'BPSP';
+    if ((code === 'BSP' || code === 'BPS') && depotName.trim() === 'มหาชัย') return 'BPSP';
     return code;
   };
 
@@ -253,7 +253,7 @@ function parsePTT(raw: string): ParsedDepotPrice[] {
     result.push({ depotCode: normalizeDepotCode(depotCode, depotName), depotName: depotName.trim() || undefined, prices });
   };
 
-  const inlineMatches = oneLine.matchAll(/([^()=0-9\/.]+?)\s*\(([A-Z0-9]{2,12})\)\s*=\s*([0-9]+(?:\.[0-9]+)?(?:\s*\/\s*[0-9]+(?:\.[0-9]+)?)+)/gi);
+  const inlineMatches = oneLine.matchAll(/([^()=0-9\/.\-]+?)\s*\(([A-Z0-9]{2,12})\)\s*(?:=|-)\s*([0-9]+(?:\.[0-9]+)?(?:\s*\/\s*[0-9]+(?:\.[0-9]+)?)+)/gi);
   for (const match of inlineMatches) {
     const depotName = match[1].replace(/[0-9./]+/g, ' ').trim().split(/\s+/).pop() || '';
     buildRow(match[2].trim().toUpperCase(), match[3], depotName);
@@ -262,7 +262,7 @@ function parsePTT(raw: string): ParsedDepotPrice[] {
 
   for (let i = 0; i < lines.length; i += 1) {
     const line = lines[i];
-    const depotMatch = line.match(/\(([A-Z0-9]{2,12})\)\s*=\s*([0-9./ ]*)/i);
+    const depotMatch = line.match(/\(([A-Z0-9]{2,12})\)\s*(?:=|-)\s*([0-9./ ]*)/i);
     if (!depotMatch) continue;
 
     const depotCode = depotMatch[1].trim().toUpperCase();
