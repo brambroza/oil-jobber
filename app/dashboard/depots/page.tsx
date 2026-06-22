@@ -200,7 +200,7 @@ export default function DepotsPage() {
           >
             {refineries.map((r) => <MenuItem key={r.id} value={r.id}>{r.name}</MenuItem>)}
           </TextField>
-          <TextField label='ค่ารับขึ้น (บาท/ลิตร)' type='number' value={form.pickup_cost_per_liter} onChange={(e) => setForm((p) => ({ ...p, pickup_cost_per_liter: Number(e.target.value) }))} />
+          <TextField label='ค่ารับขึ้น (บาท/ลิตร)' type='number' value={form.pickup_cost_per_liter} onFocus={(e) => e.target.select()} onChange={(e) => setForm((p) => ({ ...p, pickup_cost_per_liter: Number(e.target.value) }))} />
           <Button variant='contained' onClick={() => void save()} disabled={!form.code.trim() || !form.name.trim() || !form.refinery_id}>บันทึก</Button>
         </Stack>
       </Drawer>

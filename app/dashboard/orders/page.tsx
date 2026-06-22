@@ -986,6 +986,7 @@ export default function OrdersPage() {
                             size="small"
                             type="number"
                             value={it.unit_price}
+                            onFocus={(e) => e.target.select()}
                             onChange={(e) => updateItem(idx, { unit_price: Number(e.target.value || 0) })}
                             sx={{ width: 140 }}
                           />
@@ -995,6 +996,7 @@ export default function OrdersPage() {
                             size="small"
                             type="number"
                             value={it.liters}
+                            onFocus={(e) => e.target.select()}
                             onChange={(e) => updateItem(idx, { liters: Number(e.target.value || 0) })}
                             sx={{ width: 140 }}
                           />

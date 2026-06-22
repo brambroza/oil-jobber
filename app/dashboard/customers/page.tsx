@@ -102,6 +102,58 @@ const formatCurrencyInput = (value: string) => {
   return decimal !== undefined ? `${formattedWhole}.${decimal}` : formattedWhole;
 };
 
+const toggleInArray = (items: string[], value: string): string[] =>
+  items.includes(value) ? items.filter((item) => item !== value) : [...items, value];
+
+function AccessCheckboxGroup({
+  title, helper, selected, options, searchable = false, maxHeight = 260, onChange, renderSelectedExtra,
+}: {
+  title: string;
+  helper: string;
+  selected: string[];
+  options: Array<{ id: string; label: string; group?: string }>;
+  searchable?: boolean;
+  maxHeight?: number;
+  onChange: (next: string[]) => void;
+  renderSelectedExtra?: (option: { id: string; label: string; group?: string }) => ReactNode;
+}) {
+  const [q, setQ] = useState('');
+  const qv = q.trim().toLowerCase();
+  const shown = qv ? options.filter((x) => `${x.group || ''} ${x.label}`.toLowerCase().includes(qv)) : options;
+
+  return (
+    <Paper variant='outlined' sx={{ p: 1.25, borderColor: '#dbe4f0', borderRadius: 2 }}>
+      <Stack spacing={0.8}>
+        <Stack direction='row' justifyContent='space-between' alignItems='center' spacing={1}>
+          <Stack spacing={0.2}>
+            <Typography fontWeight={700}>{title}</Typography>
+            <Typography variant='caption' color='text.secondary'>เลือกแล้ว {selected.length} รายการ</Typography>
+          </Stack>
+          <Stack direction='row' spacing={0.5}>
+            <Button size='small' onClick={() => onChange(options.map((o) => o.id))}>เลือกทั้งหมด</Button>
+            <Button size='small' color='inherit' onClick={() => onChange([])}>ล้าง</Button>
+          </Stack>
+        </Stack>
+        <Typography variant='caption' color='text.secondary'>{helper}</Typography>
+        {searchable ? <TextField size='small' placeholder='ค้นหาในรายการนี้' value={q} onChange={(e) => setQ(e.target.value)} /> : null}
+        <FormGroup sx={{ maxHeight, overflowY: 'auto', pr: 0.5, border: '1px solid #edf2f7', borderRadius: 1, p: 0.6 }}>
+          {shown.map((opt, idx) => {
+            const showGroup = Boolean(opt.group) && (idx === 0 || shown[idx - 1]?.group !== opt.group);
+            return (
+              <Box key={opt.id}>
+                {showGroup ? <Typography variant='caption' sx={{ color: '#1e3a8a', fontWeight: 800, mt: 0.5, mb: 0.2, display: 'block', position: 'sticky', top: 0, zIndex: 1, bgcolor: '#f8fbff', py: 0.2 }}>{opt.group}</Typography> : null}
+                <FormControlLabel control={<Checkbox size='small' checked={selected.includes(opt.id)} onChange={() => onChange(toggleInArray(selected, opt.id))} />} label={<Typography variant='body2'>{opt.label}</Typography>} />
+                {selected.includes(opt.id) && renderSelectedExtra ? renderSelectedExtra(opt) : null}
+              </Box>
+            );
+          })}
+          {!shown.length ? <Typography variant='caption' color='text.secondary'>ไม่พบข้อมูล</Typography> : null}
+        </FormGroup>
+      </Stack>
+    </Paper>
+  );
+}
+
 export default function CustomersPage() {
   const [companyId] = useState(process.env.NEXT_PUBLIC_DEFAULT_COMPANY_ID ?? '');
   const [rows, setRows] = useState<CustomerWithPayment[]>([]);
@@ -348,96 +400,6 @@ export default function CustomersPage() {
     }
   };
 
-  const toggleInArray = (items: string[], value: string): string[] => {
-    if (items.includes(value)) return items.filter((x) => x !== value);
-    return [...items, value];
-  };
-
-  const AccessCheckboxGroup = ({
-    title,
-    helper,
-    selected,
-    options,
-    searchable = false,
-    maxHeight = 260,
-    onChange,
-    renderSelectedExtra,
-  }: {
-    title: string;
-    helper: string;
-    selected: string[];
-    options: Array<{ id: string; label: string; group?: string }>;
-    searchable?: boolean;
-    maxHeight?: number;
-    onChange: (next: string[]) => void;
-    renderSelectedExtra?: (option: { id: string; label: string; group?: string }) => ReactNode;
-  }) => {
-    const [q, setQ] = useState('');
-    const qv = q.trim().toLowerCase();
-    const shown = qv ? options.filter((x) => `${x.group || ''} ${x.label}`.toLowerCase().includes(qv)) : options;
-
-    return (
-      <Paper variant='outlined' sx={{ p: 1.25, borderColor: '#dbe4f0', borderRadius: 2 }}>
-        <Stack spacing={0.8}>
-          <Stack direction='row' justifyContent='space-between' alignItems='center' spacing={1}>
-            <Stack spacing={0.2}>
-              <Typography fontWeight={700}>{title}</Typography>
-              <Typography variant='caption' color='text.secondary'>เลือกแล้ว {selected.length} รายการ</Typography>
-            </Stack>
-            <Stack direction='row' spacing={0.5}>
-              <Button size='small' onClick={() => onChange(options.map((o) => o.id))}>เลือกทั้งหมด</Button>
-              <Button size='small' color='inherit' onClick={() => onChange([])}>ล้าง</Button>
-            </Stack>
-          </Stack>
-          <Typography variant='caption' color='text.secondary'>{helper}</Typography>
-          {searchable ? (
-            <TextField
-              size='small'
-              placeholder='ค้นหาในรายการนี้'
-              value={q}
-              onChange={(e) => setQ(e.target.value)}
-            />
-          ) : null}
-          <FormGroup sx={{ maxHeight, overflowY: 'auto', pr: 0.5, border: '1px solid #edf2f7', borderRadius: 1, p: 0.6 }}>
-            {shown.map((opt, idx) => {
-              const prev = shown[idx - 1];
-              const showGroup = Boolean(opt.group) && (idx === 0 || prev?.group !== opt.group);
-              return (
-                <Box key={opt.id}>
-                  {showGroup ? (
-                    <Typography
-                      variant='caption'
-                      sx={{
-                        color: '#1e3a8a',
-                        fontWeight: 800,
-                        mt: 0.5,
-                        mb: 0.2,
-                        display: 'block',
-                        position: 'sticky',
-                        top: 0,
-                        zIndex: 1,
-                        bgcolor: '#f8fbff',
-                        py: 0.2,
-                      }}
-                    >
-                      {opt.group}
-                    </Typography>
-                  ) : null}
-                  <FormControlLabel
-                    control={<Checkbox size='small' checked={selected.includes(opt.id)} onChange={() => onChange(toggleInArray(selected, opt.id))} />}
-                    label={<Typography variant='body2'>{opt.label}</Typography>}
-                  />
-                  {selected.includes(opt.id) && renderSelectedExtra ? renderSelectedExtra(opt) : null}
-                </Box>
-              );
-            })}
-            {!shown.length ? <Typography variant='caption' color='text.secondary'>ไม่พบข้อมูล</Typography> : null}
-          </FormGroup>
-        </Stack>
-      </Paper>
-    );
-  };
-
   return (
     <Stack spacing={2}>
       <Typography variant='h4'>จัดการลูกค้า</Typography>
@@ -640,6 +602,7 @@ export default function CustomersPage() {
                       label='ค่าขนส่ง'
                       type='number'
                       value={accessForm.depot_transport_fees[opt.id] ?? 0.0}
+                      onFocus={(e) => e.target.select()}
                       onChange={(e) => setAccessForm((p) => ({
                         ...p,
                         depot_transport_fees: {

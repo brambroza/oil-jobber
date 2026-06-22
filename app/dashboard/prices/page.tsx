@@ -39,7 +39,7 @@ type BasePriceRow = {
 type Refinery = { id: string; name: string; active: boolean };
 type Depot = { id: string; code: string; name: string };
 type OilProduct = { id: string; code: string; name: string; is_active: boolean };
-type EditItem = { depot_id: string; product_code: string; product_name: string; price: number };
+type EditItem = { depot_id: string; product_code: string; product_name: string; price: number | string };
 
 function todayDdMmYyyy(): string {
   const now = new Date();
@@ -199,7 +199,7 @@ export default function PricesPage() {
       effective_time: effectiveTime,
       expires_date: expiresDate,
       expires_time: expiresTime,
-      rows: items,
+      rows: items.map((item) => ({ ...item, price: Number(item.price || 0) })),
     };
 
     const res = await fetch(editingId ? `/api/prices/${editingId}` : '/api/prices/confirm', {
@@ -375,9 +375,15 @@ export default function PricesPage() {
                     <TextField
                       type='number'
                       value={it.price}
-                      onChange={(e) => {
+                      onFocus={(e) => e.target.select()}
+                      onBlur={(e) => {
                         const next = [...items];
                         next[idx] = { ...next[idx], price: Number(e.target.value || 0) };
+                        setItems(next);
+                      }}
+                      onChange={(e) => {
+                        const next = [...items];
+                        next[idx] = { ...next[idx], price: e.target.value };
                         setItems(next);
                       }}
                     />

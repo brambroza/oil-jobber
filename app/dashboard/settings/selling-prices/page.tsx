@@ -117,7 +117,7 @@ export default function SellingPricesPage() {
             <MenuItem value='CREDIT'>เครดิต</MenuItem>
           </TextField>
           <TextField label='Credit Day' type='number' value={form.credit_days} onChange={(e) => setForm((p) => ({ ...p, credit_days: Number(e.target.value) }))} disabled={form.payment_type === 'CASH'} />
-          <TextField label='ค่าบวกเพิ่ม (บาท/ลิตร)' type='number' value={form.extra_cost_per_liter} onChange={(e) => setForm((p) => ({ ...p, extra_cost_per_liter: Number(e.target.value) }))} />
+          <TextField label='ค่าบวกเพิ่ม (บาท/ลิตร)' type='number' value={form.extra_cost_per_liter} onFocus={(e) => e.target.select()} onChange={(e) => setForm((p) => ({ ...p, extra_cost_per_liter: Number(e.target.value) }))} />
           <Button variant='contained' onClick={() => void save()} disabled={!form.code || !form.name}>บันทึก</Button>
         </Stack>
       </Drawer>

@@ -32,7 +32,7 @@ type PriceRow = {
   depot_code: string;
   product_code: string;
   product_name: string;
-  price: number;
+  price: number | string;
 };
 
 type ParsedDepotPrice = {
@@ -451,7 +451,7 @@ export default function OCRUploadPage() {
           expires_date: expiresDate,
           expires_time: expiresTime,
           remark,
-          rows,
+          rows: rows.map((row) => ({ ...row, price: Number(row.price || 0) })),
           raw_text: rawText,
         }),
       });
@@ -539,9 +539,15 @@ export default function OCRUploadPage() {
                     <TableCell align='right'>
                       <TextField
                         value={r.price}
-                        onChange={(e) => {
+                        onFocus={(e) => e.target.select()}
+                        onBlur={(e) => {
                           const next = [...rows];
                           next[idx] = { ...next[idx], price: Number(e.target.value || 0) };
+                          setRows(next);
+                        }}
+                        onChange={(e) => {
+                          const next = [...rows];
+                          next[idx] = { ...next[idx], price: e.target.value };
                           setRows(next);
                         }}
                         type='number'
