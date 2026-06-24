@@ -152,6 +152,8 @@ function parseCartex(raw: string): ParsedDepotPrice[] {
       .replace(/(\d)\s+\.(\d+)/g, '$1.$2')
       // OCR sometimes splits one decimal with an underscore, e.g. 31.4_2 => 31.42.
       .replace(/(\d+\.\d)_([0-9])(?=_|\s|$)/g, '$1$2')
+      // OCR can split a two-digit price after a separator, e.g. _2 8.63 => _28.63.
+      .replace(/_([0-9])\s+([0-9]\.[0-9]+)/g, '_$1$2')
       .replace(/(\d+\.\d)\s+([0-9])(?=\s|$)/g, '$1$2')
       .replace(/\b(\d)\s+(\d\.\d+)/g, '$1$2')
       .replace(/_/g, ' ')
