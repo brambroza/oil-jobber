@@ -29,8 +29,8 @@ export async function GET(req: NextRequest) {
   lineAuthUrl.searchParams.set('scope', 'profile openid');
   lineAuthUrl.searchParams.set('nonce', nonce);
   lineAuthUrl.searchParams.set('prompt', 'consent');
-  // Ask user to add OA friend during LINE Login flow.
-  lineAuthUrl.searchParams.set('bot_prompt', 'aggressive');
+  // Show the add-friend option without forcing the aggressive add-friend screen.
+  lineAuthUrl.searchParams.set('bot_prompt', 'normal');
 
   const response = NextResponse.redirect(lineAuthUrl);
   response.cookies.set('line_oauth_state', state, {

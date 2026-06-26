@@ -7,6 +7,7 @@ import { pushLineMessage } from '@/lib/services/line';
 type LineTokenResponse = {
   access_token?: string;
   id_token?: string;
+  refresh_token?: string;
   token_type?: string;
   expires_in?: number;
 };
@@ -15,6 +16,10 @@ type LineProfile = {
   userId?: string;
   displayName?: string;
   pictureUrl?: string;
+};
+
+type LineFriendshipStatus = {
+  friendFlag?: boolean;
 };
 
 type GenerateLinkData = {
@@ -80,6 +85,21 @@ export async function GET(req: NextRequest) {
   if (!accessToken) {
     return toLoginRedirect(req, 'line_no_access_token');
   }
+  const refreshToken = String(tokenData.refresh_token || '').trim();
+  const expiresIn = Number(tokenData.expires_in || 0);
+
+  const friendshipRes = await fetch('https://api.line.me/friendship/v1/status', {
+    headers: { Authorization: `Bearer ${accessToken}` },
+  });
+
+  if (!friendshipRes.ok) {
+    return toLoginRedirect(req, 'line_friendship_check_failed');
+  }
+
+  const friendship = (await friendshipRes.json()) as LineFriendshipStatus;
+  if (!friendship.friendFlag) {
+    return toLoginRedirect(req, 'line_not_friend');
+  }
 
   const profileRes = await fetch('https://api.line.me/v2/profile', {
     headers: { Authorization: `Bearer ${accessToken}` },
@@ -97,7 +117,7 @@ export async function GET(req: NextRequest) {
 
   const { data: lineCustomer, error: lineCustomerError } = await supabaseAdmin
     .from('line_customers')
-    .select('customer_id')
+    .select('id, customer_id')
     .eq('line_user_id', lineUserId)
     .eq('is_deleted', false)
     .maybeSingle();
@@ -105,6 +125,17 @@ export async function GET(req: NextRequest) {
   if (lineCustomerError || !lineCustomer?.customer_id) {
     return toLoginRedirect(req, 'line_not_mapped_customer');
   }
+
+  await supabaseAdmin
+    .from('line_customers')
+    .update({
+      line_login_access_token: accessToken,
+      line_login_refresh_token: refreshToken || null,
+      line_login_token_expires_at: expiresIn > 0 ? new Date(Date.now() + expiresIn * 1000).toISOString() : null,
+      line_friendship_checked_at: new Date().toISOString(),
+      updated_at: new Date().toISOString(),
+    })
+    .eq('id', lineCustomer.id);
 
   const { data: portalUser, error: portalUserError } = await supabaseAdmin
     .from('customer_portal_users')
