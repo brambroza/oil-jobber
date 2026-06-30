@@ -1,6 +1,7 @@
 import { createServerClient } from '@supabase/ssr';
 import { NextRequest, NextResponse } from 'next/server';
 import { getDefaultHomeByContext, getUserContext } from '@/lib/auth/user-context';
+import { resolveCompanyId } from '@/lib/supabase/company';
 import { supabaseAdmin } from '@/lib/supabase/server';
 import { pushLineMessage } from '@/lib/services/line';
 
@@ -115,27 +116,36 @@ export async function GET(req: NextRequest) {
     return toLoginRedirect(req, 'line_user_not_found');
   }
 
+  const companyId = resolveCompanyId();
+  if (!companyId) {
+    return toLoginRedirect(req, 'line_company_missing');
+  }
+  const now = new Date().toISOString();
+  const tokenExpiresAt = expiresIn > 0 ? new Date(Date.now() + expiresIn * 1000).toISOString() : null;
+
   const { data: lineCustomer, error: lineCustomerError } = await supabaseAdmin
     .from('line_customers')
+    .upsert(
+      {
+        company_id: companyId,
+        line_user_id: lineUserId,
+        display_name: profile.displayName || null,
+        profile_image_url: profile.pictureUrl || null,
+        line_login_access_token: accessToken,
+        line_login_refresh_token: refreshToken || null,
+        line_login_token_expires_at: tokenExpiresAt,
+        line_friendship_checked_at: now,
+        updated_at: now,
+        is_deleted: false,
+      },
+      { onConflict: 'line_user_id' },
+    )
     .select('id, customer_id')
-    .eq('line_user_id', lineUserId)
-    .eq('is_deleted', false)
-    .maybeSingle();
+    .single();
 
   if (lineCustomerError || !lineCustomer?.customer_id) {
     return toLoginRedirect(req, 'line_not_mapped_customer');
   }
-
-  await supabaseAdmin
-    .from('line_customers')
-    .update({
-      line_login_access_token: accessToken,
-      line_login_refresh_token: refreshToken || null,
-      line_login_token_expires_at: expiresIn > 0 ? new Date(Date.now() + expiresIn * 1000).toISOString() : null,
-      line_friendship_checked_at: new Date().toISOString(),
-      updated_at: new Date().toISOString(),
-    })
-    .eq('id', lineCustomer.id);
 
   const { data: portalUser, error: portalUserError } = await supabaseAdmin
     .from('customer_portal_users')

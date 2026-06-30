@@ -80,6 +80,7 @@ export default function LoginPage() {
     line_not_friend: 'กรุณาเพิ่ม LINE Official Account เป็นเพื่อนก่อนเข้าสู่ระบบ',
     line_profile_failed: 'โหลดโปรไฟล์ LINE ไม่สำเร็จ',
     line_user_not_found: 'ไม่พบ LINE user id',
+    line_company_missing: 'ไม่พบ company_id สำหรับบันทึกข้อมูล LINE กรุณาตั้งค่า DEFAULT_COMPANY_ID',
     line_not_mapped_customer: 'LINE นี้ยังไม่ถูกผูกกับลูกค้าในระบบ',
     line_customer_portal_missing: 'ลูกค้ายังไม่มีบัญชีเข้าใช้งานพอร์ทัล',
     line_auth_user_missing: 'ไม่พบบัญชี Auth ของลูกค้า',
