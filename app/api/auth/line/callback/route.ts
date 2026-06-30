@@ -190,16 +190,10 @@ export async function GET(req: NextRequest) {
     return toLoginRedirect(req, 'line_generate_link_failed');
   }
 
-  let verify = await supabase.auth.verifyOtp({ email: authEmail, token: otpToken, type: 'magiclink' });
-  if (verify.error) {
-    verify = await supabase.auth.verifyOtp({ email: authEmail, token: otpToken, type: 'email' });
-  }
-  if (verify.error) {
+  // email_otp from generateLink must be verified with type: 'email', not 'magiclink'
+  const verify = await supabase.auth.verifyOtp({ email: authEmail, token: otpToken, type: 'email' });
+  if (verify.error || !verify.data.user) {
     return toLoginRedirect(req, 'line_session_create_failed');
-  }
-
-  if (!verify.data.user) {
-    return toLoginRedirect(req, 'line_user_session_missing');
   }
 
   // Best-effort: send a welcome ping from OA after successful LINE auth.
