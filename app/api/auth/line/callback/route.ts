@@ -1,5 +1,5 @@
+import { createServerClient } from '@supabase/ssr';
 import { NextRequest, NextResponse } from 'next/server';
-import { createSupabaseServerClient } from '@/lib/supabase/server-client';
 import { getDefaultHomeByContext, getUserContext } from '@/lib/auth/user-context';
 import { supabaseAdmin } from '@/lib/supabase/server';
 import { pushLineMessage } from '@/lib/services/line';
@@ -154,6 +154,31 @@ export async function GET(req: NextRequest) {
     return toLoginRedirect(req, 'line_auth_user_missing');
   }
 
+  // Resolve redirect path before building the response — we already have auth_user_id
+  const ctx = await getUserContext(portalUser.auth_user_id);
+  const home = getDefaultHomeByContext(ctx);
+  const redirectPath = safeNext || home;
+
+  // Build the redirect response first so the supabase client can write session cookies onto it
+  const response = NextResponse.redirect(new URL(redirectPath, origin));
+  response.cookies.delete('line_oauth_state');
+  response.cookies.delete('line_oauth_next');
+
+  const supabase = createServerClient(
+    process.env.NEXT_PUBLIC_SUPABASE_URL!,
+    process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
+    {
+      cookies: {
+        getAll() {
+          return req.cookies.getAll();
+        },
+        setAll(cookiesToSet) {
+          cookiesToSet.forEach(({ name, value, options }) => response.cookies.set(name, value, options));
+        },
+      },
+    },
+  );
+
   const { data: magicData, error: magicError } = await supabaseAdmin.auth.admin.generateLink({
     type: 'magiclink',
     email: authEmail,
@@ -165,7 +190,6 @@ export async function GET(req: NextRequest) {
     return toLoginRedirect(req, 'line_generate_link_failed');
   }
 
-  const supabase = await createSupabaseServerClient();
   let verify = await supabase.auth.verifyOtp({ email: authEmail, token: otpToken, type: 'magiclink' });
   if (verify.error) {
     verify = await supabase.auth.verifyOtp({ email: authEmail, token: otpToken, type: 'email' });
@@ -174,17 +198,9 @@ export async function GET(req: NextRequest) {
     return toLoginRedirect(req, 'line_session_create_failed');
   }
 
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
-
-  if (!user) {
+  if (!verify.data.user) {
     return toLoginRedirect(req, 'line_user_session_missing');
   }
-
-  const ctx = await getUserContext(user.id);
-  const home = getDefaultHomeByContext(ctx);
-  const redirectPath = safeNext || home;
 
   // Best-effort: send a welcome ping from OA after successful LINE auth.
   // This doesn't block login flow if LINE push is temporarily unavailable.
@@ -194,8 +210,5 @@ export async function GET(req: NextRequest) {
     // ignore push errors to keep auth callback stable
   }
 
-  const response = NextResponse.redirect(new URL(redirectPath, origin));
-  response.cookies.delete('line_oauth_state');
-  response.cookies.delete('line_oauth_next');
   return response;
 }

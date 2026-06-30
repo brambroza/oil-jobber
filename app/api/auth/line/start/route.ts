@@ -28,7 +28,6 @@ export async function GET(req: NextRequest) {
   lineAuthUrl.searchParams.set('state', state);
   lineAuthUrl.searchParams.set('scope', 'profile openid');
   lineAuthUrl.searchParams.set('nonce', nonce);
-  lineAuthUrl.searchParams.set('prompt', 'consent');
   // Show the add-friend option without forcing the aggressive add-friend screen.
   lineAuthUrl.searchParams.set('bot_prompt', 'normal');
 
