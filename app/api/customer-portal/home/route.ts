@@ -129,7 +129,7 @@ export async function GET() {
   if (roundIds.length) {
     const itemsRes = await supabaseAdmin
       .from('oil_price_items')
-      .select('id, oil_base_price_id, depot_id, product_code, product_name, base_cost_price,  depots(id, code, name)')
+      .select('id, oil_base_price_id, depot_id, product_code, product_name, base_cost_price,  depots(id, code, name, is_active)')
       .in('oil_base_price_id', roundIds)
       .eq('company_id', companyId)
       .eq('is_deleted', false)
@@ -150,6 +150,7 @@ export async function GET() {
   const productByCode = new Map((productsRes.data ?? []).map((p) => [String(p.code ?? '').toUpperCase(), p]));
 
   items = items.filter((it) => {
+    if (it.depots?.is_active === false) return false;
     if (depotIds.length && !depotIds.includes(String(it.depot_id ?? ''))) return false;
     if (!oilProductIds.length) return true;
     const p = productByCode.get(String(it.product_code ?? '').toUpperCase());

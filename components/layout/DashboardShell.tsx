@@ -56,25 +56,23 @@ const menuGroups: MenuGroup[] = [
       { label: 'ข้อมูลน้ำมัน', href: '/dashboard/oil-products', icon: <TagOutlined fontSize='small' /> },
       { label: 'ราคาน้ำมัน', href: '/dashboard/prices', icon: <TagOutlined fontSize='small' /> },
       { label: 'แจ้งราคา LINE', href: '/dashboard/line/broadcast-price', icon: <CampaignOutlined fontSize='small' /> },
+      { label: 'แสดงราคาขาย', href: '/dashboard/selling-prices', icon: <PriceCheckOutlined fontSize='small' /> },
+
     ],
   },
   {
     title: 'ปฏิบัติการ',
     items: [
       { label: 'ใบสั่งซื้อ', href: '/dashboard/orders', icon: <ReceiptLongOutlined fontSize='small' />, badge: '7' },
+      { label: 'บัญชี', href: '/dashboard/accounting', icon: <RequestQuoteOutlined fontSize='small' /> },
+
       { label: 'ลูกค้า', href: '/dashboard/customers', icon: <PeopleOutline fontSize='small' /> },
       { label: 'รถขนส่ง', href: '/dashboard/customer-vehicles', icon: <LocalShippingOutlined fontSize='small' /> },
       { label: 'โรงกลั่น', href: '/dashboard/refineries', icon: <StoreOutlined fontSize='small' /> },
       { label: 'คลังน้ำมัน', href: '/dashboard/depots', icon: <StoreOutlined fontSize='small' /> },
     ],
   },
-  {
-    title: 'การเงิน',
-    items: [
-      { label: 'บัญชี', href: '/dashboard/accounting', icon: <RequestQuoteOutlined fontSize='small' /> },
-      { label: 'แสดงราคาขาย', href: '/dashboard/selling-prices', icon: <PriceCheckOutlined fontSize='small' /> },
-    ],
-  },
+
   {
     title: 'LINE',
     items: [
@@ -187,7 +185,7 @@ export default function DashboardShell({ children }: { children: ReactNode }) {
     const timer = setInterval(() => void fetchNotifs(), 15000);
     return () => clearInterval(timer);
   }, [companyId]);
- 
+
   const sidebar = (
     <Box sx={{ height: '100%', bgcolor: '#ffffff' }}>
       <Box sx={{ px: 2, py: 2.2 }}>
@@ -284,7 +282,7 @@ export default function DashboardShell({ children }: { children: ReactNode }) {
             >
               อัปโหลด OCR
             </Button>
-         {/*    <Button
+            {/*    <Button
               size='small'
               variant='contained'
               startIcon={<PriceCheckOutlined sx={{ fontSize: 14 }} />}

@@ -31,6 +31,7 @@ export interface Depot extends BaseEntity {
   name: string;
   pickup_cost_per_liter: number;
   refinery_id: UUID | null;
+  is_active: boolean;
   refineries?: { id: UUID; name: string } | null;
 }
 export interface OilProduct extends BaseEntity { code: string; name: string; color_hex: string; is_active: boolean; }

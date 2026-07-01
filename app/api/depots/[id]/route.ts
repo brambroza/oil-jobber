@@ -20,6 +20,7 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
   const pickup = Number(body.pickup_cost_per_liter ?? 0);
   const refineryIdRaw = String(body.refinery_id ?? '').trim();
   const refineryId = refineryIdRaw || null;
+  const isActive = Boolean(body.is_active ?? true);
 
   if (!companyId) return NextResponse.json({ error: 'กรุณาตั้งค่า company_id หรือ DEFAULT_COMPANY_ID' }, { status: 422 });
   if (!isUuid(companyId)) return NextResponse.json({ error: 'company_id ต้องเป็น UUID เท่านั้น' }, { status: 422 });
@@ -54,7 +55,7 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
 
   const { data, error } = await supabaseAdmin
     .from('depots')
-    .update({ code, name, refinery_id: refineryId, pickup_cost_per_liter: pickup })
+    .update({ code, name, refinery_id: refineryId, pickup_cost_per_liter: pickup, is_active: isActive })
     .eq('id', id)
     .select('*, refineries(id, name)')
     .single();
