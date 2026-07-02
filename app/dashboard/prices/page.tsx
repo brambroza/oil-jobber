@@ -37,7 +37,7 @@ type BasePriceRow = {
 };
 
 type Refinery = { id: string; name: string; active: boolean };
-type Depot = { id: string; code: string; name: string };
+type Depot = { id: string; code: string; name: string; refinery_id: string | null };
 type OilProduct = { id: string; code: string; name: string; is_active: boolean };
 type EditItem = { depot_id: string; product_code: string; product_name: string; price: number | string };
 
@@ -94,6 +94,10 @@ export default function PricesPage() {
   const [deleteId, setDeleteId] = useState<string | null>(null);
 
   const activeProducts = useMemo(() => products.filter((p) => p.is_active), [products]);
+  const refineryDepots = useMemo(
+    () => depots.filter((d) => d.refinery_id === refineryId),
+    [depots, refineryId],
+  );
   const filteredRows = useMemo(() => {
     const text = searchRefinery.trim().toLowerCase();
     const dateText = searchDate.trim();
@@ -145,6 +149,18 @@ export default function PricesPage() {
     setExpiresTime('');
     setItems([{ depot_id: '', product_code: '', product_name: '', price: 0 }]);
     setOpenEditor(true);
+  };
+
+  const buildItemsForRefinery = (nextRefineryId: string): EditItem[] => {
+    const nextDepots = depots.filter((d) => d.refinery_id === nextRefineryId);
+    return nextDepots.flatMap((depot) => (
+      activeProducts.map((product) => ({
+        depot_id: depot.id,
+        product_code: product.code,
+        product_name: product.name,
+        price: 0,
+      }))
+    ));
   };
 
   const openEdit = async (id: string) => {
@@ -314,7 +330,16 @@ export default function PricesPage() {
       <Drawer anchor='right' open={openEditor} onClose={() => setOpenEditor(false)}>
         <Stack spacing={2} sx={{ width: { xs: '100%', sm: 840 }, p: 2 }}>
           <Typography variant='h6'>{editingId ? 'แก้ไขราคาน้ำมัน' : 'เพิ่มราคาน้ำมัน'}</Typography>
-          <TextField select label='โรงกลั่น' value={refineryId} onChange={(e) => setRefineryId(e.target.value)}>
+          <TextField
+            select
+            label='โรงกลั่น'
+            value={refineryId}
+            onChange={(e) => {
+              const nextRefineryId = e.target.value;
+              setRefineryId(nextRefineryId);
+              setItems(buildItemsForRefinery(nextRefineryId));
+            }}
+          >
             {refineries.map((r) => <MenuItem key={r.id} value={r.id}>{r.name}</MenuItem>)}
           </TextField>
           <Stack direction='row' spacing={1}>
@@ -353,7 +378,7 @@ export default function PricesPage() {
                       }}
                       sx={{ minWidth: 150 }}
                     >
-                      {depots.map((d) => <MenuItem key={d.id} value={d.id}>{d.code} - {d.name}</MenuItem>)}
+                      {refineryDepots.map((d) => <MenuItem key={d.id} value={d.id}>{d.code} - {d.name}</MenuItem>)}
                     </TextField>
                   </TableCell>
                   <TableCell>
