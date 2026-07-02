@@ -689,7 +689,7 @@ export default function SellingPricesPage() {
       if (res.ok && data?.ok !== false) success += 1;
       else fail += 1;
     }
-    if (fail > 0) setSendResult({ ok: false, message: `ส่งสำเร็จ ${success} รายการ, ไม่สำเร็จ ${fail} รายการ` });
+    if (fail > 0) setSendResult({ ok: false, message: `ส่งสำเร็จ ${success} รายการ, ไม่สำเร็จ ${fail} รายการ เนื่องจากไม่อยู่ในกลุ่มผลิตภัณฑ์ที่เลือก` });
     else {
       setSendResult({ ok: true, message: `ส่งสำเร็จ ${success} ราย` });
       setOpenSendDialog(false);
