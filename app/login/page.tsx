@@ -194,12 +194,12 @@ export default function LoginPage() {
             เข้าสู่ระบบด้วย LINE
           </Button>
 
-          <Typography sx={{ fontSize: 13, color: '#6b7280' }}>
+         {/*  <Typography sx={{ fontSize: 13, color: '#6b7280' }}>
             ยังไม่มีบัญชี?{' '}
             <Link href='/register' style={{ color: '#111827', fontWeight: 600, textDecoration: 'none' }}>
               สมัครสมาชิก
             </Link>
-          </Typography>
+          </Typography> */}
         </Stack>
       </Paper>
 
