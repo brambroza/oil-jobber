@@ -24,7 +24,9 @@ export async function POST(req: NextRequest) {
   const expiresDate = String(body.expires_date ?? '').trim(); // dd/MM/yyyy
   const expiresTime = String(body.expires_time ?? '').trim(); // HH:mm
   const remark = String(body.remark ?? '').trim();
-  const rows = Array.isArray(body.rows) ? body.rows : [];
+  const rows = Array.isArray(body.rows)
+    ? body.rows.filter((r: any) => String(r.depot_id ?? '').trim() && String(r.product_code ?? '').trim())
+    : [];
 
   if (!companyId) return NextResponse.json({ error: 'กรุณาตั้งค่า company_id' }, { status: 422 });
   if (!refineryId) return NextResponse.json({ error: 'กรุณาเลือกโรงกลั่น' }, { status: 422 });
@@ -66,9 +68,9 @@ export async function POST(req: NextRequest) {
   const payload = rows.map((r: any) => ({
     company_id: companyId,
     oil_base_price_id: base.id,
-    depot_id: r.depot_id,
-    product_code: r.product_code,
-    product_name: r.product_name,
+    depot_id: String(r.depot_id ?? '').trim(),
+    product_code: String(r.product_code ?? '').trim(),
+    product_name: String(r.product_name ?? '').trim(),
     base_cost_price: Number(r.price ?? 0),
     selling_price: Number(r.price ?? 0),
   }));

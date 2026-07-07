@@ -41,6 +41,10 @@ type Depot = { id: string; code: string; name: string; refinery_id: string | nul
 type OilProduct = { id: string; code: string; name: string; is_active: boolean };
 type EditItem = { depot_id: string; product_code: string; product_name: string; price: number | string };
 
+function isCompleteItem(item: EditItem): boolean {
+  return Boolean(String(item.depot_id || '').trim() && String(item.product_code || '').trim());
+}
+
 function todayDdMmYyyy(): string {
   const now = new Date();
   const dd = String(now.getDate()).padStart(2, '0');
@@ -195,6 +199,9 @@ export default function PricesPage() {
       setExpiresTime('');
     }
 
+   
+
+
     setItems(
       (data.items || []).map((x: any) => ({
         depot_id: x.depot_id,
@@ -208,6 +215,15 @@ export default function PricesPage() {
   };
 
   const save = async () => {
+    const rowsToSave = items
+      .filter(isCompleteItem)
+      .map((item) => ({ ...item, price: Number(item.price || 0) }));
+
+    if (!rowsToSave.length) {
+      setError('กรุณาเลือกคลังและรหัสน้ำมันอย่างน้อย 1 รายการ');
+      return;
+    }
+
     const payload = {
       company_id: companyId,
       refinery_id: refineryId,
@@ -215,7 +231,7 @@ export default function PricesPage() {
       effective_time: effectiveTime,
       expires_date: expiresDate,
       expires_time: expiresTime,
-      rows: items.map((item) => ({ ...item, price: Number(item.price || 0) })),
+      rows: rowsToSave,
     };
 
     const res = await fetch(editingId ? `/api/prices/${editingId}` : '/api/prices/confirm', {

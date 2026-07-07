@@ -36,7 +36,10 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
   const companyId = resolveCompanyId(body.company_id);
   if (!companyId) return NextResponse.json({ error: 'กรุณาตั้งค่า company_id หรือ DEFAULT_COMPANY_ID' }, { status: 422 });
 
-  const { effective_date, effective_time, expires_date, expires_time, refinery_id, rows, remark } = body;
+  const { effective_date, effective_time, expires_date, expires_time, refinery_id, rows: rawRows, remark } = body;
+  const rows = Array.isArray(rawRows)
+    ? rawRows.filter((r: any) => String(r.depot_id ?? '').trim() && String(r.product_code ?? '').trim())
+    : rawRows;
   if ((expires_date && !expires_time) || (!expires_date && expires_time)) {
     return NextResponse.json({ error: 'กรุณาระบุวันและเวลาออกให้ครบ' }, { status: 422 });
   }
@@ -86,9 +89,9 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
       const payload = rows.map((r: any) => ({
         company_id: companyId,
         oil_base_price_id: id,
-        depot_id: r.depot_id,
-        product_code: r.product_code,
-        product_name: r.product_name,
+        depot_id: String(r.depot_id ?? '').trim(),
+        product_code: String(r.product_code ?? '').trim(),
+        product_name: String(r.product_name ?? '').trim(),
         base_cost_price: Number(r.price ?? 0),
         selling_price: Number(r.price ?? 0),
       }));
