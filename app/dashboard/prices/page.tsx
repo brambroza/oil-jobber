@@ -37,7 +37,7 @@ type BasePriceRow = {
 };
 
 type Refinery = { id: string; name: string; active: boolean };
-type Depot = { id: string; code: string; name: string; refinery_id: string | null };
+type Depot = { id: string; code: string; name: string; refinery_id: string | null; is_active: boolean };
 type OilProduct = { id: string; code: string; name: string; is_active: boolean };
 type EditItem = { depot_id: string; product_code: string; product_name: string; price: number | string };
 
@@ -156,7 +156,7 @@ export default function PricesPage() {
   };
 
   const buildItemsForRefinery = (nextRefineryId: string): EditItem[] => {
-    const nextDepots = depots.filter((d) => d.refinery_id === nextRefineryId);
+    const nextDepots = depots.filter((d) => d.refinery_id === nextRefineryId &&  d.is_active === true);
     return nextDepots.flatMap((depot) => (
       activeProducts.map((product) => ({
         depot_id: depot.id,
@@ -199,7 +199,7 @@ export default function PricesPage() {
       setExpiresTime('');
     }
 
-   
+
 
 
     setItems(
