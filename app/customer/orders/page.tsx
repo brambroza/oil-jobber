@@ -593,6 +593,17 @@ export default function CustomerOrdersPage() {
       vehicle_driver_phone: form.vehicle_driver_phone || null,
       vehicle_pickup_license_number: form.vehicle_pickup_license_number || null,
       payment_condition_id: form.payment_condition_id || null,
+      due_date: (() => {
+        const creditDays =
+          paymentOptions.find(
+            (e) => e.id === form.payment_condition_id
+          )?.credit_days ?? 0;
+
+        const dueDate = new Date();
+        dueDate.setDate(dueDate.getDate() + creditDays);
+
+        return dueDate;
+      })(),
       items: form.items
         .filter((x) => x.selected && Number(x.liters) > 0)
         .map((x) => ({
@@ -604,6 +615,9 @@ export default function CustomerOrdersPage() {
           unit_price: Number(x.unit_price),
         })),
     };
+
+
+    
 
     const res = await fetch(form.id ? `/api/customer-portal/orders/${form.id}` : '/api/customer-portal/orders', {
       method: form.id ? 'PATCH' : 'POST',
@@ -649,12 +663,12 @@ export default function CustomerOrdersPage() {
         const depot = it.depots;
         const refinery = it.refineries;
         const depotLabel = [depot?.code, depot?.name].filter(Boolean).join(' - ');
-        const location =  detail.delivery_location || receiveMethodThai(detail.receive_method);
+        const location = detail.delivery_location || receiveMethodThai(detail.receive_method);
         return `
           <tr  >
             <td class="desc">
               <div><strong>${idx + 1})&nbsp;&nbsp;${escapeHtml(productTitle)}</strong></div>
-              <div>${escapeHtml(depotLabel|| productTitle)}</div>
+              <div>${escapeHtml(depotLabel || productTitle)}</div>
               <div>${escapeHtml(location)}</div>
             </td>
             <td class="num shade">${liters.toLocaleString('th-TH')}</td>
@@ -1128,7 +1142,7 @@ export default function CustomerOrdersPage() {
                       <Stack direction='row' spacing={0.8} alignItems='center'>
                         <Typography>ราคาต่อลิตร</Typography>
                         {form.receive_method !== 'PICKUP_BY_TRUCK' && selectedDepotTransportFee > 0 ? (
-                          <Typography sx={{ color: '#ef4444', fontWeight: 800 , fontSize : 12 }}>
+                          <Typography sx={{ color: '#ef4444', fontWeight: 800, fontSize: 12 }}>
                             + เพิ่ม {money(selectedDepotTransportFee)}
                           </Typography>
                         ) : null}
