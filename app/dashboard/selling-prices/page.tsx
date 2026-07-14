@@ -646,7 +646,7 @@ export default function SellingPricesPage() {
           layout: 'vertical',
           spacing: 'sm',
           contents: [
-            { type: 'text', text: `ราคาน้ำมันรอบ ${formatDateTimeNow()}`, size: 'lg', weight: 'bold', color: '#1e3a8a' },
+            { type: 'text', text: `ราคาน้ำมันรอบ ${formatDateTimeNow()}`, size: 'lg', weight: 'bold', color: '#1e3a8a', wrap: true },
 
             ...roundSections,
           ],
