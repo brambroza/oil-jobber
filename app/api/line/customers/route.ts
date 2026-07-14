@@ -8,7 +8,7 @@ export async function GET(req: NextRequest) {
 
   const { data: customers, error } = await supabaseAdmin
     .from('line_customers')
-    .select('id, customer_id, line_user_id, display_name, profile_image_url, created_at, updated_at, customers(company_name)')
+    .select('id, customer_id, line_user_id, group_id, conversation_key, display_name, profile_image_url, created_at, updated_at, customers(company_name)')
     .eq('company_id', companyId)
     .eq('is_deleted', false)
     .order('updated_at', { ascending: false });
@@ -21,7 +21,7 @@ export async function GET(req: NextRequest) {
   if (ids.length) {
     const { data: messages } = await supabaseAdmin
       .from('line_messages')
-      .select('line_customer_id, message_text, created_at, direction')
+      .select('line_customer_id, group_id, message_text, created_at, direction')
       .eq('company_id', companyId)
       .eq('is_deleted', false)
       .in('line_customer_id', ids)

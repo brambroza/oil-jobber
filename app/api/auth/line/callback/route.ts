@@ -129,6 +129,8 @@ export async function GET(req: NextRequest) {
       {
         company_id: companyId,
         line_user_id: lineUserId,
+        group_id: null,
+        conversation_key: 'DIRECT',
         display_name: profile.displayName || null,
         profile_image_url: profile.pictureUrl || null,
         line_login_access_token: accessToken,
@@ -138,7 +140,7 @@ export async function GET(req: NextRequest) {
         updated_at: now,
         is_deleted: false,
       },
-      { onConflict: 'line_user_id' },
+      { onConflict: 'company_id,line_user_id,conversation_key' },
     )
     .select('id, customer_id')
     .single();

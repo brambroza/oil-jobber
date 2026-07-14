@@ -12,7 +12,7 @@ export async function GET(req: NextRequest) {
 
   const { data, error } = await supabaseAdmin
     .from('line_messages')
-    .select('id, line_customer_id, direction, message_type, message_text, created_at')
+    .select('id, line_customer_id, group_id, direction, message_type, message_text, created_at')
     .eq('company_id', companyId)
     .eq('line_customer_id', lineCustomerId)
     .eq('is_deleted', false)

@@ -16,7 +16,7 @@ export async function POST(req: NextRequest) {
 
     const { data: customer, error: customerError } = await supabaseAdmin
       .from('line_customers')
-      .select('id, line_user_id')
+      .select('id, line_user_id, group_id')
       .eq('id', lineCustomerId)
       .eq('company_id', companyId)
       .eq('is_deleted', false)
@@ -26,13 +26,16 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: customerError?.message || 'ไม่พบข้อมูลลูกค้า LINE' }, { status: 404 });
     }
 
-    await pushLineMessage(customer.line_user_id, text);
+    // Replies to a group must use its groupId; direct conversations use userId.
+    const recipientId = customer.group_id || customer.line_user_id;
+    await pushLineMessage(recipientId, text);
 
     const { data, error } = await supabaseAdmin
       .from('line_messages')
       .insert({
         company_id: companyId,
         line_customer_id: lineCustomerId,
+        group_id: customer.group_id || null,
         direction: 'OUT',
         message_type: 'text',
         message_text: text,

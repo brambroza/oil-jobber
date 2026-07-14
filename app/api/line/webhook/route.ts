@@ -12,7 +12,13 @@ export async function POST(req: NextRequest) {
 
   for (const ev of events) {
     const userId = String(ev?.source?.userId ?? '').trim();
+    const sourceType = String(ev?.source?.type ?? '').trim();
+    const groupId = sourceType === 'group' ? String(ev?.source?.groupId ?? '').trim() : '';
     if (!userId) continue;
+
+    // LINE sends groupId only for group events. A stable key lets the same
+    // person have separate direct and group conversations.
+    const conversationKey = groupId || 'DIRECT';
 
     const profile = await getLineProfile(userId);
 
@@ -22,10 +28,12 @@ export async function POST(req: NextRequest) {
         {
           company_id: companyId,
           line_user_id: userId,
+          group_id: groupId || null,
+          conversation_key: conversationKey,
           display_name: profile?.displayName ?? null,
           profile_image_url: profile?.pictureUrl ?? null,
         },
-        { onConflict: 'line_user_id' },
+        { onConflict: 'company_id,line_user_id,conversation_key' },
       )
       .select('id')
       .single();
@@ -37,6 +45,7 @@ export async function POST(req: NextRequest) {
       await supabaseAdmin.from('line_messages').insert({
         company_id: companyId,
         line_customer_id: lineCustomer.id,
+        group_id: groupId || null,
         direction: 'IN',
         message_type: 'text',
         message_text: text,
