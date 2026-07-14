@@ -41,6 +41,14 @@ type Depot = { id: string; code: string; name: string; refinery_id: string | nul
 type OilProduct = { id: string; code: string; name: string; is_active: boolean };
 type EditItem = { depot_id: string; product_code: string; product_name: string; price: number | string };
 
+function depotMenuTone(depotId: string, depotIds: string[]): string {
+  const index = [...depotIds].sort().indexOf(depotId);
+  const hue = Math.round((Math.max(index, 0) * 360) / Math.max(depotIds.length, 1));
+  /*   return `hsl(${hue} 65% 96%)`; */
+ const hues = Math.round((index * 137.508) % 360);
+return `oklch(0.93 0.05 ${hues})`;
+}
+
 function isCompleteItem(item: EditItem): boolean {
   return Boolean(String(item.depot_id || '').trim() && String(item.product_code || '').trim());
 }
@@ -102,6 +110,7 @@ export default function PricesPage() {
     () => depots.filter((d) => d.refinery_id === refineryId),
     [depots, refineryId],
   );
+  const refineryDepotIds = useMemo(() => refineryDepots.map((depot) => depot.id), [refineryDepots]);
   const filteredRows = useMemo(() => {
     const text = searchRefinery.trim().toLowerCase();
     const dateText = searchDate.trim();
@@ -156,7 +165,7 @@ export default function PricesPage() {
   };
 
   const buildItemsForRefinery = (nextRefineryId: string): EditItem[] => {
-    const nextDepots = depots.filter((d) => d.refinery_id === nextRefineryId &&  d.is_active === true);
+    const nextDepots = depots.filter((d) => d.refinery_id === nextRefineryId && d.is_active === true);
     return nextDepots.flatMap((depot) => (
       activeProducts.map((product) => ({
         depot_id: depot.id,
@@ -382,7 +391,11 @@ export default function PricesPage() {
             </TableHead>
             <TableBody>
               {items.map((it, idx) => (
-                <TableRow key={`edit-item-${idx}`}>
+                <TableRow key={`edit-item-${idx}`}
+
+                  sx={{
+                    bgcolor: depotMenuTone(it.depot_id, refineryDepotIds),
+                  }}>
                   <TableCell>
                     <TextField
                       select
@@ -394,7 +407,19 @@ export default function PricesPage() {
                       }}
                       sx={{ minWidth: 150 }}
                     >
-                      {refineryDepots.map((d) => <MenuItem key={d.id} value={d.id}>{d.code} - {d.name}</MenuItem>)}
+                      {refineryDepots.map((d) => (
+                        <MenuItem
+                          key={d.id}
+                          value={d.id}
+                          sx={{
+                            mx: 0.5,
+                            my: 0.25,
+                            borderRadius: 1,
+                          }}
+                        >
+                          {d.code} - {d.name}
+                        </MenuItem>
+                      ))}
                     </TextField>
                   </TableCell>
                   <TableCell>
