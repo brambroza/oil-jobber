@@ -17,20 +17,21 @@ export async function GET(req: NextRequest) {
   if (error) return NextResponse.json({ error: error.message }, { status: 400 });
 
   const rows = data ?? [];
-  const ids = rows.map((r) => r.id);
-  const countMap: Record<string, number> = {};
+  const counts = await Promise.all(
+    rows.map(async (row) => {
+      const { count, error: countError } = await supabaseAdmin
+        .from('oil_price_items')
+        .select('id', { count: 'exact', head: true })
+        .eq('company_id', companyId)
+        .eq('oil_base_price_id', row.id)
+        .eq('is_deleted', false);
+      return { id: row.id, count: count ?? 0, error: countError };
+    }),
+  );
+  const countError = counts.find((result) => result.error)?.error;
+  if (countError) return NextResponse.json({ error: countError.message }, { status: 400 });
+  const countMap = Object.fromEntries(counts.map((result) => [result.id, result.count]));
 
-  if (ids.length) {
-    const { data: items } = await supabaseAdmin
-      .from('oil_price_items')
-      .select('oil_base_price_id')
-      .in('oil_base_price_id', ids)
-      .eq('is_deleted', false);
-    for (const it of items ?? []) {
-      const key = String(it.oil_base_price_id);
-      countMap[key] = (countMap[key] ?? 0) + 1;
-    }
-  }
 
   return NextResponse.json(
     rows.map((r: any) => ({
