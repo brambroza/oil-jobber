@@ -42,6 +42,7 @@ type LineCustomer = {
   id: string;
   customer_id: string | null;
   line_user_id: string;
+  group_id: string | null;
   display_name: string | null;
   profile_image_url: string | null;
 };
@@ -648,38 +649,36 @@ export default function CustomersPage() {
           ) : (
             <Paper variant='outlined' sx={{ p: 1.25, borderColor: '#dbe4f0', borderRadius: 2 }}>
               <Stack spacing={1.1}>
-                <Alert severity='info'>เลือกบัญชี LINE แล้วผูกกับลูกค้ารายนี้ เพื่อใช้ส่งแจ้งเตือน/ติดตามออเดอร์</Alert>
+                <Alert severity='info'>เลือก LINE User หรือ LINE Group แล้วผูกกับลูกค้ารายนี้ เพื่อใช้ส่งแจ้งเตือน ติดตามออเดอร์ และส่งราคาน้ำมัน</Alert>
                 <TextField
                   select
                   size='small'
-                  label='LINE User'
+                  label='LINE User / Group'
                   value={selectedLineCustomerId}
                   onChange={(e) => setSelectedLineCustomerId(e.target.value)}
-                  helperText='แสดงเฉพาะรายการที่ยังไม่ผูก หรือผูกกับลูกค้ารายนี้อยู่แล้ว'
+                  helperText='แสดงเฉพาะรายการที่ยังไม่ผูก หรือผูกกับลูกค้ารายนี้อยู่แล้ว — เลือกบันทึกได้ทีละรายการ'
                 >
-                  <MenuItem value=''>-- เลือกผู้ใช้ LINE --</MenuItem>
+                  <MenuItem value=''>-- เลือก LINE User หรือ Group --</MenuItem>
                   {lineCustomers
                     .filter((lc) => !lc.customer_id || lc.customer_id === form.id)
                     .map((lc) => (
                       <MenuItem key={lc.id} value={lc.id}>
                         <Stack direction='row' spacing={1} alignItems='center' sx={{ minWidth: 0 }}>
                           <Avatar src={lc.profile_image_url || undefined} sx={{ width: 24, height: 24 }}>
-                            {(lc.display_name || lc.line_user_id || 'U').slice(0, 1).toUpperCase()}
+                            {(lc.display_name || (lc.group_id ? 'G' : lc.line_user_id) || 'U').slice(0, 1).toUpperCase()}
                           </Avatar>
                           <Box sx={{ minWidth: 0 }}>
                             <Typography variant='body2' noWrap sx={{ fontWeight: 600 }}>
-                              {lc.display_name || '-'}
+                              {lc.group_id ? `LINE Group · ${lc.display_name || '-'}` : (lc.display_name || '-')}
                             </Typography>
-                            {/*  <Typography variant='caption' color='text.secondary' noWrap>
-                              {lc.line_user_id}
-                            </Typography> */}
+                            {lc.group_id ? <Typography variant='caption' color='text.secondary' noWrap>{lc.group_id}</Typography> : null}
                           </Box>
                         </Stack>
                       </MenuItem>
                     ))}
                 </TextField>
                 <Button variant='contained' disabled={!form.id || !selectedLineCustomerId || lineMapSaving} onClick={() => void onSaveLineMapping()}>
-                  {lineMapSaving ? 'กำลังบันทึก...' : 'บันทึกการผูก LINE'}
+                  {lineMapSaving ? 'กำลังบันทึก...' : 'บันทึกการผูก LINE User / Group'}
                 </Button>
               </Stack>
             </Paper>

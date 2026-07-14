@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { supabaseAdmin } from '@/lib/supabase/server';
 import { resolveCompanyId } from '@/lib/supabase/company';
-import { getLineProfile } from '@/lib/services/line';
+import { getLineGroupSummary, getLineProfile } from '@/lib/services/line';
 
 export async function POST(req: NextRequest) {
   const payload = await req.json();
@@ -20,7 +20,8 @@ export async function POST(req: NextRequest) {
     // person have separate direct and group conversations.
     const conversationKey = groupId || 'DIRECT';
 
-    const profile = await getLineProfile(userId);
+    const groupSummary = groupId ? await getLineGroupSummary(groupId) : null;
+    const profile = groupId ? null : await getLineProfile(userId);
 
     const { data: lineCustomer, error: upsertError } = await supabaseAdmin
       .from('line_customers')
@@ -30,8 +31,9 @@ export async function POST(req: NextRequest) {
           line_user_id: userId,
           group_id: groupId || null,
           conversation_key: conversationKey,
-          display_name: profile?.displayName ?? null,
-          profile_image_url: profile?.pictureUrl ?? null,
+          // Group conversations are shown by their group name, not the sender's name.
+          display_name: groupSummary?.groupName ?? profile?.displayName ?? null,
+          profile_image_url: groupSummary?.pictureUrl ?? profile?.pictureUrl ?? null,
         },
         { onConflict: 'company_id,line_user_id,conversation_key' },
       )

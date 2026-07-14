@@ -43,3 +43,15 @@ export async function getLineProfile(lineUserId: string): Promise<{ displayName?
   if (!res.ok) return null;
   return (await res.json()) as { displayName?: string; pictureUrl?: string };
 }
+
+export async function getLineGroupSummary(groupId: string): Promise<{ groupName?: string; pictureUrl?: string } | null> {
+  const token = process.env.LINE_CHANNEL_ACCESS_TOKEN;
+  if (!token || !groupId) return null;
+
+  const res = await fetch(`https://api.line.me/v2/bot/group/${encodeURIComponent(groupId)}/summary`, {
+    method: 'GET',
+    headers: { Authorization: `Bearer ${token}` },
+  });
+  if (!res.ok) return null;
+  return (await res.json()) as { groupName?: string; pictureUrl?: string };
+}

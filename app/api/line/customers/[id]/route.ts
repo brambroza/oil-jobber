@@ -17,10 +17,9 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
     .eq('id', id)
     .eq('company_id', companyId)
     .eq('is_deleted', false)
-    .select('id, customer_id, line_user_id, display_name, profile_image_url, created_at, updated_at')
+    .select('id, customer_id, line_user_id, group_id, conversation_key, display_name, profile_image_url, created_at, updated_at')
     .single();
 
   if (error) return NextResponse.json({ error: error.message }, { status: 400 });
   return NextResponse.json(data);
 }
-

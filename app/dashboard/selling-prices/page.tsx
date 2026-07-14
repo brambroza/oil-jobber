@@ -77,6 +77,7 @@ type LineCustomer = {
   id: string;
   customer_id?: string | null;
   line_user_id: string;
+  group_id?: string | null;
   display_name: string | null;
   profile_image_url: string | null;
   customers?: { company_name?: string } | null;
@@ -660,7 +661,7 @@ export default function SellingPricesPage() {
     setSendResult(null);
     const recipients = lineCustomers
       .filter((c) => selectedCustomerIds.includes(c.id))
-      .map((c) => ({ lineUserId: c.line_user_id, lineCustomerId: c.id }));
+      .map((c) => ({ lineCustomerId: c.id }));
     let success = 0;
     let fail = 0;
     for (const recipient of recipients) {
@@ -978,7 +979,7 @@ export default function SellingPricesPage() {
         </Dialog>
 
         <Dialog open={openSendDialog} onClose={() => setOpenSendDialog(false)} maxWidth='md' fullWidth>
-          <DialogTitle>เลือกลูกค้าสำหรับส่งราคา LINE OA</DialogTitle>
+          <DialogTitle>เลือก LINE User / Group สำหรับส่งราคา</DialogTitle>
           <DialogContent>
             <Stack spacing={1.5}>
               {sendResult ? <Alert severity={sendResult.ok ? 'success' : 'error'}>{sendResult.message}</Alert> : null}
@@ -995,7 +996,7 @@ export default function SellingPricesPage() {
                   <TableHead>
                     <TableRow>
                       <TableCell width={48}>เลือก</TableCell>
-                      <TableCell>ชื่อลูกค้า LINE</TableCell>
+                      <TableCell>LINE User / Group</TableCell>
                       <TableCell>บริษัทลูกค้า</TableCell>
                     </TableRow>
                   </TableHead>
@@ -1007,7 +1008,12 @@ export default function SellingPricesPage() {
                           <TableCell padding='checkbox'>
                             <Checkbox checked={checked} onChange={(e) => toggleCustomer(c.id, e.target.checked)} />
                           </TableCell>
-                          <TableCell>{c.display_name || '-'}</TableCell>
+                          <TableCell>
+                            <Stack spacing={0.25}>
+                              <Typography variant='body2'>{c.group_id ? `LINE Group · ${c.display_name || '-'}` : (c.display_name || '-')}</Typography>
+                              {c.group_id ? <Typography variant='caption' color='text.secondary'>{c.group_id}</Typography> : null}
+                            </Stack>
+                          </TableCell>
                           <TableCell>{c.customers?.company_name || '-'}</TableCell>
                         </TableRow>
                       );
