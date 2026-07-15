@@ -23,6 +23,7 @@ import {
   TextField,
   Typography,
 } from '@mui/material';
+import { ActionSnackbar, type ActionSnackbarSeverity } from '@/components/common/ActionSnackbar';
 
 type BasePriceRow = {
   id: string;
@@ -104,6 +105,15 @@ export default function PricesPage() {
   const [items, setItems] = useState<EditItem[]>([]);
 
   const [deleteId, setDeleteId] = useState<string | null>(null);
+  const [snack, setSnack] = useState<{ open: boolean; message: string; severity: ActionSnackbarSeverity }>({
+    open: false,
+    message: '',
+    severity: 'info',
+  });
+
+  const showSnack = (message: string, severity: ActionSnackbarSeverity) => {
+    setSnack({ open: true, message, severity });
+  };
 
   const activeProducts = useMemo(() => products.filter((p) => p.is_active), [products]);
   const refineryDepots = useMemo(
@@ -137,14 +147,22 @@ export default function PricesPage() {
     if (r3.ok) setProducts(d3 || []);
   };
 
-  const loadPrices = async () => {
+  const loadPrices = async (showFeedback = false) => {
     setLoading(true);
     setError('');
-    const res = await fetch(`/api/prices?company_id=${companyId}`);
-    const data = await res.json();
-    if (!res.ok) setError(data.error || 'โหลดข้อมูลไม่สำเร็จ');
-    else setRows(data || []);
-    setLoading(false);
+    try {
+      const res = await fetch(`/api/prices?company_id=${companyId}`);
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || 'โหลดข้อมูลไม่สำเร็จ');
+      setRows(data || []);
+      if (showFeedback) showSnack('รีเฟรชข้อมูลราคาน้ำมันเรียบร้อยแล้ว', 'info');
+    } catch (e) {
+      const message = (e as Error).message;
+      setError(message);
+      showSnack(message, 'error');
+    } finally {
+      setLoading(false);
+    }
   };
 
   useEffect(() => {
@@ -162,6 +180,7 @@ export default function PricesPage() {
     setExpiresTime('');
     setItems([{ depot_id: '', product_code: '', product_name: '', price: 0 }]);
     setOpenEditor(true);
+    showSnack('พร้อมเพิ่มราคาน้ำมันใหม่', 'info');
   };
 
   const buildItemsForRefinery = (nextRefineryId: string): EditItem[] => {
@@ -177,50 +196,54 @@ export default function PricesPage() {
   };
 
   const openEdit = async (id: string) => {
-    const res = await fetch(`/api/prices/${id}?company_id=${companyId}`);
-    const data = await res.json();
-    if (!res.ok) {
-      setError(data.error || 'โหลดรายละเอียดไม่สำเร็จ');
-      return;
+    try {
+      const res = await fetch(`/api/prices/${id}?company_id=${companyId}`);
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || 'โหลดรายละเอียดไม่สำเร็จ');
+
+      setEditingId(id);
+      setRefineryId(String(data.base.refinery_id ?? ''));
+
+      const at = String(data.base.effective_at ?? '');
+      if (at.includes('T')) {
+        const [d, t] = at.split('T');
+        const [yyyy, mm, dd] = d.split('-');
+        setEffectiveDate(`${dd}/${mm}/${yyyy}`);
+        setEffectiveTime((t || '00:00').slice(0, 5));
+      } else {
+        setEffectiveDate(todayDdMmYyyy());
+        setEffectiveTime(nowHHmm());
+      }
+      const expAt = String(data.base.expires_at ?? '');
+      if (expAt.includes('T')) {
+        const [d, t] = expAt.split('T');
+        const [yyyy, mm, dd] = d.split('-');
+        setExpiresDate(`${dd}/${mm}/${yyyy}`);
+        setExpiresTime((t || '00:00').slice(0, 5));
+      } else {
+        setExpiresDate('');
+        setExpiresTime('');
+      }
+
+
+
+
+      setItems(
+        (data.items || []).map((x: any) => ({
+          depot_id: x.depot_id,
+          product_code: x.product_code,
+          product_name: x.product_name,
+          price: Number(x.base_cost_price ?? 0),
+        })),
+      );
+
+      setOpenEditor(true);
+      showSnack('โหลดข้อมูลสำหรับแก้ไขเรียบร้อยแล้ว', 'info');
+    } catch (e) {
+      const message = (e as Error).message;
+      setError(message);
+      showSnack(message, 'error');
     }
-
-    setEditingId(id);
-    setRefineryId(String(data.base.refinery_id ?? ''));
-
-    const at = String(data.base.effective_at ?? '');
-    if (at.includes('T')) {
-      const [d, t] = at.split('T');
-      const [yyyy, mm, dd] = d.split('-');
-      setEffectiveDate(`${dd}/${mm}/${yyyy}`);
-      setEffectiveTime((t || '00:00').slice(0, 5));
-    } else {
-      setEffectiveDate(todayDdMmYyyy());
-      setEffectiveTime(nowHHmm());
-    }
-    const expAt = String(data.base.expires_at ?? '');
-    if (expAt.includes('T')) {
-      const [d, t] = expAt.split('T');
-      const [yyyy, mm, dd] = d.split('-');
-      setExpiresDate(`${dd}/${mm}/${yyyy}`);
-      setExpiresTime((t || '00:00').slice(0, 5));
-    } else {
-      setExpiresDate('');
-      setExpiresTime('');
-    }
-
-
-
-
-    setItems(
-      (data.items || []).map((x: any) => ({
-        depot_id: x.depot_id,
-        product_code: x.product_code,
-        product_name: x.product_name,
-        price: Number(x.base_cost_price ?? 0),
-      })),
-    );
-
-    setOpenEditor(true);
   };
 
   const save = async () => {
@@ -229,7 +252,9 @@ export default function PricesPage() {
       .map((item) => ({ ...item, price: Number(item.price || 0) }));
 
     if (!rowsToSave.length) {
-      setError('กรุณาเลือกคลังและรหัสน้ำมันอย่างน้อย 1 รายการ');
+      const message = 'กรุณาเลือกคลังและรหัสน้ำมันอย่างน้อย 1 รายการ';
+      setError(message);
+      showSnack(message, 'warning');
       return;
     }
 
@@ -243,28 +268,38 @@ export default function PricesPage() {
       rows: rowsToSave,
     };
 
-    const res = await fetch(editingId ? `/api/prices/${editingId}` : '/api/prices/confirm', {
-      method: editingId ? 'PATCH' : 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(payload),
-    });
-    const data = await res.json();
-    if (!res.ok) {
-      setError(data.error || 'บันทึกไม่สำเร็จ');
-      return;
+    const wasEditing = Boolean(editingId);
+    try {
+      const res = await fetch(editingId ? `/api/prices/${editingId}` : '/api/prices/confirm', {
+        method: editingId ? 'PATCH' : 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || 'บันทึกไม่สำเร็จ');
+      setOpenEditor(false);
+      await loadPrices();
+      showSnack(wasEditing ? 'แก้ไขราคาน้ำมันเรียบร้อยแล้ว' : 'เพิ่มราคาน้ำมันเรียบร้อยแล้ว', 'success');
+    } catch (e) {
+      const message = (e as Error).message;
+      setError(message);
+      showSnack(message, 'error');
     }
-    setOpenEditor(false);
-    await loadPrices();
   };
 
   const remove = async () => {
     if (!deleteId) return;
-    const res = await fetch(`/api/prices/${deleteId}?company_id=${companyId}`, { method: 'DELETE' });
-    const data = await res.json();
-    if (!res.ok) setError(data.error || 'ลบไม่สำเร็จ');
-    else {
+    try {
+      const res = await fetch(`/api/prices/${deleteId}?company_id=${companyId}`, { method: 'DELETE' });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || 'ลบไม่สำเร็จ');
       setDeleteId(null);
       await loadPrices();
+      showSnack('ลบชุดราคาน้ำมันเรียบร้อยแล้ว', 'success');
+    } catch (e) {
+      const message = (e as Error).message;
+      setError(message);
+      showSnack(message, 'error');
     }
   };
 
@@ -301,7 +336,7 @@ export default function PricesPage() {
           }}
           sx={{ minWidth: { xs: '100%', md: 220 } }}
         />
-        <Button variant='outlined' onClick={() => void loadPrices()}>รีเฟรช</Button>
+        <Button variant='outlined' onClick={() => void loadPrices(true)}>รีเฟรช</Button>
         <Button variant='contained' startIcon={<Add />} onClick={openCreate}>เพิ่มราคาน้ำมัน</Button>
       </Stack>
 
@@ -330,7 +365,7 @@ export default function PricesPage() {
                 <TableCell>{r.item_count}</TableCell>
                 <TableCell align='right'>
                   <IconButton onClick={() => void openEdit(r.id)}><Edit fontSize='small' /></IconButton>
-                  <IconButton color='error' onClick={() => setDeleteId(r.id)}><Delete fontSize='small' /></IconButton>
+                  <IconButton color='error' onClick={() => { setDeleteId(r.id); showSnack('กรุณายืนยันการลบชุดราคาน้ำมัน', 'warning'); }}><Delete fontSize='small' /></IconButton>
                 </TableCell>
               </TableRow>
             ))}
@@ -455,14 +490,14 @@ export default function PricesPage() {
                     />
                   </TableCell>
                   <TableCell align='right'>
-                    <Button color='error' onClick={() => setItems(items.filter((_, i) => i !== idx))}>ลบ</Button>
+                    <Button color='error' onClick={() => { setItems(items.filter((_, i) => i !== idx)); showSnack(`ลบแถวที่ ${idx + 1} แล้ว`, 'warning'); }}>ลบ</Button>
                   </TableCell>
                 </TableRow>
               ))}
             </TableBody>
           </Table>
 
-          <Button variant='outlined' onClick={() => setItems([...items, { depot_id: '', product_code: '', product_name: '', price: 0 }])}>เพิ่มแถว</Button>
+          <Button variant='outlined' onClick={() => { setItems([...items, { depot_id: '', product_code: '', product_name: '', price: 0 }]); showSnack('เพิ่มแถวราคาใหม่แล้ว', 'info'); }}>เพิ่มแถว</Button>
           <Button variant='contained' onClick={() => void save()} disabled={!refineryId || !items.length}>บันทึก</Button>
         </Stack>
       </Drawer>
@@ -475,6 +510,13 @@ export default function PricesPage() {
           <Button color='error' onClick={() => void remove()}>ลบ</Button>
         </DialogActions>
       </Dialog>
+
+      <ActionSnackbar
+        open={snack.open}
+        message={snack.message}
+        severity={snack.severity}
+        onClose={() => setSnack((prev) => ({ ...prev, open: false }))}
+      />
     </Stack>
   );
 }

@@ -4,6 +4,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { Add, Delete, Edit } from '@mui/icons-material';
 import { Alert, Box, Button, Chip, Dialog, DialogActions, DialogContent, DialogTitle, Drawer, IconButton, MenuItem, Stack, Table, TableBody, TableCell, TableHead, TablePagination, TableRow, TextField, Typography } from '@mui/material';
 import { Depot } from '@/types/database';
+import { ActionSnackbar, type ActionSnackbarSeverity } from '@/components/common/ActionSnackbar';
 
 type RefineryOption = { id: string; name: string };
 type DepotForm = { id?: string; code: string; name: string; refinery_id: string; pickup_cost_per_liter: number; is_active: boolean };
@@ -27,6 +28,15 @@ export default function DepotsPage() {
   const [open, setOpen] = useState(false);
   const [form, setForm] = useState<DepotForm>(emptyForm);
   const [deleteId, setDeleteId] = useState<string | null>(null);
+  const [snack, setSnack] = useState<{ open: boolean; message: string; severity: ActionSnackbarSeverity }>({
+    open: false,
+    message: '',
+    severity: 'info',
+  });
+
+  const showSnack = (message: string, severity: ActionSnackbarSeverity) => {
+    setSnack({ open: true, message, severity });
+  };
 
   const codePreview = useMemo(() => normalizeDepotCode(form.code.trim()), [form.code]);
   const filteredRows = useMemo(() => {
@@ -48,72 +58,105 @@ export default function DepotsPage() {
     return filteredRows.slice(start, start + rowsPerPage);
   }, [filteredRows, page, rowsPerPage]);
 
-  const load = async () => {
+  const load = async (showFeedback = false) => {
     if (!companyId) return;
     setLoading(true);
     setError('');
-    const [depotRes, refineryRes] = await Promise.all([
-      fetch(`/api/depots?company_id=${companyId}`),
-      fetch(`/api/refineries?company_id=${companyId}`),
-    ]);
-    const [depotData, refineryData] = await Promise.all([depotRes.json(), refineryRes.json()]);
-    if (!depotRes.ok) setError(depotData.error || 'โหลดข้อมูลคลังไม่สำเร็จ');
-    else setRows(depotData);
-    if (!refineryRes.ok) setError(refineryData.error || 'โหลดข้อมูลโรงกลั่นไม่สำเร็จ');
-    else setRefineries((refineryData || []).map((x: any) => ({ id: x.id, name: x.name })));
-    setLoading(false);
+    try {
+      const [depotRes, refineryRes] = await Promise.all([
+        fetch(`/api/depots?company_id=${companyId}`),
+        fetch(`/api/refineries?company_id=${companyId}`),
+      ]);
+      const [depotData, refineryData] = await Promise.all([depotRes.json(), refineryRes.json()]);
+      if (!depotRes.ok) throw new Error(depotData.error || 'โหลดข้อมูลคลังไม่สำเร็จ');
+      if (!refineryRes.ok) throw new Error(refineryData.error || 'โหลดข้อมูลโรงกลั่นไม่สำเร็จ');
+
+      setRows(depotData);
+      setRefineries((refineryData || []).map((x: any) => ({ id: x.id, name: x.name })));
+      if (showFeedback) showSnack('รีเฟรชข้อมูลคลังน้ำมันเรียบร้อยแล้ว', 'info');
+    } catch (e) {
+      const message = (e as Error).message;
+      setError(message);
+      showSnack(message, 'error');
+    } finally {
+      setLoading(false);
+    }
   };
 
   useEffect(() => { void load(); }, [companyId]);
 
   const save = async () => {
+    const wasEditing = Boolean(form.id);
     setError('');
-    const payload = {
-      ...form,
-      code: normalizeDepotCode(form.code.trim()),
-      company_id: companyId,
-    };
+    try {
+      const payload = {
+        ...form,
+        code: normalizeDepotCode(form.code.trim()),
+        company_id: companyId,
+      };
 
-    const res = await fetch(form.id ? `/api/depots/${form.id}` : '/api/depots', {
-      method: form.id ? 'PATCH' : 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(payload),
-    });
-    const data = await res.json();
-    if (!res.ok) setError(data.error || 'บันทึกไม่สำเร็จ');
-    else {
+      const res = await fetch(form.id ? `/api/depots/${form.id}` : '/api/depots', {
+        method: form.id ? 'PATCH' : 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || 'บันทึกไม่สำเร็จ');
+
       setOpen(false);
       setForm(emptyForm);
       await load();
+      showSnack(wasEditing ? 'แก้ไขข้อมูลคลังน้ำมันเรียบร้อยแล้ว' : 'เพิ่มคลังน้ำมันเรียบร้อยแล้ว', 'success');
+    } catch (e) {
+      const message = (e as Error).message;
+      setError(message);
+      showSnack(message, 'error');
     }
   };
 
   const remove = async () => {
     if (!deleteId) return;
     setError('');
-    const res = await fetch(`/api/depots/${deleteId}`, { method: 'DELETE' });
-    const data = await res.json();
-    if (!res.ok) setError(data.error || 'ลบไม่สำเร็จ');
-    else { setDeleteId(null); await load(); }
+    try {
+      const res = await fetch(`/api/depots/${deleteId}`, { method: 'DELETE' });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || 'ลบไม่สำเร็จ');
+
+      setDeleteId(null);
+      await load();
+      showSnack('ลบข้อมูลคลังน้ำมันเรียบร้อยแล้ว', 'success');
+    } catch (e) {
+      const message = (e as Error).message;
+      setError(message);
+      showSnack(message, 'error');
+    }
   };
 
   const toggleActive = async (row: Depot) => {
     setError('');
-    const res = await fetch(`/api/depots/${row.id}`, {
-      method: 'PATCH',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        code: row.code,
-        name: row.name,
-        refinery_id: row.refinery_id || '',
-        pickup_cost_per_liter: Number(row.pickup_cost_per_liter),
-        is_active: !row.is_active,
-        company_id: companyId,
-      }),
-    });
-    const data = await res.json();
-    if (!res.ok) setError(data.error || 'อัปเดตสถานะไม่สำเร็จ');
-    else await load();
+    try {
+      const res = await fetch(`/api/depots/${row.id}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          code: row.code,
+          name: row.name,
+          refinery_id: row.refinery_id || '',
+          pickup_cost_per_liter: Number(row.pickup_cost_per_liter),
+          is_active: !row.is_active,
+          company_id: companyId,
+        }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || 'อัปเดตสถานะไม่สำเร็จ');
+
+      await load();
+      showSnack(row.is_active ? 'ปิดใช้งานคลังน้ำมันเรียบร้อยแล้ว' : 'เปิดใช้งานคลังน้ำมันเรียบร้อยแล้ว', row.is_active ? 'warning' : 'success');
+    } catch (e) {
+      const message = (e as Error).message;
+      setError(message);
+      showSnack(message, 'error');
+    }
   };
 
   return (
@@ -152,8 +195,8 @@ export default function DepotsPage() {
           onChange={(e) => setCompanyId(e.target.value)}
           helperText='ตั้งค่า default ได้ที่ NEXT_PUBLIC_DEFAULT_COMPANY_ID'
         />
-        <Button variant='outlined' onClick={() => void load()}>รีเฟรช</Button>
-        <Button variant='contained' startIcon={<Add />} onClick={() => { setForm(emptyForm); setOpen(true); }}>เพิ่ม</Button>
+        <Button variant='outlined' onClick={() => void load(true)}>รีเฟรช</Button>
+        <Button variant='contained' startIcon={<Add />} onClick={() => { setForm(emptyForm); setOpen(true); showSnack('พร้อมเพิ่มคลังน้ำมันใหม่', 'info'); }}>เพิ่ม</Button>
       </Stack>
 
       {error ? <Alert severity='error'>{error}</Alert> : null}
@@ -183,8 +226,8 @@ export default function DepotsPage() {
                   <Button size='small' variant='outlined' color={r.is_active ? 'warning' : 'success'} onClick={() => void toggleActive(r)}>
                     {r.is_active ? 'ปิด' : 'เปิด'}
                   </Button>
-                  <IconButton onClick={() => { setForm({ id: r.id, code: r.code, name: r.name, refinery_id: r.refinery_id || '', pickup_cost_per_liter: Number(r.pickup_cost_per_liter), is_active: r.is_active }); setOpen(true); }}><Edit fontSize='small' /></IconButton>
-                  <IconButton color='error' onClick={() => setDeleteId(r.id)}><Delete fontSize='small' /></IconButton>
+                  <IconButton onClick={() => { setForm({ id: r.id, code: r.code, name: r.name, refinery_id: r.refinery_id || '', pickup_cost_per_liter: Number(r.pickup_cost_per_liter), is_active: r.is_active }); setOpen(true); showSnack(`กำลังแก้ไข “${r.name}”`, 'info'); }}><Edit fontSize='small' /></IconButton>
+                  <IconButton color='error' onClick={() => { setDeleteId(r.id); showSnack('กรุณายืนยันการลบข้อมูลคลังน้ำมัน', 'warning'); }}><Delete fontSize='small' /></IconButton>
                 </TableCell>
               </TableRow>
             ))}
@@ -239,6 +282,13 @@ export default function DepotsPage() {
         <DialogContent>ต้องการลบคลังน้ำมันนี้ใช่หรือไม่</DialogContent>
         <DialogActions><Button onClick={() => setDeleteId(null)}>ยกเลิก</Button><Button color='error' onClick={() => void remove()}>ลบ</Button></DialogActions>
       </Dialog>
+
+      <ActionSnackbar
+        open={snack.open}
+        message={snack.message}
+        severity={snack.severity}
+        onClose={() => setSnack((prev) => ({ ...prev, open: false }))}
+      />
     </Stack>
   );
 }

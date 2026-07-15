@@ -25,6 +25,7 @@ import {
   Tooltip,
   Typography,
 } from '@mui/material';
+import { ActionSnackbar, type ActionSnackbarSeverity } from '@/components/common/ActionSnackbar';
 
 type Row = {
   id: string;
@@ -69,6 +70,15 @@ export default function CustomerVehiclesPage() {
   const [open, setOpen] = useState(false);
   const [form, setForm] = useState<VehicleForm>(emptyForm);
   const [deleteId, setDeleteId] = useState<string | null>(null);
+  const [snack, setSnack] = useState<{ open: boolean; message: string; severity: ActionSnackbarSeverity }>({
+    open: false,
+    message: '',
+    severity: 'info',
+  });
+
+  const showSnack = (message: string, severity: ActionSnackbarSeverity) => {
+    setSnack({ open: true, message, severity });
+  };
 
   const filteredRows = useMemo(() => {
     const q = searchText.trim().toLowerCase();
@@ -89,21 +99,28 @@ export default function CustomerVehiclesPage() {
     return filteredRows.slice(start, start + rowsPerPage);
   }, [filteredRows, page, rowsPerPage]);
 
-  const load = async () => {
+  const load = async (showFeedback = false) => {
     if (!companyId) return;
     setLoading(true);
     setError('');
-    const [vehicleRes, customerRes] = await Promise.all([
-      fetch(`/api/customer-vehicles?company_id=${companyId}`),
-      fetch(`/api/customers?company_id=${companyId}`),
-    ]);
-    const [vehicleData, customerData] = await Promise.all([vehicleRes.json(), customerRes.json()]);
-    if (!vehicleRes.ok) setError(vehicleData.error || 'โหลดข้อมูลรถไม่สำเร็จ');
-    else setRows(vehicleData || []);
-    if (customerRes.ok) {
+    try {
+      const [vehicleRes, customerRes] = await Promise.all([
+        fetch(`/api/customer-vehicles?company_id=${companyId}`),
+        fetch(`/api/customers?company_id=${companyId}`),
+      ]);
+      const [vehicleData, customerData] = await Promise.all([vehicleRes.json(), customerRes.json()]);
+      if (!vehicleRes.ok) throw new Error(vehicleData.error || 'โหลดข้อมูลรถไม่สำเร็จ');
+      if (!customerRes.ok) throw new Error(customerData.error || 'โหลดข้อมูลลูกค้าไม่สำเร็จ');
+      setRows(vehicleData || []);
       setCustomers((customerData || []).map((x: any) => ({ id: x.id, company_name: x.company_name })));
+      if (showFeedback) showSnack('รีเฟรชข้อมูลรถขนส่งเรียบร้อยแล้ว', 'info');
+    } catch (e) {
+      const message = (e as Error).message;
+      setError(message);
+      showSnack(message, 'error');
+    } finally {
+      setLoading(false);
     }
-    setLoading(false);
   };
 
   useEffect(() => {
@@ -111,41 +128,50 @@ export default function CustomerVehiclesPage() {
   }, [companyId]);
 
   const save = async () => {
+    const wasEditing = Boolean(form.id);
     setError('');
-    const payload = {
-      company_id: companyId,
-      customer_id: form.customer_id,
-      license_plate: form.license_plate.trim(),
-      driver_name: form.driver_name.trim() || null,
-      driver_phone: form.driver_phone.trim() || null,
-      pickup_license_number: form.pickup_license_number.trim() || null,
-    };
-    const res = await fetch(form.id ? `/api/customer-vehicles/${form.id}` : '/api/customer-vehicles', {
-      method: form.id ? 'PATCH' : 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(payload),
-    });
-    const data = await res.json();
-    if (!res.ok) {
-      setError(data.error || 'บันทึกข้อมูลไม่สำเร็จ');
-      return;
+    try {
+      const payload = {
+        company_id: companyId,
+        customer_id: form.customer_id,
+        license_plate: form.license_plate.trim(),
+        driver_name: form.driver_name.trim() || null,
+        driver_phone: form.driver_phone.trim() || null,
+        pickup_license_number: form.pickup_license_number.trim() || null,
+      };
+      const res = await fetch(form.id ? `/api/customer-vehicles/${form.id}` : '/api/customer-vehicles', {
+        method: form.id ? 'PATCH' : 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || 'บันทึกข้อมูลไม่สำเร็จ');
+      setOpen(false);
+      setForm(emptyForm);
+      await load();
+      showSnack(wasEditing ? 'แก้ไขข้อมูลรถขนส่งเรียบร้อยแล้ว' : 'เพิ่มรถขนส่งเรียบร้อยแล้ว', 'success');
+    } catch (e) {
+      const message = (e as Error).message;
+      setError(message);
+      showSnack(message, 'error');
     }
-    setOpen(false);
-    setForm(emptyForm);
-    await load();
   };
 
   const remove = async () => {
     if (!deleteId) return;
     setError('');
-    const res = await fetch(`/api/customer-vehicles/${deleteId}`, { method: 'DELETE' });
-    const data = await res.json();
-    if (!res.ok) {
-      setError(data.error || 'ลบข้อมูลไม่สำเร็จ');
-      return;
+    try {
+      const res = await fetch(`/api/customer-vehicles/${deleteId}`, { method: 'DELETE' });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || 'ลบข้อมูลไม่สำเร็จ');
+      setDeleteId(null);
+      await load();
+      showSnack('ลบข้อมูลรถขนส่งเรียบร้อยแล้ว', 'success');
+    } catch (e) {
+      const message = (e as Error).message;
+      setError(message);
+      showSnack(message, 'error');
     }
-    setDeleteId(null);
-    await load();
   };
 
   return (
@@ -165,7 +191,7 @@ export default function CustomerVehiclesPage() {
             <Typography variant='h5' fontWeight={900}>รถขนส่งลูกค้า</Typography>
             <Typography variant='body2' color='text.secondary'>จัดการทะเบียนรถ คนขับ และข้อมูลรับสินค้าของลูกค้า</Typography>
           </Box>
-          <Button variant='contained' startIcon={<Add />} onClick={() => { setForm(emptyForm); setOpen(true); }} sx={{ width: { xs: '100%', md: 'auto' } }}>
+          <Button variant='contained' startIcon={<Add />} onClick={() => { setForm(emptyForm); setOpen(true); showSnack('พร้อมเพิ่มรถขนส่งใหม่', 'info'); }} sx={{ width: { xs: '100%', md: 'auto' } }}>
             เพิ่มรถขนส่ง
           </Button>
         </Stack>
@@ -182,7 +208,7 @@ export default function CustomerVehiclesPage() {
             }}
             sx={{ flex: 1 }}
           />
-          <Button variant='outlined' onClick={() => void load()} sx={{ width: { xs: '100%', md: 'auto' } }}>รีเฟรช</Button>
+          <Button variant='outlined' onClick={() => void load(true)} sx={{ width: { xs: '100%', md: 'auto' } }}>รีเฟรช</Button>
         </Stack>
       </Paper>
 
@@ -222,12 +248,13 @@ export default function CustomerVehiclesPage() {
                           pickup_license_number: r.pickup_license_number || '',
                         });
                         setOpen(true);
+                        showSnack(`กำลังแก้ไขรถทะเบียน “${r.license_plate}”`, 'info');
                       }}>
                         <Edit fontSize='small' />
                       </IconButton>
                     </Tooltip>
                     <Tooltip title='ลบ'>
-                      <IconButton size='small' color='error' onClick={() => setDeleteId(r.id)}>
+                      <IconButton size='small' color='error' onClick={() => { setDeleteId(r.id); showSnack('กรุณายืนยันการลบรถขนส่ง', 'warning'); }}>
                         <Delete fontSize='small' />
                       </IconButton>
                     </Tooltip>
@@ -316,7 +343,13 @@ export default function CustomerVehiclesPage() {
           <Button color='error' onClick={() => void remove()}>ลบ</Button>
         </DialogActions>
       </Dialog>
+
+      <ActionSnackbar
+        open={snack.open}
+        message={snack.message}
+        severity={snack.severity}
+        onClose={() => setSnack((prev) => ({ ...prev, open: false }))}
+      />
     </Stack>
   );
 }
-

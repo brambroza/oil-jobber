@@ -23,7 +23,6 @@ import {
   Radio,
   RadioGroup,
   Stack,
-  Snackbar,
   Table,
   TableBody,
   TableCell,
@@ -35,6 +34,7 @@ import {
   Tooltip,
   Typography,
 } from '@mui/material';
+import { ActionSnackbar, type ActionSnackbarSeverity } from '@/components/common/ActionSnackbar';
 import type { OrderStatus } from '@/types/database';
 
 type OrderRow = {
@@ -211,12 +211,16 @@ export default function OrdersPage() {
   const [snack, setSnack] = useState<{
     open: boolean;
     message: string;
-    severity: 'success' | 'error' | 'info';
+    severity: ActionSnackbarSeverity;
   }>({
     open: false,
     message: '',
     severity: 'info',
   });
+
+  const showSnack = (message: string, severity: ActionSnackbarSeverity) => {
+    setSnack({ open: true, message, severity });
+  };
 
   const grandTotal = useMemo(
     () => form.items.reduce((sum, it) => sum + Number(it.unit_price || 0) * Number(it.liters || 0), 0),
@@ -270,15 +274,23 @@ export default function OrdersPage() {
     return filteredRows.slice(start, start + rowsPerPage);
   }, [filteredRows, page, rowsPerPage]);
 
-  const load = async () => {
+  const load = async (showFeedback = false) => {
     if (!companyId) return;
     setLoading(true);
     setError('');
-    const res = await fetch(`/api/orders?company_id=${companyId}`);
-    const data = await res.json();
-    if (!res.ok) setError(data.error || 'โหลดข้อมูลไม่สำเร็จ');
-    else setRows(data);
-    setLoading(false);
+    try {
+      const res = await fetch(`/api/orders?company_id=${companyId}`);
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || 'โหลดข้อมูลไม่สำเร็จ');
+      setRows(data);
+      if (showFeedback) showSnack('รีเฟรชข้อมูลใบสั่งซื้อเรียบร้อยแล้ว', 'info');
+    } catch (e) {
+      const message = (e as Error).message;
+      setError(message);
+      showSnack(message, 'error');
+    } finally {
+      setLoading(false);
+    }
   };
 
   const loadMasters = async () => {
@@ -349,6 +361,13 @@ export default function OrdersPage() {
         liters: Number(it.liters || 0),
       }));
 
+    if (!cleanedItems.length) {
+      const message = 'กรุณาระบุรายการน้ำมันและจำนวนลิตรอย่างน้อย 1 รายการ';
+      setError(message);
+      showSnack(message, 'warning');
+      return;
+    }
+
     const payload = {
       company_id: companyId,
       customer_id: form.customer_id,
@@ -362,30 +381,39 @@ export default function OrdersPage() {
       items: cleanedItems,
     };
 
-    const res = await fetch(form.id ? `/api/orders/${form.id}` : '/api/orders', {
-      method: form.id ? 'PATCH' : 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(payload),
-    });
-    const data = await res.json();
-    if (!res.ok) setError(data.error || 'บันทึกไม่สำเร็จ');
-    else {
-      if (data.line_warning) setError(String(data.line_warning));
+    const wasEditing = Boolean(form.id);
+    try {
+      const res = await fetch(form.id ? `/api/orders/${form.id}` : '/api/orders', {
+        method: form.id ? 'PATCH' : 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || 'บันทึกไม่สำเร็จ');
+      const lineWarning = data.line_warning ? String(data.line_warning) : '';
       setOpen(false);
       setForm(emptyForm);
       await load();
+      if (lineWarning) {
+        setError(lineWarning);
+        showSnack(lineWarning, 'warning');
+      } else {
+        showSnack(wasEditing ? 'แก้ไขใบสั่งซื้อเรียบร้อยแล้ว' : 'เพิ่มใบสั่งซื้อเรียบร้อยแล้ว', 'success');
+      }
+    } catch (e) {
+      const message = (e as Error).message;
+      setError(message);
+      showSnack(message, 'error');
     }
   };
 
   const openEdit = async (id: string) => {
-    const res = await fetch(`/api/orders/${id}?company_id=${companyId}`);
-    const data = await res.json();
-    if (!res.ok) {
-      setError(data.error || 'โหลดข้อมูลใบสั่งซื้อไม่สำเร็จ');
-      return;
-    }
+    try {
+      const res = await fetch(`/api/orders/${id}?company_id=${companyId}`);
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || 'โหลดข้อมูลใบสั่งซื้อไม่สำเร็จ');
 
-    setForm({
+      setForm({
       id: data.id,
       order_no: data.order_no || '',
       payment_condition_id: data.payment_condition_id || '',
@@ -414,9 +442,15 @@ export default function OrdersPage() {
         unit_price: Number(it.unit_price || 0),
         liters: Number(it.liters || 0),
       })),
-    });
+      });
 
-    setOpen(true);
+      setOpen(true);
+      showSnack('โหลดใบสั่งซื้อสำหรับแก้ไขเรียบร้อยแล้ว', 'info');
+    } catch (e) {
+      const message = (e as Error).message;
+      setError(message);
+      showSnack(message, 'error');
+    }
   };
 
   const patchOrderQuick = async (patch: Record<string, unknown>) => {
@@ -441,7 +475,7 @@ export default function OrdersPage() {
     }
     if (data.line_warning) {
       setError(String(data.line_warning));
-      setSnack({ open: true, message: String(data.line_warning), severity: 'error' });
+      setSnack({ open: true, message: String(data.line_warning), severity: 'warning' });
     } else {
       const doneLabel = patch.order_status === 'CONFIRMED'
         ? 'อนุมัติคำสั่งซื้อเรียบร้อย'
@@ -484,12 +518,17 @@ export default function OrdersPage() {
 
   const remove = async () => {
     if (!deleteId) return;
-    const res = await fetch(`/api/orders/${deleteId}?company_id=${companyId}`, { method: 'DELETE' });
-    const data = await res.json();
-    if (!res.ok) setError(data.error || 'ลบไม่สำเร็จ');
-    else {
+    try {
+      const res = await fetch(`/api/orders/${deleteId}?company_id=${companyId}`, { method: 'DELETE' });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || 'ลบไม่สำเร็จ');
       setDeleteId(null);
       await load();
+      showSnack('ลบใบสั่งซื้อเรียบร้อยแล้ว', 'success');
+    } catch (e) {
+      const message = (e as Error).message;
+      setError(message);
+      showSnack(message, 'error');
     }
   };
 
@@ -528,6 +567,7 @@ export default function OrdersPage() {
             onClick={() => {
               setForm(emptyForm);
               setOpen(true);
+              showSnack('พร้อมเพิ่มใบสั่งซื้อใหม่', 'info');
             }}
             sx={{ borderRadius: 2, minHeight: 40, width: { xs: '100%', md: 'auto' } }}
           >
@@ -558,7 +598,7 @@ export default function OrdersPage() {
             }}
             sx={{ width: { xs: '100%', md: 220 } }}
           />
-          <Button variant="outlined" onClick={() => void load()} sx={{ borderRadius: 1, width: { xs: '100%', md: 'auto' } }}>
+          <Button variant="outlined" onClick={() => void load(true)} sx={{ borderRadius: 1, width: { xs: '100%', md: 'auto' } }}>
             รีเฟรช
           </Button>
         </Stack>
@@ -640,7 +680,7 @@ export default function OrdersPage() {
                     </IconButton>
                   </Tooltip>
                   <Tooltip title="ลบ">
-                    <IconButton size="small" color="error" onClick={() => setDeleteId(r.id)}>
+                    <IconButton size="small" color="error" onClick={() => { setDeleteId(r.id); showSnack('กรุณายืนยันการลบใบสั่งซื้อ', 'warning'); }}>
                       <Delete fontSize="small" />
                     </IconButton>
                   </Tooltip>
@@ -1007,7 +1047,10 @@ export default function OrdersPage() {
                         <TableCell align="right">
                           <IconButton
                             color="error"
-                            onClick={() => setForm((p) => ({ ...p, items: p.items.filter((_, i) => i !== idx) }))}
+                            onClick={() => {
+                              setForm((p) => ({ ...p, items: p.items.filter((_, i) => i !== idx) }));
+                              showSnack(`ลบรายการน้ำมันที่ ${idx + 1} แล้ว`, 'warning');
+                            }}
                             disabled={form.items.length <= 1}
                           >
                             <Remove fontSize="small" />
@@ -1022,7 +1065,10 @@ export default function OrdersPage() {
               <Button
                 variant="outlined"
                 startIcon={<Add />}
-                onClick={() => setForm((p) => ({ ...p, items: [...p.items, { ...emptyItem }] }))}
+                onClick={() => {
+                  setForm((p) => ({ ...p, items: [...p.items, { ...emptyItem }] }));
+                  showSnack('เพิ่มรายการน้ำมันแล้ว', 'info');
+                }}
                 sx={{ mt: 1.5, borderRadius: 1 }}
               >
                 เพิ่มรายการน้ำมัน
@@ -1090,21 +1136,12 @@ export default function OrdersPage() {
         </DialogActions>
       </Dialog>
 
-      <Snackbar
+      <ActionSnackbar
         open={snack.open}
-        autoHideDuration={2600}
-        onClose={() => setSnack((p) => ({ ...p, open: false }))}
-        anchorOrigin={{ vertical: 'top', horizontal: 'right' }}
-      >
-        <Alert
-          onClose={() => setSnack((p) => ({ ...p, open: false }))}
-          severity={snack.severity}
-          variant="filled"
-          sx={{ width: '100%' }}
-        >
-          {snack.message}
-        </Alert>
-      </Snackbar>
+        message={snack.message}
+        severity={snack.severity}
+        onClose={() => setSnack((prev) => ({ ...prev, open: false }))}
+      />
     </Stack>
   );
 }

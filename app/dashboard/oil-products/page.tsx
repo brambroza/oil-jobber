@@ -25,6 +25,7 @@ import {
   Typography,
   FormControlLabel,
 } from '@mui/material';
+import { ActionSnackbar, type ActionSnackbarSeverity } from '@/components/common/ActionSnackbar';
 import { resolveCompanyId as resolveCompanyIdClient } from '@/lib/supabase/company';
 
 type OilProduct = {
@@ -64,21 +65,35 @@ export default function OilProductsPage() {
   const [open, setOpen] = useState(false);
   const [form, setForm] = useState<OilProductForm>(emptyForm);
   const [deleteId, setDeleteId] = useState<string | null>(null);
+  const [snack, setSnack] = useState<{ open: boolean; message: string; severity: ActionSnackbarSeverity }>({
+    open: false,
+    message: '',
+    severity: 'info',
+  });
+
+  const showSnack = (message: string, severity: ActionSnackbarSeverity) => {
+    setSnack({ open: true, message, severity });
+  };
 
   const codePreview = useMemo(() => normalizeCode(form.code.trim()), [form.code]);
 
-  const load = async () => {
+  const load = async (showFeedback = false) => {
     if (!companyId) return;
     setLoading(true);
     setError('');
-
-    const res = await fetch(`/api/oil-products?company_id=${companyId}`);
-    const data = await res.json();
-
-    if (!res.ok) setError(data.error || 'โหลดข้อมูลไม่สำเร็จ');
-    else setRows(data);
-
-    setLoading(false);
+    try {
+      const res = await fetch(`/api/oil-products?company_id=${companyId}`);
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || 'โหลดข้อมูลไม่สำเร็จ');
+      setRows(data);
+      if (showFeedback) showSnack('รีเฟรชข้อมูลน้ำมันเรียบร้อยแล้ว', 'info');
+    } catch (e) {
+      const message = (e as Error).message;
+      setError(message);
+      showSnack(message, 'error');
+    } finally {
+      setLoading(false);
+    }
   };
 
   useEffect(() => {
@@ -86,39 +101,48 @@ export default function OilProductsPage() {
   }, [companyId]);
 
   const save = async () => {
+    const wasEditing = Boolean(form.id);
     setError('');
-    const payload = {
-      ...form,
-      company_id: companyId,
-      code: normalizeCode(form.code.trim()),
-      color_hex: normalizeColorHex(form.color_hex),
-    };
+    try {
+      const payload = {
+        ...form,
+        company_id: companyId,
+        code: normalizeCode(form.code.trim()),
+        color_hex: normalizeColorHex(form.color_hex),
+      };
 
-    const res = await fetch(form.id ? `/api/oil-products/${form.id}` : '/api/oil-products', {
-      method: form.id ? 'PATCH' : 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(payload),
-    });
-    const data = await res.json();
-
-    if (!res.ok) setError(data.error || 'บันทึกไม่สำเร็จ');
-    else {
+      const res = await fetch(form.id ? `/api/oil-products/${form.id}` : '/api/oil-products', {
+        method: form.id ? 'PATCH' : 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || 'บันทึกไม่สำเร็จ');
       setOpen(false);
       setForm(emptyForm);
       await load();
+      showSnack(wasEditing ? 'แก้ไขข้อมูลน้ำมันเรียบร้อยแล้ว' : 'เพิ่มข้อมูลน้ำมันเรียบร้อยแล้ว', 'success');
+    } catch (e) {
+      const message = (e as Error).message;
+      setError(message);
+      showSnack(message, 'error');
     }
   };
 
   const remove = async () => {
     if (!deleteId) return;
     setError('');
-    const res = await fetch(`/api/oil-products/${deleteId}`, { method: 'DELETE' });
-    const data = await res.json();
-
-    if (!res.ok) setError(data.error || 'ลบไม่สำเร็จ');
-    else {
+    try {
+      const res = await fetch(`/api/oil-products/${deleteId}`, { method: 'DELETE' });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || 'ลบไม่สำเร็จ');
       setDeleteId(null);
       await load();
+      showSnack('ลบข้อมูลน้ำมันเรียบร้อยแล้ว', 'success');
+    } catch (e) {
+      const message = (e as Error).message;
+      setError(message);
+      showSnack(message, 'error');
     }
   };
 
@@ -129,8 +153,8 @@ export default function OilProductsPage() {
 
       <Stack direction={{ xs: 'column', sm: 'row'  }} spacing={1}>
         <TextField sx={{ display :'none'}} fullWidth label='Company ID' value={companyId} onChange={(e) => setCompanyId(e.target.value)} />
-        <Button variant='outlined' onClick={() => void load()}>รีเฟรช</Button>
-        <Button variant='contained' startIcon={<Add />} onClick={() => { setForm(emptyForm); setOpen(true); }}>เพิ่มน้ำมัน</Button>
+        <Button variant='outlined' onClick={() => void load(true)}>รีเฟรช</Button>
+        <Button variant='contained' startIcon={<Add />} onClick={() => { setForm(emptyForm); setOpen(true); showSnack('พร้อมเพิ่มข้อมูลน้ำมันใหม่', 'info'); }}>เพิ่มน้ำมัน</Button>
       </Stack>
 
       {error ? <Alert severity='error'>{error}</Alert> : null}
@@ -162,8 +186,8 @@ export default function OilProductsPage() {
                   <Chip size='small' color={r.is_active ? 'success' : 'default'} label={r.is_active ? 'ใช้งาน' : 'ปิดใช้งาน'} />
                 </TableCell>
                 <TableCell align='right'>
-                  <IconButton onClick={() => { setForm({ id: r.id, code: r.code, name: r.name, color_hex: r.color_hex || '#2563EB', is_active: r.is_active }); setOpen(true); }}><Edit fontSize='small' /></IconButton>
-                  <IconButton color='error' onClick={() => setDeleteId(r.id)}><Delete fontSize='small' /></IconButton>
+                  <IconButton onClick={() => { setForm({ id: r.id, code: r.code, name: r.name, color_hex: r.color_hex || '#2563EB', is_active: r.is_active }); setOpen(true); showSnack(`กำลังแก้ไข “${r.name}”`, 'info'); }}><Edit fontSize='small' /></IconButton>
+                  <IconButton color='error' onClick={() => { setDeleteId(r.id); showSnack('กรุณายืนยันการลบข้อมูลน้ำมัน', 'warning'); }}><Delete fontSize='small' /></IconButton>
                 </TableCell>
               </TableRow>
             ))}
@@ -221,6 +245,13 @@ export default function OilProductsPage() {
           <Button color='error' onClick={() => void remove()}>ลบ</Button>
         </DialogActions>
       </Dialog>
+
+      <ActionSnackbar
+        open={snack.open}
+        message={snack.message}
+        severity={snack.severity}
+        onClose={() => setSnack((prev) => ({ ...prev, open: false }))}
+      />
     </Stack>
   );
 }

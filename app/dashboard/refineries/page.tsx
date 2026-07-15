@@ -25,6 +25,7 @@ import {
   Typography,
 } from '@mui/material';
 import { display } from '@mui/system';
+import { ActionSnackbar, type ActionSnackbarSeverity } from '@/components/common/ActionSnackbar';
 
 type Refinery = {
   id: string;
@@ -58,6 +59,15 @@ export default function RefineriesPage() {
   const [open, setOpen] = useState(false);
   const [form, setForm] = useState<RefineryForm>(emptyForm);
   const [deleteId, setDeleteId] = useState<string | null>(null);
+  const [snack, setSnack] = useState<{ open: boolean; message: string; severity: ActionSnackbarSeverity }>({
+    open: false,
+    message: '',
+    severity: 'info',
+  });
+
+  const showSnack = (message: string, severity: ActionSnackbarSeverity) => {
+    setSnack({ open: true, message, severity });
+  };
   const filteredRows = useMemo(() => {
     const q = searchText.trim().toLowerCase();
     const d = searchDate.trim();
@@ -76,64 +86,94 @@ export default function RefineriesPage() {
     return filteredRows.slice(start, start + rowsPerPage);
   }, [filteredRows, page, rowsPerPage]);
 
-  const load = async () => {
+  const load = async (showFeedback = false) => {
     if (!companyId) return;
     setLoading(true);
     setError('');
-    const res = await fetch(`/api/refineries?company_id=${companyId}`);
-    const data = await res.json();
-    if (!res.ok) setError(data.error || 'โหลดข้อมูลไม่สำเร็จ');
-    else setRows(data);
-    setLoading(false);
+    try {
+      const res = await fetch(`/api/refineries?company_id=${companyId}`);
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || 'โหลดข้อมูลไม่สำเร็จ');
+      setRows(data);
+      if (showFeedback) showSnack('รีเฟรชข้อมูลโรงกลั่นเรียบร้อยแล้ว', 'info');
+    } catch (e) {
+      const message = (e as Error).message;
+      setError(message);
+      showSnack(message, 'error');
+    } finally {
+      setLoading(false);
+    }
   };
 
   useEffect(() => { void load(); }, [companyId]);
 
   const save = async () => {
+    const wasEditing = Boolean(form.id);
     setError('');
-    const payload = {
-      company_id: companyId,
-      name: form.name,
-      contact_info: form.contact_info || null,
-      image_url: form.image_url || null,
-      active: form.active,
-    };
+    try {
+      const payload = {
+        company_id: companyId,
+        name: form.name,
+        contact_info: form.contact_info || null,
+        image_url: form.image_url || null,
+        active: form.active,
+      };
 
-    const res = await fetch(form.id ? `/api/refineries/${form.id}` : '/api/refineries', {
-      method: form.id ? 'PATCH' : 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(payload),
-    });
-    const data = await res.json();
-
-    if (!res.ok) setError(data.error || 'บันทึกไม่สำเร็จ');
-    else {
+      const res = await fetch(form.id ? `/api/refineries/${form.id}` : '/api/refineries', {
+        method: form.id ? 'PATCH' : 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || 'บันทึกไม่สำเร็จ');
       setOpen(false);
       setForm(emptyForm);
       await load();
+      showSnack(wasEditing ? 'แก้ไขข้อมูลโรงกลั่นเรียบร้อยแล้ว' : 'เพิ่มโรงกลั่นเรียบร้อยแล้ว', 'success');
+    } catch (e) {
+      const message = (e as Error).message;
+      setError(message);
+      showSnack(message, 'error');
     }
   };
 
   const remove = async () => {
     if (!deleteId) return;
     setError('');
-    const res = await fetch(`/api/refineries/${deleteId}`, { method: 'DELETE' });
-    const data = await res.json();
-    if (!res.ok) setError(data.error || 'ลบไม่สำเร็จ');
-    else { setDeleteId(null); await load(); }
+    try {
+      const res = await fetch(`/api/refineries/${deleteId}`, { method: 'DELETE' });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || 'ลบไม่สำเร็จ');
+      setDeleteId(null);
+      await load();
+      showSnack('ลบข้อมูลโรงกลั่นเรียบร้อยแล้ว', 'success');
+    } catch (e) {
+      const message = (e as Error).message;
+      setError(message);
+      showSnack(message, 'error');
+    }
   };
 
   const onUploadImage = (e: ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
     if (!file.type.startsWith('image/')) {
-      setError('ไฟล์รูปไม่ถูกต้อง กรุณาเลือกไฟล์ภาพ');
+      const message = 'ไฟล์รูปไม่ถูกต้อง กรุณาเลือกไฟล์ภาพ';
+      setError(message);
+      showSnack(message, 'error');
       return;
     }
 
     const reader = new FileReader();
-    reader.onload = () => setForm((p) => ({ ...p, image_url: String(reader.result || '') }));
-    reader.onerror = () => setError('อ่านไฟล์รูปไม่สำเร็จ');
+    reader.onload = () => {
+      setForm((p) => ({ ...p, image_url: String(reader.result || '') }));
+      showSnack('เลือกรูปโรงกลั่นเรียบร้อยแล้ว', 'success');
+    };
+    reader.onerror = () => {
+      const message = 'อ่านไฟล์รูปไม่สำเร็จ';
+      setError(message);
+      showSnack(message, 'error');
+    };
     reader.readAsDataURL(file);
   };
 
@@ -164,8 +204,8 @@ export default function RefineriesPage() {
           sx={{ minWidth: { xs: '100%', md: 220 } }}
         />
      {/*    <TextField fullWidth label='Company ID' value={companyId} onChange={(e) => setCompanyId(e.target.value)} /> */}
-        <Button variant='outlined' onClick={() => void load()}>รีเฟรช</Button>
-        <Button variant='contained' startIcon={<Add />} onClick={() => { setForm(emptyForm); setOpen(true); }}>เพิ่มโรงกลั่น</Button>
+        <Button variant='outlined' onClick={() => void load(true)}>รีเฟรช</Button>
+        <Button variant='contained' startIcon={<Add />} onClick={() => { setForm(emptyForm); setOpen(true); showSnack('พร้อมเพิ่มโรงกลั่นใหม่', 'info'); }}>เพิ่มโรงกลั่น</Button>
       </Stack>
 
       {error ? <Alert severity='error'>{error}</Alert> : null}
@@ -192,8 +232,8 @@ export default function RefineriesPage() {
                 <TableCell>{r.contact_info ?? '-'}</TableCell>
                 <TableCell><Chip size='small' color={r.active ? 'success' : 'default'} label={r.active ? 'ใช้งาน' : 'ปิดใช้งาน'} /></TableCell>
                 <TableCell align='right'>
-                  <IconButton onClick={() => { setForm({ id: r.id, name: r.name, contact_info: r.contact_info ?? '', image_url: r.image_url ?? '', active: r.active }); setOpen(true); }}><Edit fontSize='small' /></IconButton>
-                  <IconButton color='error' onClick={() => setDeleteId(r.id)}><Delete fontSize='small' /></IconButton>
+                  <IconButton onClick={() => { setForm({ id: r.id, name: r.name, contact_info: r.contact_info ?? '', image_url: r.image_url ?? '', active: r.active }); setOpen(true); showSnack(`กำลังแก้ไข “${r.name}”`, 'info'); }}><Edit fontSize='small' /></IconButton>
+                  <IconButton color='error' onClick={() => { setDeleteId(r.id); showSnack('กรุณายืนยันการลบข้อมูลโรงกลั่น', 'warning'); }}><Delete fontSize='small' /></IconButton>
                 </TableCell>
               </TableRow>
             ))}
@@ -224,7 +264,7 @@ export default function RefineriesPage() {
               อัปโหลดรูป
               <input hidden accept='image/*' type='file' onChange={onUploadImage} />
             </Button>
-            <Button variant='text' color='inherit' onClick={() => setForm((p) => ({ ...p, image_url: '' }))}>ล้างรูป</Button>
+            <Button variant='text' color='inherit' onClick={() => { setForm((p) => ({ ...p, image_url: '' })); showSnack('ล้างรูปโรงกลั่นแล้ว', 'warning'); }}>ล้างรูป</Button>
           </Stack>
           {form.image_url ? <Box component='img' src={form.image_url} alt='preview' sx={{ width: 96, height: 96, borderRadius: 1, objectFit: 'cover', border: '1px solid #e2e8f0' }} /> : null}
           <TextField sx={{ display : 'none'}} label='Image URL (ตัวเลือก)' value={form.image_url} onChange={(e) => setForm((p) => ({ ...p, image_url: e.target.value }))} />
@@ -245,6 +285,13 @@ export default function RefineriesPage() {
           <Button color='error' onClick={() => void remove()}>ลบ</Button>
         </DialogActions>
       </Dialog>
+
+      <ActionSnackbar
+        open={snack.open}
+        message={snack.message}
+        severity={snack.severity}
+        onClose={() => setSnack((prev) => ({ ...prev, open: false }))}
+      />
     </Stack>
   );
 }

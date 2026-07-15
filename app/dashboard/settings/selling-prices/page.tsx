@@ -4,6 +4,7 @@ import { useEffect, useState } from 'react';
 import { Add, Delete, Edit } from '@mui/icons-material';
 import { Alert, Box, Button, Dialog, DialogActions, DialogContent, DialogTitle, Drawer, IconButton, MenuItem, Stack, Table, TableBody, TableCell, TableHead, TableRow, TextField, Typography } from '@mui/material';
 import { PaymentCondition } from '@/types/database';
+import { ActionSnackbar, type ActionSnackbarSeverity } from '@/components/common/ActionSnackbar';
 
 type PCForm = {
   id?: string;
@@ -30,37 +31,77 @@ export default function SellingPricesPage() {
   const [open, setOpen] = useState(false);
   const [form, setForm] = useState<PCForm>(emptyForm);
   const [deleteId, setDeleteId] = useState<string | null>(null);
+  const [snack, setSnack] = useState<{ open: boolean; message: string; severity: ActionSnackbarSeverity }>({
+    open: false,
+    message: '',
+    severity: 'info',
+  });
 
-  const load = async () => {
+  const showSnack = (message: string, severity: ActionSnackbarSeverity) => {
+    setSnack({ open: true, message, severity });
+  };
+
+  const load = async (showFeedback = false) => {
     if (!companyId) return;
     setLoading(true);
     setError('');
-    const res = await fetch(`/api/payment-conditions?company_id=${companyId}`);
-    const data = await res.json();
-    if (!res.ok) setError(data.error || 'โหลดข้อมูลไม่สำเร็จ');
-    else setRows(data);
-    setLoading(false);
+    try {
+      const res = await fetch(`/api/payment-conditions?company_id=${companyId}`);
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || 'โหลดข้อมูลไม่สำเร็จ');
+
+      setRows(data);
+      if (showFeedback) showSnack('รีเฟรชข้อมูลเงื่อนไขการชำระเงินเรียบร้อยแล้ว', 'info');
+    } catch (e) {
+      const message = (e as Error).message;
+      setError(message);
+      showSnack(message, 'error');
+    } finally {
+      setLoading(false);
+    }
   };
 
   useEffect(() => { void load(); }, [companyId]);
 
   const save = async () => {
-    const res = await fetch(form.id ? `/api/payment-conditions/${form.id}` : '/api/payment-conditions', {
-      method: form.id ? 'PATCH' : 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ ...form, company_id: companyId }),
-    });
-    const data = await res.json();
-    if (!res.ok) setError(data.error || 'บันทึกไม่สำเร็จ');
-    else { setOpen(false); setForm(emptyForm); await load(); }
+    const wasEditing = Boolean(form.id);
+    setError('');
+    try {
+      const res = await fetch(form.id ? `/api/payment-conditions/${form.id}` : '/api/payment-conditions', {
+        method: form.id ? 'PATCH' : 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ ...form, company_id: companyId }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || 'บันทึกไม่สำเร็จ');
+
+      setOpen(false);
+      setForm(emptyForm);
+      await load();
+      showSnack(wasEditing ? 'แก้ไขเงื่อนไขการชำระเงินเรียบร้อยแล้ว' : 'เพิ่มเงื่อนไขการชำระเงินเรียบร้อยแล้ว', 'success');
+    } catch (e) {
+      const message = (e as Error).message;
+      setError(message);
+      showSnack(message, 'error');
+    }
   };
 
   const remove = async () => {
     if (!deleteId) return;
-    const res = await fetch(`/api/payment-conditions/${deleteId}`, { method: 'DELETE' });
-    const data = await res.json();
-    if (!res.ok) setError(data.error || 'ลบไม่สำเร็จ');
-    else { setDeleteId(null); await load(); }
+    setError('');
+    try {
+      const res = await fetch(`/api/payment-conditions/${deleteId}`, { method: 'DELETE' });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || 'ลบไม่สำเร็จ');
+
+      setDeleteId(null);
+      await load();
+      showSnack('ลบเงื่อนไขการชำระเงินเรียบร้อยแล้ว', 'success');
+    } catch (e) {
+      const message = (e as Error).message;
+      setError(message);
+      showSnack(message, 'error');
+    }
   };
 
   return (
@@ -69,8 +110,8 @@ export default function SellingPricesPage() {
       <Typography variant='body2' color='text.secondary'>กำหนดประเภทการชำระเงิน (เงินสด/เครดิต), จำนวนวันเครดิต และค่าบวกเพิ่มต่อ ลิตร</Typography>
 
       <Stack direction='row' spacing={1}>
-        <Button variant='outlined' onClick={() => void load()}>รีเฟรช</Button>
-        <Button variant='contained' startIcon={<Add />} onClick={() => { setForm(emptyForm); setOpen(true); }}>เพิ่มเงื่อนไข</Button>
+        <Button variant='outlined' onClick={() => void load(true)}>รีเฟรช</Button>
+        <Button variant='contained' startIcon={<Add />} onClick={() => { setForm(emptyForm); setOpen(true); showSnack('พร้อมเพิ่มเงื่อนไขการชำระเงินใหม่', 'info'); }}>เพิ่มเงื่อนไข</Button>
       </Stack>
 
       {error ? <Alert severity='error'>{error}</Alert> : null}
@@ -97,8 +138,8 @@ export default function SellingPricesPage() {
                 <TableCell>{r.credit_days}</TableCell>
                 <TableCell>{Number(r.extra_cost_per_liter).toFixed(4)}</TableCell>
                 <TableCell align='right'>
-                  <IconButton onClick={() => { setForm({ id: r.id, code: r.code, name: r.name, payment_type: r.payment_type, credit_days: r.credit_days, extra_cost_per_liter: Number(r.extra_cost_per_liter) }); setOpen(true); }}><Edit fontSize='small' /></IconButton>
-                  <IconButton color='error' onClick={() => setDeleteId(r.id)}><Delete fontSize='small' /></IconButton>
+                  <IconButton onClick={() => { setForm({ id: r.id, code: r.code, name: r.name, payment_type: r.payment_type, credit_days: r.credit_days, extra_cost_per_liter: Number(r.extra_cost_per_liter) }); setOpen(true); showSnack(`กำลังแก้ไข “${r.name}”`, 'info'); }}><Edit fontSize='small' /></IconButton>
+                  <IconButton color='error' onClick={() => { setDeleteId(r.id); showSnack('กรุณายืนยันการลบเงื่อนไขการชำระเงิน', 'warning'); }}><Delete fontSize='small' /></IconButton>
                 </TableCell>
               </TableRow>
             ))}
@@ -127,6 +168,13 @@ export default function SellingPricesPage() {
         <DialogContent>ต้องการลบเงื่อนไขนี้ใช่หรือไม่</DialogContent>
         <DialogActions><Button onClick={() => setDeleteId(null)}>ยกเลิก</Button><Button color='error' onClick={() => void remove()}>ลบ</Button></DialogActions>
       </Dialog>
+
+      <ActionSnackbar
+        open={snack.open}
+        message={snack.message}
+        severity={snack.severity}
+        onClose={() => setSnack((prev) => ({ ...prev, open: false }))}
+      />
     </Stack>
   );
 }

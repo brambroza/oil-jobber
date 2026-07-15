@@ -33,6 +33,7 @@ import {
   TextField,
   Typography,
 } from '@mui/material';
+import { ActionSnackbar, type ActionSnackbarSeverity } from '@/components/common/ActionSnackbar';
 import { Customer, PaymentCondition } from '@/types/database';
 
 type MasterRefinery = { id: string; name: string };
@@ -181,6 +182,15 @@ export default function CustomersPage() {
   const [selectedLineCustomerId, setSelectedLineCustomerId] = useState('');
   const [lineMapSaving, setLineMapSaving] = useState(false);
   const [deleteId, setDeleteId] = useState<string | null>(null);
+  const [snack, setSnack] = useState<{ open: boolean; message: string; severity: ActionSnackbarSeverity }>({
+    open: false,
+    message: '',
+    severity: 'info',
+  });
+
+  const showSnack = (message: string, severity: ActionSnackbarSeverity) => {
+    setSnack({ open: true, message, severity });
+  };
 
   const isEdit = useMemo(() => Boolean(form.id), [form.id]);
 
@@ -302,6 +312,7 @@ export default function CustomersPage() {
   };
 
   const onSave = async () => {
+    const wasEditing = Boolean(form.id);
     try {
       const payload = {
         company_id: companyId,
@@ -336,8 +347,11 @@ export default function CustomersPage() {
       setPortalEmail('');
       setPortalPassword('');
       await load();
+      showSnack(wasEditing ? 'แก้ไขข้อมูลลูกค้าเรียบร้อยแล้ว' : 'เพิ่มลูกค้าเรียบร้อยแล้ว', 'success');
     } catch (e) {
-      setError((e as Error).message);
+      const message = (e as Error).message;
+      setError(message);
+      showSnack(message, 'error');
     }
   };
 
@@ -360,8 +374,11 @@ export default function CustomersPage() {
 
       setPortalUserId(data.auth_user_id);
       setPortalPassword('');
+      showSnack('สร้างบัญชี Login สำหรับลูกค้าเรียบร้อยแล้ว', 'success');
     } catch (e) {
-      setError((e as Error).message);
+      const message = (e as Error).message;
+      setError(message);
+      showSnack(message, 'error');
     }
   };
 
@@ -377,8 +394,11 @@ export default function CustomersPage() {
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || 'บันทึกอีเมลลูกค้าไม่สำเร็จ');
       setPortalEmail(data.email || portalEmail);
+      showSnack('บันทึกอีเมลลูกค้าเรียบร้อยแล้ว', 'success');
     } catch (e) {
-      setError((e as Error).message);
+      const message = (e as Error).message;
+      setError(message);
+      showSnack(message, 'error');
     }
   };
 
@@ -390,15 +410,20 @@ export default function CustomersPage() {
       if (!res.ok) throw new Error(data.error || 'ลบไม่สำเร็จ');
       setDeleteId(null);
       await load();
+      showSnack('ลบข้อมูลลูกค้าเรียบร้อยแล้ว', 'success');
     } catch (e) {
-      setError((e as Error).message);
+      const message = (e as Error).message;
+      setError(message);
+      showSnack(message, 'error');
     }
   };
 
   const onSaveLineMapping = async () => {
     if (!form.id) return;
     if (!selectedLineCustomerId) {
-      setError('กรุณาเลือกผู้ใช้ LINE ก่อนบันทึก');
+      const message = 'กรุณาเลือกผู้ใช้ LINE ก่อนบันทึก';
+      setError(message);
+      showSnack(message, 'warning');
       return;
     }
     setLineMapSaving(true);
@@ -412,8 +437,11 @@ export default function CustomersPage() {
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || 'บันทึกการผูก LINE ไม่สำเร็จ');
       await loadLineCustomers();
+      showSnack('ผูก LINE กับลูกค้าเรียบร้อยแล้ว', 'success');
     } catch (e) {
-      setError((e as Error).message);
+      const message = (e as Error).message;
+      setError(message);
+      showSnack(message, 'error');
     } finally {
       setLineMapSaving(false);
     }
@@ -501,7 +529,10 @@ export default function CustomersPage() {
                     setDrawerTab('portal');
                     setDrawerOpen(true);
                   }}><Edit fontSize='small' /></IconButton>
-                  <IconButton color='error' onClick={() => setDeleteId(r.id)}><Delete fontSize='small' /></IconButton>
+                  <IconButton color='error' onClick={() => {
+                    setDeleteId(r.id);
+                    showSnack('กรุณายืนยันการลบข้อมูลลูกค้า', 'warning');
+                  }}><Delete fontSize='small' /></IconButton>
                 </TableCell>
               </TableRow>
             ))}
@@ -717,6 +748,13 @@ export default function CustomersPage() {
         <DialogContent>ต้องการลบข้อมูลลูกค้านี้ใช่หรือไม่</DialogContent>
         <DialogActions><Button onClick={() => setDeleteId(null)}>ยกเลิก</Button><Button color='error' onClick={() => void onDelete()}>ลบ</Button></DialogActions>
       </Dialog>
+
+      <ActionSnackbar
+        open={snack.open}
+        message={snack.message}
+        severity={snack.severity}
+        onClose={() => setSnack((prev) => ({ ...prev, open: false }))}
+      />
     </Stack>
   );
 }
