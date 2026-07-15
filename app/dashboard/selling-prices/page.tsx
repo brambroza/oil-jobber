@@ -606,8 +606,8 @@ export default function SellingPricesPage() {
           backgroundColor: '#fff1f2',
           cornerRadius: '8px',
           contents: [
-            { type: 'text', text: 'วันเวลาออก', size: 'xxs', color: '#64748b' },
-            { type: 'text', text: expireText, size: 'xs', color: '#dc2626', weight: 'bold' },
+            { type: 'text', text: 'ราคานี้ยังไม่รวมค่าขนส่ง', size: 'xxs', color: '#64748b' },
+            { type: 'text', text: 'ราคานี้ยังไม่รวม Vat', size: 'xs', color: '#dc2626', weight: 'bold' }, //expireText
           ],
         },
 

@@ -8,9 +8,10 @@ export async function GET(req: NextRequest) {
 
   const { data: customers, error } = await supabaseAdmin
     .from('line_customers')
-    .select('id, customer_id, line_user_id, group_id, conversation_key, display_name, profile_image_url, created_at, updated_at, customers(company_name)')
+    .select('id, customer_id, line_user_id, group_id, conversation_key, display_name, profile_image_url, created_at, updated_at, customers!inner(company_name, is_deleted)')
     .eq('company_id', companyId)
     .eq('is_deleted', false)
+    //.eq('customers.is_deleted', false)
     .order('updated_at', { ascending: false });
 
   if (error) return NextResponse.json({ error: error.message }, { status: 400 });

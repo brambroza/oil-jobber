@@ -17,7 +17,7 @@ export async function GET(req: NextRequest) {
 
   const { data: broadcasts, error } = await supabaseAdmin
     .from('line_news_broadcasts')
-    .select('id, seq, title, descriptions, sent_at, status, created_at, updated_at')
+    .select('id, seq, title, descriptions, image_urls, sent_at, status, created_at, updated_at')
     .eq('company_id', companyId)
     .eq('is_deleted', false)
     .order('seq', { ascending: false });
@@ -66,12 +66,14 @@ export async function POST(req: NextRequest) {
   const seq = Number(body.seq || 0);
   const title = String(body.title || '').trim();
   const descriptions = String(body.descriptions || '').trim();
+  const imageUrls = Array.isArray(body.image_urls) ? body.image_urls.map((url: unknown) => String(url).trim()).filter(Boolean) : [];
   const recipientIds = Array.isArray(body.recipient_ids) ? body.recipient_ids.map((id: unknown) => String(id)) : [];
   const action = String(body.action || 'DRAFT');
 
   if (!seq) return NextResponse.json({ error: 'กรุณาระบุ seq' }, { status: 422 });
   if (!title) return NextResponse.json({ error: 'กรุณาระบุหัวข้อข่าวสาร' }, { status: 422 });
   if (!descriptions) return NextResponse.json({ error: 'กรุณาระบุรายละเอียดข่าวสาร' }, { status: 422 });
+  if (imageUrls.length > 4) return NextResponse.json({ error: 'แนบรูปภาพได้สูงสุด 4 รูปต่อข่าวสาร' }, { status: 422 });
   if (action === 'SEND_NOW' && !recipientIds.length) {
     return NextResponse.json({ error: 'กรุณาเลือกผู้รับอย่างน้อย 1 รายการ' }, { status: 422 });
   }
@@ -84,10 +86,11 @@ export async function POST(req: NextRequest) {
       seq,
       title,
       descriptions,
+      image_urls: imageUrls,
       status: nextStatus,
-      flex_payload: buildLineNewsFlex({ seq, title, descriptions }),
+      flex_payload: buildLineNewsFlex({ seq, title, descriptions, image_urls: imageUrls }),
     })
-    .select('id, seq, title, descriptions, sent_at, status, created_at, updated_at')
+    .select('id, seq, title, descriptions, image_urls, sent_at, status, created_at, updated_at')
     .single();
 
   if (error) return NextResponse.json({ error: error.message }, { status: 400 });

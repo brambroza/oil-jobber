@@ -7,13 +7,15 @@ type NewsBroadcast = {
   seq: number;
   title: string;
   descriptions: string;
+  image_urls: string[];
 };
 
-export function buildLineNewsFlex(news: Pick<NewsBroadcast, 'seq' | 'title' | 'descriptions'>) {
+export function buildLineNewsFlex(news: Pick<NewsBroadcast, 'seq' | 'title' | 'descriptions' | 'image_urls'>) {
   const descriptionLines = String(news.descriptions || '')
     .split('\n')
     .map((line) => line.trim())
     .filter(Boolean);
+  const heroImageUrl = Array.isArray(news.image_urls) ? news.image_urls[0] : undefined;
 
   return {
     type: 'flex',
@@ -21,6 +23,15 @@ export function buildLineNewsFlex(news: Pick<NewsBroadcast, 'seq' | 'title' | 'd
     contents: {
       type: 'bubble',
       size: 'mega',
+      ...(heroImageUrl ? {
+        hero: {
+          type: 'image',
+          url: heroImageUrl,
+          size: 'full',
+          aspectRatio: '20:13',
+          aspectMode: 'cover',
+        },
+      } : {}),
       header: {
         type: 'box',
         layout: 'vertical',
@@ -89,7 +100,7 @@ export function buildLineNewsFlex(news: Pick<NewsBroadcast, 'seq' | 'title' | 'd
 export async function sendLineNewsBroadcast(newsId: string) {
   const { data: news, error: newsError } = await supabaseAdmin
     .from('line_news_broadcasts')
-    .select('id, company_id, seq, title, descriptions')
+    .select('id, company_id, seq, title, descriptions, image_urls')
     .eq('id', newsId)
     .eq('is_deleted', false)
     .single();
@@ -125,7 +136,12 @@ export async function sendLineNewsBroadcast(newsId: string) {
     }
 
     try {
-      await pushLinePayload(lineUserId, [flexMessage]);
+      const imageUrls = Array.isArray(news.image_urls) ? news.image_urls.slice(0, 4) : [];
+      const messages = [
+        flexMessage,
+        ...imageUrls.map((url) => ({ type: 'image' as const, originalContentUrl: url, previewImageUrl: url })),
+      ];
+      await pushLinePayload(lineUserId, messages);
       await supabaseAdmin
         .from('line_news_broadcast_recipients')
         .update({ sent_at: sentAt, error_message: null })
@@ -137,6 +153,15 @@ export async function sendLineNewsBroadcast(newsId: string) {
         message_type: 'flex',
         message_text: news.title,
       });
+      if (imageUrls.length) {
+        await supabaseAdmin.from('line_messages').insert(imageUrls.map((url) => ({
+          company_id: news.company_id,
+          line_customer_id: lineCustomerId,
+          direction: 'OUT',
+          message_type: 'image',
+          message_text: url,
+        })));
+      }
     } catch (e) {
       const message = (e as Error).message;
       failures.push({ lineCustomerId, error: message });

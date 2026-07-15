@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useMemo, useState } from 'react';
+import { ChangeEvent, useEffect, useMemo, useState } from 'react';
 import {
   Alert,
   Box,
@@ -24,14 +24,14 @@ import {
   TextField,
   Typography,
 } from '@mui/material';
-import { Add, Delete, Edit, Send } from '@mui/icons-material';
+import { Add, Delete, Edit, Image as ImageIcon, Send } from '@mui/icons-material';
 import { PageScaffold } from '@/components/common/PageScaffold';
 
 type LineCustomer = {
   id: string;
   line_user_id: string;
   display_name: string | null;
-  customers?: { company_name?: string | null } | Array<{ company_name?: string | null }> | null;
+  customers?: { company_name?: string | null; is_deleted?: boolean | null } | Array<{ company_name?: string | null; is_deleted?: boolean | null }> | null;
 };
 
 type NewsBroadcast = {
@@ -46,6 +46,7 @@ type NewsBroadcast = {
   sent_count: number;
   failed_count: number;
   recipient_ids: string[];
+  image_urls: string[];
 };
 
 type FormState = {
@@ -54,6 +55,7 @@ type FormState = {
   title: string;
   descriptions: string;
   recipient_ids: string[];
+  image_urls: string[];
 };
 
 const emptyForm: FormState = {
@@ -61,6 +63,7 @@ const emptyForm: FormState = {
   title: '',
   descriptions: '',
   recipient_ids: [],
+  image_urls: [],
 };
 
 function statusColor(status: string) {
@@ -86,6 +89,7 @@ export default function LineNewsPage() {
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
   const [success, setSuccess] = useState('');
+  const [uploadingImage, setUploadingImage] = useState(false);
 
   const nextSeq = useMemo(() => Math.max(0, ...rows.map((row) => Number(row.seq || 0))) + 1, [rows]);
   const selectedAll = lineCustomers.length > 0 && form.recipient_ids.length === lineCustomers.length;
@@ -130,10 +134,48 @@ export default function LineNewsPage() {
       title: row.title || '',
       descriptions: row.descriptions || '',
       recipient_ids: row.recipient_ids || [],
+      image_urls: row.image_urls || [],
     });
     setOpen(true);
     setError('');
     setSuccess('');
+  };
+
+  const uploadImage = async (event: ChangeEvent<HTMLInputElement>) => {
+    const files = Array.from(event.target.files || []);
+    event.target.value = '';
+    if (!files.length) return;
+    if (form.image_urls.length + files.length > 4) {
+      setError('แนบรูปภาพได้สูงสุด 4 รูปต่อข่าวสาร (รวมกับข้อความแล้วไม่เกิน 5 รายการตามข้อจำกัด LINE)');
+      return;
+    }
+    if (files.some((file) => !file.type.startsWith('image/'))) {
+      setError('กรุณาเลือกไฟล์ภาพเท่านั้น');
+      return;
+    }
+    if (files.some((file) => file.size > 10 * 1024 * 1024)) {
+      setError('ไฟล์ภาพต้องมีขนาดไม่เกิน 10 MB');
+      return;
+    }
+
+    setUploadingImage(true);
+    setError('');
+    try {
+      const urls = await Promise.all(files.map(async (file) => {
+        const data = new FormData();
+        data.append('company_id', companyId);
+        data.append('file', file);
+        const response = await fetch('/api/line/news-broadcasts/upload-image', { method: 'POST', body: data });
+        const result = await response.json();
+        if (!response.ok) throw new Error(result.error || 'อัปโหลดรูปภาพไม่สำเร็จ');
+        return String(result.url);
+      }));
+      setForm((prev) => ({ ...prev, image_urls: [...prev.image_urls, ...urls] }));
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setUploadingImage(false);
+    }
   };
 
   const toggleRecipient = (id: string) => {
@@ -155,6 +197,7 @@ export default function LineNewsPage() {
         seq: form.seq,
         title: form.title,
         descriptions: form.descriptions,
+        image_urls: form.image_urls,
         recipient_ids: form.recipient_ids,
         status: 'DRAFT',
         action,
@@ -324,6 +367,32 @@ export default function LineNewsPage() {
               />
               <Paper variant='outlined' sx={{ p: 1.25, borderColor: '#dbe4f0' }}>
                 <Stack spacing={1}>
+                  <Stack direction='row' alignItems='center' justifyContent='space-between' gap={1}>
+                    <Typography fontWeight={700}>รูปภาพประกอบ ({form.image_urls.length}/4)</Typography>
+                    <Button
+                      size='small'
+                      component='label'
+                      startIcon={<ImageIcon />}
+                      disabled={uploadingImage}
+                    >
+                      {uploadingImage ? 'กำลังอัปโหลด...' : 'แนบรูปภาพ'}
+                      <input hidden type='file' accept='image/*' multiple onChange={uploadImage} />
+                    </Button>
+                  </Stack>
+                  {form.image_urls.length ? (
+                    <Box sx={{ display: 'grid', gridTemplateColumns: 'repeat(2, minmax(0, 1fr))', gap: 1 }}>
+                      {form.image_urls.map((url, index) => (
+                        <Box key={url}>
+                          <Box component='img' src={url} alt={`รูปภาพประกอบ ${index + 1}`} sx={{ display: 'block', width: '100%', height: 120, objectFit: 'cover', borderRadius: 1 }} />
+                          <Button size='small' color='error' onClick={() => setForm((prev) => ({ ...prev, image_urls: prev.image_urls.filter((_, itemIndex) => itemIndex !== index) }))}>ลบรูปที่ {index + 1}</Button>
+                        </Box>
+                      ))}
+                    </Box>
+                  ) : <Typography variant='body2' color='text.secondary'>เลือกรูปได้สูงสุด 4 รูป รูปละไม่เกิน 10 MB</Typography>}
+                </Stack>
+              </Paper>
+              <Paper variant='outlined' sx={{ p: 1.25, borderColor: '#dbe4f0' }}>
+                <Stack spacing={1}>
                   <Stack direction='row' alignItems='center' justifyContent='space-between'>
                     <Typography fontWeight={700}>เลือกผู้รับ LINE</Typography>
                     <FormControlLabel
@@ -363,6 +432,7 @@ export default function LineNewsPage() {
                 </Typography>
               </Box>
               <Stack spacing={1.2} sx={{ p: 2 }}>
+                {form.image_urls.map((url, index) => <Box key={url} component='img' src={url} alt={`รูปภาพประกอบ ${index + 1}`} sx={{ width: '100%', maxHeight: 180, borderRadius: 1, objectFit: 'cover' }} />)}
                 <Typography variant='caption' color='text.secondary' fontWeight={800}>Oil Jobber Update</Typography>
                 {(form.descriptions || 'รายละเอียดข่าวสารจะแสดงตรงนี้').split('\n').map((line, idx) => (
                   <Typography key={`${line}-${idx}`} variant='body2' sx={{ whiteSpace: 'pre-wrap' }}>

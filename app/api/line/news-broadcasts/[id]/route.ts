@@ -20,11 +20,13 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
   const seq = Number(body.seq || 0);
   const title = String(body.title || '').trim();
   const descriptions = String(body.descriptions || '').trim();
+  const imageUrls = Array.isArray(body.image_urls) ? body.image_urls.map((url: unknown) => String(url).trim()).filter(Boolean) : [];
   const recipientIds = Array.isArray(body.recipient_ids) ? body.recipient_ids.map((recipientId: unknown) => String(recipientId)) : [];
 
   if (!seq) return NextResponse.json({ error: 'กรุณาระบุ seq' }, { status: 422 });
   if (!title) return NextResponse.json({ error: 'กรุณาระบุหัวข้อข่าวสาร' }, { status: 422 });
   if (!descriptions) return NextResponse.json({ error: 'กรุณาระบุรายละเอียดข่าวสาร' }, { status: 422 });
+  if (imageUrls.length > 4) return NextResponse.json({ error: 'แนบรูปภาพได้สูงสุด 4 รูปต่อข่าวสาร' }, { status: 422 });
 
   const { data: current, error: currentError } = await supabaseAdmin
     .from('line_news_broadcasts')
@@ -45,12 +47,13 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
       seq,
       title,
       descriptions,
+      image_urls: imageUrls,
       status: 'DRAFT',
-      flex_payload: buildLineNewsFlex({ seq, title, descriptions }),
+      flex_payload: buildLineNewsFlex({ seq, title, descriptions, image_urls: imageUrls }),
     })
     .eq('id', id)
     .eq('company_id', companyId)
-    .select('id, seq, title, descriptions, sent_at, status, created_at, updated_at')
+    .select('id, seq, title, descriptions, image_urls, sent_at, status, created_at, updated_at')
     .single();
 
   if (error) return NextResponse.json({ error: error.message }, { status: 400 });
