@@ -137,9 +137,10 @@ export async function sendLineNewsBroadcast(newsId: string) {
 
     try {
       const imageUrls = Array.isArray(news.image_urls) ? news.image_urls.slice(0, 4) : [];
+      const imageReplyUrls = imageUrls.length > 1 ? imageUrls : [];
       const messages = [
         flexMessage,
-        ...imageUrls.map((url) => ({ type: 'image' as const, originalContentUrl: url, previewImageUrl: url })),
+        ...imageReplyUrls.map((url) => ({ type: 'image' as const, originalContentUrl: url, previewImageUrl: url })),
       ];
       await pushLinePayload(lineUserId, messages);
       await supabaseAdmin
@@ -153,8 +154,8 @@ export async function sendLineNewsBroadcast(newsId: string) {
         message_type: 'flex',
         message_text: news.title,
       });
-      if (imageUrls.length) {
-        await supabaseAdmin.from('line_messages').insert(imageUrls.map((url) => ({
+      if (imageReplyUrls.length) {
+        await supabaseAdmin.from('line_messages').insert(imageReplyUrls.map((url) => ({
           company_id: news.company_id,
           line_customer_id: lineCustomerId,
           direction: 'OUT',

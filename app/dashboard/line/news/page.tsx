@@ -25,6 +25,7 @@ import {
   Typography,
 } from '@mui/material';
 import { Add, Delete, Edit, Image as ImageIcon, Send } from '@mui/icons-material';
+import { ActionSnackbar, type ActionSnackbarSeverity } from '@/components/common/ActionSnackbar';
 import { PageScaffold } from '@/components/common/PageScaffold';
 
 type LineCustomer = {
@@ -88,8 +89,16 @@ export default function LineNewsPage() {
   const [loading, setLoading] = useState(false);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
-  const [success, setSuccess] = useState('');
   const [uploadingImage, setUploadingImage] = useState(false);
+  const [snack, setSnack] = useState<{ open: boolean; message: string; severity: ActionSnackbarSeverity }>({
+    open: false,
+    message: '',
+    severity: 'info',
+  });
+
+  const showSnack = (message: string, severity: ActionSnackbarSeverity) => {
+    setSnack({ open: true, message, severity });
+  };
 
   const nextSeq = useMemo(() => Math.max(0, ...rows.map((row) => Number(row.seq || 0))) + 1, [rows]);
   const selectedAll = lineCustomers.length > 0 && form.recipient_ids.length === lineCustomers.length;
@@ -102,7 +111,7 @@ export default function LineNewsPage() {
     try {
       const [newsRes, customerRes] = await Promise.all([
         fetch(`/api/line/news-broadcasts?company_id=${companyId}`),
-        fetch(`/api/line/customers?company_id=${companyId}`),
+        fetch(`/api/line/customers/linked?company_id=${companyId}`),
       ]);
       const [newsData, customerData] = await Promise.all([newsRes.json(), customerRes.json()]);
       if (!newsRes.ok) throw new Error(newsData.error || 'โหลดข่าวสาร LINE ไม่สำเร็จ');
@@ -124,7 +133,7 @@ export default function LineNewsPage() {
     setForm({ ...emptyForm, seq: nextSeq });
     setOpen(true);
     setError('');
-    setSuccess('');
+    showSnack('พร้อมสร้างข่าวสาร LINE ใหม่', 'info');
   };
 
   const openEdit = (row: NewsBroadcast) => {
@@ -138,7 +147,7 @@ export default function LineNewsPage() {
     });
     setOpen(true);
     setError('');
-    setSuccess('');
+    showSnack(`กำลังแก้ไขข่าวสาร “${row.title}”`, 'info');
   };
 
   const uploadImage = async (event: ChangeEvent<HTMLInputElement>) => {
@@ -146,15 +155,21 @@ export default function LineNewsPage() {
     event.target.value = '';
     if (!files.length) return;
     if (form.image_urls.length + files.length > 4) {
-      setError('แนบรูปภาพได้สูงสุด 4 รูปต่อข่าวสาร (รวมกับข้อความแล้วไม่เกิน 5 รายการตามข้อจำกัด LINE)');
+      const message = 'แนบรูปภาพได้สูงสุด 4 รูปต่อข่าวสาร (รวมกับข้อความแล้วไม่เกิน 5 รายการตามข้อจำกัด LINE)';
+      setError(message);
+      showSnack(message, 'warning');
       return;
     }
     if (files.some((file) => !file.type.startsWith('image/'))) {
-      setError('กรุณาเลือกไฟล์ภาพเท่านั้น');
+      const message = 'กรุณาเลือกไฟล์ภาพเท่านั้น';
+      setError(message);
+      showSnack(message, 'error');
       return;
     }
     if (files.some((file) => file.size > 10 * 1024 * 1024)) {
-      setError('ไฟล์ภาพต้องมีขนาดไม่เกิน 10 MB');
+      const message = 'ไฟล์ภาพต้องมีขนาดไม่เกิน 10 MB';
+      setError(message);
+      showSnack(message, 'error');
       return;
     }
 
@@ -171,8 +186,11 @@ export default function LineNewsPage() {
         return String(result.url);
       }));
       setForm((prev) => ({ ...prev, image_urls: [...prev.image_urls, ...urls] }));
+      showSnack(`อัปโหลดรูปภาพสำเร็จ ${urls.length} รูป`, 'success');
     } catch (e) {
-      setError((e as Error).message);
+      const message = (e as Error).message;
+      setError(message);
+      showSnack(message, 'error');
     } finally {
       setUploadingImage(false);
     }
@@ -190,7 +208,6 @@ export default function LineNewsPage() {
   const submit = async (action: 'DRAFT' | 'SEND_NOW') => {
     setSaving(true);
     setError('');
-    setSuccess('');
     try {
       const payload = {
         company_id: companyId,
@@ -216,9 +233,12 @@ export default function LineNewsPage() {
           const sendRes = await fetch(`/api/line/news-broadcasts/${form.id}/send`, { method: 'POST' });
           const sendData = await sendRes.json();
           if (!sendRes.ok && sendRes.status !== 207) throw new Error(sendData.error || 'ส่งข่าวสาร LINE ไม่สำเร็จ');
-          setSuccess(sendRes.status === 207 ? 'ส่งข่าวสารบางรายการไม่สำเร็จ กรุณาตรวจสอบสถานะ' : 'ส่งข่าวสาร LINE เรียบร้อยแล้ว');
+          showSnack(
+            sendRes.status === 207 ? 'ส่งข่าวสารบางรายการไม่สำเร็จ กรุณาตรวจสอบสถานะ' : 'ส่งข่าวสาร LINE เรียบร้อยแล้ว',
+            sendRes.status === 207 ? 'warning' : 'success',
+          );
         } else {
-          setSuccess('บันทึก draft เรียบร้อยแล้ว');
+          showSnack('บันทึก Draft เรียบร้อยแล้ว', 'success');
         }
       } else {
         const res = await fetch('/api/line/news-broadcasts', {
@@ -228,13 +248,18 @@ export default function LineNewsPage() {
         });
         const data = await res.json();
         if (!res.ok && res.status !== 207) throw new Error(data.error || 'บันทึกข่าวสาร LINE ไม่สำเร็จ');
-        setSuccess(action === 'SEND_NOW' ? (res.status === 207 ? 'ส่งข่าวสารบางรายการไม่สำเร็จ กรุณาตรวจสอบสถานะ' : 'ส่งข่าวสาร LINE เรียบร้อยแล้ว') : 'บันทึก draft เรียบร้อยแล้ว');
+        const message = action === 'SEND_NOW'
+          ? (res.status === 207 ? 'ส่งข่าวสารบางรายการไม่สำเร็จ กรุณาตรวจสอบสถานะ' : 'ส่งข่าวสาร LINE เรียบร้อยแล้ว')
+          : 'บันทึก Draft เรียบร้อยแล้ว';
+        showSnack(message, res.status === 207 ? 'warning' : 'success');
       }
 
       setOpen(false);
       await load();
     } catch (e) {
-      setError((e as Error).message);
+      const message = (e as Error).message;
+      setError(message);
+      showSnack(message, 'error');
     } finally {
       setSaving(false);
     }
@@ -243,15 +268,19 @@ export default function LineNewsPage() {
   const sendExisting = async (id: string) => {
     setSaving(true);
     setError('');
-    setSuccess('');
     try {
       const res = await fetch(`/api/line/news-broadcasts/${id}/send`, { method: 'POST' });
       const data = await res.json();
       if (!res.ok && res.status !== 207) throw new Error(data.error || 'ส่งข่าวสาร LINE ไม่สำเร็จ');
-      setSuccess(res.status === 207 ? 'ส่งข่าวสารบางรายการไม่สำเร็จ กรุณาตรวจสอบสถานะ' : 'ส่งข่าวสาร LINE เรียบร้อยแล้ว');
+      showSnack(
+        res.status === 207 ? 'ส่งข่าวสารบางรายการไม่สำเร็จ กรุณาตรวจสอบสถานะ' : 'ส่งข่าวสาร LINE เรียบร้อยแล้ว',
+        res.status === 207 ? 'warning' : 'success',
+      );
       await load();
     } catch (e) {
-      setError((e as Error).message);
+      const message = (e as Error).message;
+      setError(message);
+      showSnack(message, 'error');
     } finally {
       setSaving(false);
     }
@@ -262,11 +291,24 @@ export default function LineNewsPage() {
     const res = await fetch(`/api/line/news-broadcasts/${deleteId}?company_id=${companyId}`, { method: 'DELETE' });
     const data = await res.json();
     if (!res.ok) {
-      setError(data.error || 'ลบข่าวสาร LINE ไม่สำเร็จ');
+      const message = data.error || 'ลบข่าวสาร LINE ไม่สำเร็จ';
+      setError(message);
+      showSnack(message, 'error');
       return;
     }
     setDeleteId(null);
+    showSnack('ลบข่าวสาร LINE เรียบร้อยแล้ว', 'success');
     await load();
+  };
+
+  const removeImage = (index: number) => {
+    setForm((prev) => ({ ...prev, image_urls: prev.image_urls.filter((_, itemIndex) => itemIndex !== index) }));
+    showSnack(`นำรูปที่ ${index + 1} ออกจากข่าวสารแล้ว`, 'warning');
+  };
+
+  const openDeleteDialog = (id: string) => {
+    setDeleteId(id);
+    showSnack('กรุณายืนยันการลบข่าวสาร', 'warning');
   };
 
   const selectedCustomerNames = useMemo(() => {
@@ -283,7 +325,6 @@ export default function LineNewsPage() {
           <Button variant='contained' startIcon={<Add />} onClick={openNew}>สร้างข่าวสาร</Button>
         </Stack>
         {error ? <Alert severity='error'>{error}</Alert> : null}
-        {success ? <Alert severity='success'>{success}</Alert> : null}
         {loading ? <Alert severity='info'>กำลังโหลด...</Alert> : null}
 
         <Paper variant='outlined' sx={{ overflowX: 'auto', borderColor: '#dbe4f0' }}>
@@ -322,7 +363,7 @@ export default function LineNewsPage() {
                         <IconButton size='small' color='primary' disabled={saving} onClick={() => void sendExisting(row.id)}><Send fontSize='small' /></IconButton>
                       </>
                     ) : null}
-                    <IconButton size='small' color='error' onClick={() => setDeleteId(row.id)}><Delete fontSize='small' /></IconButton>
+                    <IconButton size='small' color='error' onClick={() => openDeleteDialog(row.id)}><Delete fontSize='small' /></IconButton>
                   </TableCell>
                 </TableRow>
               ))}
@@ -384,7 +425,7 @@ export default function LineNewsPage() {
                       {form.image_urls.map((url, index) => (
                         <Box key={url}>
                           <Box component='img' src={url} alt={`รูปภาพประกอบ ${index + 1}`} sx={{ display: 'block', width: '100%', height: 120, objectFit: 'cover', borderRadius: 1 }} />
-                          <Button size='small' color='error' onClick={() => setForm((prev) => ({ ...prev, image_urls: prev.image_urls.filter((_, itemIndex) => itemIndex !== index) }))}>ลบรูปที่ {index + 1}</Button>
+                          <Button size='small' color='error' onClick={() => removeImage(index)}>ลบรูปที่ {index + 1}</Button>
                         </Box>
                       ))}
                     </Box>
@@ -463,6 +504,13 @@ export default function LineNewsPage() {
           <Button color='error' variant='contained' onClick={() => void deleteRow()}>ลบ</Button>
         </DialogActions>
       </Dialog>
+
+      <ActionSnackbar
+        open={snack.open}
+        message={snack.message}
+        severity={snack.severity}
+        onClose={() => setSnack((prev) => ({ ...prev, open: false }))}
+      />
     </PageScaffold>
   );
 }

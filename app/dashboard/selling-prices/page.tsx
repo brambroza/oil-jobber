@@ -318,7 +318,7 @@ export default function SellingPricesPage() {
   };
 
   const loadLineCustomers = async () => {
-    const res = await fetch(`/api/line/customers?company_id=${companyId}`);
+    const res = await fetch(`/api/line/customers/linked?company_id=${companyId}`);
     const data = await res.json();
     if (!res.ok) {
       setError(data.error || 'โหลดรายชื่อลูกค้า LINE ไม่สำเร็จ');
