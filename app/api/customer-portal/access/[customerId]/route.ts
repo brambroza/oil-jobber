@@ -45,7 +45,14 @@ export async function GET(req: NextRequest, { params }: { params: Promise<{ cust
   if (accessRes.error) return NextResponse.json({ error: accessRes.error.message }, { status: 400 });
   if (userRes.error) return NextResponse.json({ error: userRes.error.message }, { status: 400 });
 
-  return NextResponse.json({ access: accessRes.data, portal_user: userRes.data });
+  const portalUser = userRes.data ? { ...userRes.data, email: '' } : null;
+  if (portalUser?.auth_user_id) {
+    const { data: authData, error: authError } = await supabaseAdmin.auth.admin.getUserById(portalUser.auth_user_id);
+    if (authError) return NextResponse.json({ error: authError.message }, { status: 400 });
+    portalUser.email = authData.user.email ?? '';
+  }
+
+  return NextResponse.json({ access: accessRes.data, portal_user: portalUser });
 }
 
 export async function PATCH(req: NextRequest, { params }: { params: Promise<{ customerId: string }> }) {

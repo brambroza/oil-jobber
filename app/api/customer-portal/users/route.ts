@@ -58,3 +58,33 @@ export async function POST(req: NextRequest) {
 
   return NextResponse.json(data);
 }
+
+export async function PATCH(req: NextRequest) {
+  const body = await req.json();
+  const companyId = resolveCompanyId(body.company_id);
+  const customerId = String(body.customer_id ?? '').trim();
+  const email = String(body.email ?? '').trim().toLowerCase();
+
+  if (!companyId) return NextResponse.json({ error: 'กรุณาระบุ company_id' }, { status: 422 });
+  if (!customerId) return NextResponse.json({ error: 'กรุณาระบุ customer_id' }, { status: 422 });
+  if (!email) return NextResponse.json({ error: 'กรุณาระบุอีเมลลูกค้า' }, { status: 422 });
+
+  const { data: portalUser, error: portalUserError } = await supabaseAdmin
+    .from('customer_portal_users')
+    .select('auth_user_id')
+    .eq('company_id', companyId)
+    .eq('customer_id', customerId)
+    .eq('is_active', true)
+    .maybeSingle();
+
+  if (portalUserError) return NextResponse.json({ error: portalUserError.message }, { status: 400 });
+  if (!portalUser) return NextResponse.json({ error: 'ไม่พบบัญชีพอร์ทัลของลูกค้ารายนี้' }, { status: 404 });
+
+  const { data, error } = await supabaseAdmin.auth.admin.updateUserById(portalUser.auth_user_id, {
+    email,
+    email_confirm: true,
+  });
+  if (error) return NextResponse.json({ error: error.message }, { status: 400 });
+
+  return NextResponse.json({ auth_user_id: data.user.id, email: data.user.email ?? email });
+}

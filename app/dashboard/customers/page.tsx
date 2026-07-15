@@ -298,6 +298,7 @@ export default function CustomersPage() {
       can_place_order: Boolean(data.access?.can_place_order ?? true),
     });
     setPortalUserId(data.portal_user?.auth_user_id ?? null);
+    setPortalEmail(data.portal_user?.email ?? '');
   };
 
   const onSave = async () => {
@@ -359,6 +360,23 @@ export default function CustomersPage() {
 
       setPortalUserId(data.auth_user_id);
       setPortalPassword('');
+    } catch (e) {
+      setError((e as Error).message);
+    }
+  };
+
+  const onUpdatePortalEmail = async () => {
+    if (!form.id) return;
+
+    try {
+      const res = await fetch('/api/customer-portal/users', {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ company_id: companyId, customer_id: form.id, email: portalEmail }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || 'บันทึกอีเมลลูกค้าไม่สำเร็จ');
+      setPortalEmail(data.email || portalEmail);
     } catch (e) {
       setError((e as Error).message);
     }
@@ -639,11 +657,17 @@ export default function CustomersPage() {
             <Paper variant='outlined' sx={{ p: 1.25, borderColor: '#dbe4f0', borderRadius: 2 }}>
               <Stack spacing={1.1}>
                 {portalUserId ? <Alert severity='success'>สร้างบัญชีแล้ว (Auth User ID: {portalUserId})</Alert> : <Alert severity='info'>ยังไม่มีบัญชีพอร์ทัลสำหรับลูกค้ารายนี้</Alert>}
-                <TextField size='small' label='อีเมลสำหรับลูกค้า' value={portalEmail} onChange={(e) => setPortalEmail(e.target.value)} placeholder='customer@example.com' />
+                <TextField size='small' label='อีเมลสำหรับลูกค้า' value={portalEmail} onChange={(e) => setPortalEmail(e.target.value)} placeholder='customer@example.com' type='email' />
                 <TextField size='small' label='รหัสผ่านเริ่มต้น' value={portalPassword} onChange={(e) => setPortalPassword(e.target.value)} type='password' helperText='อย่างน้อย 8 ตัวอักษร' />
-                <Button variant='outlined' disabled={!form.id || !portalEmail || !portalPassword || Boolean(portalUserId)} onClick={() => void onCreatePortalUser()}>
-                  สร้างบัญชีลูกค้า
-                </Button>
+                {portalUserId ? (
+                  <Button variant='outlined' disabled={!form.id || !portalEmail} onClick={() => void onUpdatePortalEmail()}>
+                    บันทึกอีเมล
+                  </Button>
+                ) : (
+                  <Button variant='outlined' disabled={!form.id || !portalEmail || !portalPassword} onClick={() => void onCreatePortalUser()}>
+                    สร้างบัญชีลูกค้า
+                  </Button>
+                )}
               </Stack>
             </Paper>
           ) : (

@@ -23,22 +23,40 @@ export async function POST(req: NextRequest) {
     const groupSummary = groupId ? await getLineGroupSummary(groupId) : null;
     const profile = groupId ? null : await getLineProfile(userId);
 
-    const { data: lineCustomer, error: upsertError } = await supabaseAdmin
-      .from('line_customers')
-      .upsert(
-        {
-          company_id: companyId,
-          line_user_id: userId,
-          group_id: groupId || null,
-          conversation_key: conversationKey,
-          // Group conversations are shown by their group name, not the sender's name.
-          display_name: groupSummary?.groupName ?? profile?.displayName ?? null,
-          profile_image_url: groupSummary?.pictureUrl ?? profile?.pictureUrl ?? null,
-        },
-        { onConflict: 'company_id,line_user_id,conversation_key' },
-      )
-      .select('id')
-      .single();
+    const customerPayload = {
+      company_id: companyId,
+      line_user_id: userId,
+      group_id: groupId || null,
+      conversation_key: conversationKey,
+      // Group conversations are shown by their group name, not the sender's name.
+      display_name: groupSummary?.groupName ?? profile?.displayName ?? null,
+      profile_image_url: groupSummary?.pictureUrl ?? profile?.pictureUrl ?? null,
+    };
+
+    const existingGroup = groupId
+      ? await supabaseAdmin
+        .from('line_customers')
+        .select('id')
+        .eq('company_id', companyId)
+        .eq('group_id', groupId)
+        .eq('is_deleted', false)
+        .order('updated_at', { ascending: false })
+        .limit(1)
+        .maybeSingle()
+      : null;
+
+    const { data: lineCustomer, error: upsertError } = existingGroup?.data
+      ? await supabaseAdmin
+        .from('line_customers')
+        .update(customerPayload)
+        .eq('id', existingGroup.data.id)
+        .select('id')
+        .single()
+      : await supabaseAdmin
+        .from('line_customers')
+        .upsert(customerPayload, { onConflict: 'company_id,line_user_id,conversation_key' })
+        .select('id')
+        .single();
 
     if (upsertError || !lineCustomer?.id) continue;
 
