@@ -607,7 +607,7 @@ export default function SellingPricesPage() {
           cornerRadius: '8px',
           contents: [
             { type: 'text', text: 'ราคานี้ยังไม่รวมค่าขนส่ง', size: 'xxs', color: '#64748b' },
-            { type: 'text', text: 'ราคานี้ยังไม่รวม Vat', size: 'xs', color: '#dc2626', weight: 'bold' }, //expireText
+            { type: 'text', text: 'ราคานี้รวม Vat แล้ว', size: 'xs', color: '#dc2626', weight: 'bold' }, //expireText
           ],
         },
 
