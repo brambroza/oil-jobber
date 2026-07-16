@@ -118,6 +118,8 @@ function formatDateTimeNow(): string {
 }
 
 const MAX_BROADCAST_ROUNDS = 10;
+const MAX_BROADCAST_GROUPS = 5;
+const MAX_BROADCAST_PRODUCTS_PER_GROUP = 4;
 
 export default function SellingPricesPage() {
   const [companyId] = useState(process.env.NEXT_PUBLIC_DEFAULT_COMPANY_ID ?? '');
@@ -456,36 +458,36 @@ export default function SellingPricesPage() {
   };
 
   const buildBroadcastMessage = (access: CustomerAccess, roundsToSend: PriceRoundDetail[], cheapestPriceByKey: Map<string, number>): string => {
-    const lines: string[] = [`อัปเดตราคาขาย ${roundsToSend.length} รอบ`];
+    const lines: string[] = [`ราคาน้ำมันรอบ ${formatDateTimeNow()}`];
 
     for (const round of roundsToSend) {
       const visibleData = getVisibleDataForAccess(round, access);
       if (!visibleData) continue;
       const { visibleGroups, visiblePaymentConditions } = visibleData;
+      const refineryName = round.base.refineries?.name || '-';
+      const effectiveText = `${formatDate(round.base.effective_date)} ${formatTime(round.base.effective_at)} น.`;
       const remark = String(round.base.remark || '').trim();
-      lines.push('', `รอบ ${round.base.refineries?.name || '-'} วันที่ ${formatDate(round.base.effective_date)} เวลา ${formatTime(round.base.effective_at)}`);
+      lines.push('', refineryName, `อัปเดต ${effectiveText}`, 'ราคานี้ยังไม่รวมค่าขนส่ง', 'ราคานี้รวม Vat แล้ว');
 
-      for (const g of visibleGroups.slice(0, 3)) {
+      for (const g of visibleGroups.slice(0, MAX_BROADCAST_GROUPS)) {
         const visibleItems = g.items.filter((it) => Number(it.base_cost_price || 0) > 0);
         if (!visibleItems.length) continue;
-        lines.push(`${g.depotCode}${g.depotName ? ` (${g.depotName})` : ''}`);
-        for (const item of visibleItems.slice(0, 3)) {
-          lines.push(`${item.product_code} ${item.product_name || ''}`.trim());
-          const parts = visiblePaymentConditions.map((pc: any) => {
+        lines.push('', `${g.depotCode}${g.depotName ? ` (${g.depotName})` : ''}`);
+        lines.push(`ชำระเงิน | ${visiblePaymentConditions.map((pc: any) => pc.name).join(' | ')}`);
+        for (const item of visibleItems.slice(0, MAX_BROADCAST_PRODUCTS_PER_GROUP)) {
+          const prices = visiblePaymentConditions.map((pc: any) => {
             const price = Number(item.base_cost_price || 0) ===0 ? 0 : (Number(item.base_cost_price || 0) * 1.07) + Number(pc.extra_cost_per_liter || 0);
             const cheapestPrice = cheapestPriceByKey.get(getCheapestPriceKey(item.product_code));
             const isCheapest = cheapestPrice != null && Math.abs(price - cheapestPrice) < 0.0001;
-            return `${pc.name}: ${price.toFixed(2)}${isCheapest ? ' (ถูกสุด)' : ''}`;
+            return `${price.toFixed(2)}${isCheapest ? ' (ถูกสุด)' : ''}`;
           });
-          lines.push(parts.join(' | '));
+          lines.push(`${item.product_code} | ${prices.join(' | ')}`);
         }
       }
 
-      lines.push(`ราคาถึง: ${round.base.expires_date ? formatDate(round.base.expires_date) : '-'} ${formatTime(round.base.expires_at)}`);
-      if (remark) lines.push('หมายเหตุ', remark);
+      if (remark) lines.push('', 'หมายเหตุ', remark);
     }
 
-    lines.push('', 'ดูรายละเอียดเพิ่มเติมในระบบ');
     return lines.join('\n').slice(0, 4900);
   };
 
@@ -495,11 +497,10 @@ export default function SellingPricesPage() {
     const { visibleGroups, visiblePaymentConditions } = visibleData;
     const refineryName = round.base.refineries?.name || '-';
     const effectiveText = `${formatDate(round.base.effective_date)} ${formatTime(round.base.effective_at)} น.`;
-    const expireText = `${round.base.expires_date ? formatDate(round.base.expires_date) : '-'} ${formatTime(round.base.expires_at)} น.`;
     const remark = String(round.base.remark || '').trim();
     const conditionsToUse = visiblePaymentConditions;
 
-    const groupBlocks = visibleGroups.slice(0, 5).map((group) => {
+    const groupBlocks = visibleGroups.slice(0, MAX_BROADCAST_GROUPS).map((group) => {
       const visibleItems = group.items.filter((it) => Number(it.base_cost_price || 0) > 0);
       if (!visibleItems.length) return null;
       const headerRow = {
@@ -520,7 +521,7 @@ export default function SellingPricesPage() {
           })),
         ],
       };
-      const productRows = visibleItems.slice(0, 4).map((item) => ({
+      const productRows = visibleItems.slice(0, MAX_BROADCAST_PRODUCTS_PER_GROUP).map((item) => ({
         type: 'box',
         layout: 'horizontal',
         spacing: 'xs',
@@ -607,7 +608,7 @@ export default function SellingPricesPage() {
           cornerRadius: '8px',
           contents: [
             { type: 'text', text: 'ราคานี้ยังไม่รวมค่าขนส่ง', size: 'xxs', color: '#64748b' },
-            { type: 'text', text: 'ราคานี้รวม Vat แล้ว', size: 'xs', color: '#dc2626', weight: 'bold' }, //expireText
+            { type: 'text', text: 'ราคานี้รวม Vat แล้ว', size: 'xs', color: '#dc2626', weight: 'bold' },
           ],
         },
 

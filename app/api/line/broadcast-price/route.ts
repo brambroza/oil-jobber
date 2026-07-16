@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { supabaseAdmin } from '@/lib/supabase/server';
-import { pushLineMessage, pushLinePayload } from '@/lib/services/line';
+import { pushLineMessage, pushLinePayload, type LinePushContext } from '@/lib/services/line';
 
 export async function POST(req: NextRequest) {
   const { company_id, title, message, messages, recipients } = await req.json();
@@ -18,15 +18,23 @@ export async function POST(req: NextRequest) {
         .single();
       const lineRecipientId = lineCustomer?.group_id || lineCustomer?.line_user_id;
       if (lineCustomerError || !lineRecipientId) throw new Error(lineCustomerError?.message || 'ไม่พบ LINE User หรือ Group');
+      const linePushContext: LinePushContext = {
+        companyId: company_id,
+        lineCustomerId: r.lineCustomerId,
+        recipientType: lineCustomer?.group_id ? 'GROUP' : 'USER',
+        source: 'price_broadcast',
+      };
 
       if (Array.isArray(messages) && messages.length) {
         try {
-          await pushLinePayload(lineRecipientId, messages);
+          await pushLinePayload(lineRecipientId, messages, linePushContext);
         } catch {
-          await pushLineMessage(lineRecipientId, message);
+          //await pushLineMessage(lineRecipientId, message);
+           await pushLinePayload(lineRecipientId, messages, linePushContext);
         }
       } else {
-        await pushLineMessage(lineRecipientId, message);
+         await pushLinePayload(lineRecipientId, messages, linePushContext);
+       // await pushLineMessage(lineRecipientId, message);
       }
       await supabaseAdmin.from('line_broadcast_recipients').insert({ company_id, line_broadcast_id: b.id, line_customer_id: r.lineCustomerId, sent_at: new Date().toISOString() });
       await supabaseAdmin.from('line_messages').insert({
