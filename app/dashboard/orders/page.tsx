@@ -1,9 +1,10 @@
 'use client';
 
-import { useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Add, Delete, Edit, Remove } from '@mui/icons-material';
 import {
   Alert,
+  Autocomplete,
   Box,
   Button,
   Card,
@@ -33,6 +34,7 @@ import {
   TextField,
   Tooltip,
   Typography,
+  createFilterOptions,
 } from '@mui/material';
 import { ActionSnackbar, type ActionSnackbarSeverity } from '@/components/common/ActionSnackbar';
 import type { OrderStatus } from '@/types/database';
@@ -55,12 +57,36 @@ type OrderRow = {
   customers?: { company_name?: string } | null;
 };
 
-type MasterCustomer = { id: string; company_name: string };
+type MasterCustomer = {
+  id: string;
+  company_name: string;
+  tax_id?: string | null;
+  phone?: string | null;
+  payment_condition_id?: string | null;
+};
 type MasterRefinery = { id: string; name: string };
-type MasterDepot = { id: string; code: string; name: string };
+type MasterDepot = { id: string; code: string; name: string; refinery_id?: string | null };
 type MasterProduct = { code: string; name: string; is_active: boolean };
-type MasterPaymentCondition = { id: string; name: string; payment_type: string; credit_days: number };
-type CustomerAccess = { allowed_payment_condition_ids?: string[] | null } | null;
+type MasterPaymentCondition = {
+  id: string;
+  name: string;
+  payment_type: string;
+  credit_days: number;
+  extra_cost_per_liter: number;
+};
+type CustomerAccess = {
+  allowed_refinery_ids?: string[] | null;
+  allowed_depot_ids?: string[] | null;
+  allowed_payment_condition_ids?: string[] | null;
+} | null;
+
+type CustomerPriceOption = {
+  refinery_id: string | null;
+  depot_id: string;
+  product_code: string;
+  product_name: string;
+  base_cost_price: number;
+};
 
 type OrderItemForm = {
   refinery_id: string;
@@ -77,6 +103,8 @@ type OrderForm = {
   payment_condition_id?: string;
   refinery_summary?: string;
   depot_summary?: string;
+  selected_refinery_id: string;
+  selected_depot_id: string;
   customer_id: string;
   order_status: OrderStatus;
   delivery_location: string;
@@ -101,6 +129,21 @@ const statuses: OrderStatus[] = [
   'CANCELLED',
 ];
 
+const filterCustomerOptions = createFilterOptions<MasterCustomer>({
+  stringify: (customer) => [customer.company_name, customer.tax_id, customer.phone].filter(Boolean).join(' '),
+});
+
+function calculateDueDate(creditDays: number): string {
+  const dueDate = new Date();
+  dueDate.setHours(12, 0, 0, 0);
+  dueDate.setDate(dueDate.getDate() + Math.max(0, Math.trunc(Number(creditDays) || 0)));
+
+  const year = dueDate.getFullYear();
+  const month = String(dueDate.getMonth() + 1).padStart(2, '0');
+  const day = String(dueDate.getDate()).padStart(2, '0');
+  return `${year}-${month}-${day}`;
+}
+
 const emptyItem: OrderItemForm = {
   refinery_id: '',
   depot_id: '',
@@ -121,7 +164,9 @@ const emptyForm: OrderForm = {
   payment_condition_id: '',
   refinery_summary: '',
   depot_summary: '',
-  items: [{ ...emptyItem }],
+  selected_refinery_id: '',
+  selected_depot_id: '',
+  items: [],
 };
 
 function statusColor(status: OrderStatus): 'default' | 'warning' | 'success' | 'error' | 'info' {
@@ -197,6 +242,9 @@ export default function OrdersPage() {
   const [products, setProducts] = useState<MasterProduct[]>([]);
   const [paymentConditions, setPaymentConditions] = useState<MasterPaymentCondition[]>([]);
   const [customerAccess, setCustomerAccess] = useState<CustomerAccess>(null);
+  const [customerPriceOptions, setCustomerPriceOptions] = useState<CustomerPriceOption[]>([]);
+  const [customerAccessLoading, setCustomerAccessLoading] = useState(false);
+  const [customerAccessCustomerId, setCustomerAccessCustomerId] = useState('');
 
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
@@ -229,13 +277,41 @@ export default function OrdersPage() {
   const subTotal = useMemo(() => grandTotal / 1.07, [grandTotal]);
   const vatAmount = useMemo(() => grandTotal - subTotal, [grandTotal, subTotal]);
   const totalLiters = useMemo(() => form.items.reduce((sum, it) => sum + Number(it.liters || 0), 0), [form.items]);
+  const selectedDepotId = form.selected_depot_id;
+  const selectedRefineryId = form.selected_refinery_id;
+
+  const customerRefineries = useMemo(() => {
+    if (!form.customer_id || customerAccessLoading || customerAccessCustomerId !== form.customer_id) return [];
+    const allowed = customerAccess?.allowed_refinery_ids ?? [];
+    if (!allowed.length) return refineries;
+
+    const allowedSet = new Set(allowed.map(String));
+    const existingIds = new Set(form.id ? form.items.map((item) => item.refinery_id).filter(Boolean) : []);
+    return refineries.filter((refinery) => allowedSet.has(refinery.id) || existingIds.has(refinery.id));
+  }, [refineries, customerAccess, customerAccessLoading, customerAccessCustomerId, form.customer_id, form.id, form.items]);
+
+  const customerDepots = useMemo(() => {
+    if (!form.customer_id || customerAccessLoading || customerAccessCustomerId !== form.customer_id) return [];
+    const allowed = customerAccess?.allowed_depot_ids ?? [];
+    if (!allowed.length) return depots;
+
+    const allowedSet = new Set(allowed.map(String));
+    const existingIds = new Set(form.id ? form.items.map((item) => item.depot_id).filter(Boolean) : []);
+    return depots.filter((depot) => allowedSet.has(depot.id) || existingIds.has(depot.id));
+  }, [depots, customerAccess, customerAccessLoading, customerAccessCustomerId, form.customer_id, form.id, form.items]);
+
+  const filteredDepots = useMemo(
+    () => customerDepots.filter((depot) => !selectedRefineryId || depot.refinery_id === selectedRefineryId),
+    [customerDepots, selectedRefineryId],
+  );
 
   const filteredPaymentConditions = useMemo(() => {
+    if (form.customer_id && (customerAccessLoading || customerAccessCustomerId !== form.customer_id)) return [];
     const allowed = customerAccess?.allowed_payment_condition_ids ?? [];
     if (!allowed.length) return paymentConditions;
     const allowedSet = new Set(allowed.map((x) => String(x)));
     return paymentConditions.filter((pc) => allowedSet.has(pc.id));
-  }, [paymentConditions, customerAccess]);
+  }, [paymentConditions, customerAccess, customerAccessLoading, customerAccessCustomerId, form.customer_id]);
 
   const filteredRows = useMemo(() => {
     const q = searchText.trim().toLowerCase();
@@ -305,9 +381,24 @@ export default function OrdersPage() {
 
     const [d1, d2, d3, d4, d5] = await Promise.all([r1.json(), r2.json(), r3.json(), r4.json(), r5.json()]);
 
-    if (r1.ok) setCustomers((d1 || []).map((x: any) => ({ id: x.id, company_name: x.company_name })));
+    if (r1.ok) {
+      setCustomers((d1 || []).map((x: any) => ({
+        id: x.id,
+        company_name: x.company_name,
+        tax_id: x.tax_id,
+        phone: x.phone,
+        payment_condition_id: x.payment_condition_id,
+      })));
+    }
     if (r2.ok) setRefineries((d2 || []).map((x: any) => ({ id: x.id, name: x.name })));
-    if (r3.ok) setDepots((d3 || []).map((x: any) => ({ id: x.id, code: x.code, name: x.name })));
+    if (r3.ok) {
+      setDepots((d3 || []).map((x: any) => ({
+        id: x.id,
+        code: x.code,
+        name: x.name,
+        refinery_id: x.refinery_id,
+      })));
+    }
     if (r4.ok) setProducts((d4 || []).map((x: any) => ({ code: x.code, name: x.name, is_active: Boolean(x.is_active) })));
     if (r5.ok) {
       setPaymentConditions(
@@ -316,6 +407,7 @@ export default function OrdersPage() {
           name: x.name,
           payment_type: x.payment_type,
           credit_days: Number(x.credit_days || 0),
+          extra_cost_per_liter: Number(x.extra_cost_per_liter || 0),
         })),
       );
     }
@@ -327,27 +419,150 @@ export default function OrdersPage() {
   }, [companyId]);
 
   useEffect(() => {
+    let active = true;
+
     const run = async () => {
       if (!form.customer_id || !companyId) {
         setCustomerAccess(null);
+        setCustomerPriceOptions([]);
+        setCustomerAccessLoading(false);
+        setCustomerAccessCustomerId('');
         return;
       }
-      const res = await fetch(`/api/customer-portal/access/${form.customer_id}?company_id=${companyId}`);
-      const data = await res.json();
-      if (!res.ok) return;
-      setCustomerAccess(data.access || null);
+      setCustomerAccess(null);
+      setCustomerPriceOptions([]);
+      setCustomerAccessLoading(true);
+      setCustomerAccessCustomerId('');
+      try {
+        const params = new URLSearchParams({ company_id: companyId, customer_id: form.customer_id });
+        const res = await fetch(`/api/orders/price-options?${params.toString()}`, { cache: 'no-store' });
+        const data = await res.json();
+        if (!active) return;
+        if (!res.ok) throw new Error(data.error || 'โหลดสิทธิ์และราคาของลูกค้าไม่สำเร็จ');
+        setCustomerAccess(data.access || null);
+        setCustomerPriceOptions((data.price_options || []).map((option: any) => ({
+          refinery_id: option.refinery_id || null,
+          depot_id: String(option.depot_id || ''),
+          product_code: String(option.product_code || ''),
+          product_name: String(option.product_name || ''),
+          base_cost_price: Number(option.base_cost_price || 0),
+        })));
+        setCustomerAccessCustomerId(form.customer_id);
+      } catch (caughtError) {
+        if (active) {
+          setCustomerAccess(null);
+          setCustomerPriceOptions([]);
+          setCustomerAccessCustomerId('');
+          setError((caughtError as Error).message);
+        }
+      } finally {
+        if (active) setCustomerAccessLoading(false);
+      }
     };
     void run();
+
+    return () => {
+      active = false;
+    };
   }, [form.customer_id, companyId]);
+
+  const buildPricedItems = useCallback((
+    currentItems: OrderItemForm[],
+    depotId: string,
+    paymentConditionId: string,
+    preserveLiters: boolean,
+  ): OrderItemForm[] => {
+    const depot = depots.find((item) => item.id === depotId);
+    const paymentCondition = paymentConditions.find((condition) => condition.id === paymentConditionId);
+    const extraCost = Number(paymentCondition?.extra_cost_per_liter || 0);
+    const bestPriceByProduct = new Map<string, CustomerPriceOption>();
+
+    for (const option of customerPriceOptions) {
+      if (option.depot_id !== depotId || option.base_cost_price <= 0) continue;
+      const key = `${option.product_code}__${option.product_name}`;
+      const current = bestPriceByProduct.get(key);
+      if (!current || option.base_cost_price < current.base_cost_price) bestPriceByProduct.set(key, option);
+    }
+
+    const litersByProduct = new Map(
+      currentItems.map((item) => [`${item.product_code}__${item.product_name}`, Number(item.liters || 0)]),
+    );
+
+    return [...bestPriceByProduct.values()]
+      .sort((a, b) => a.product_code.localeCompare(b.product_code))
+      .map((option) => ({
+        refinery_id: option.refinery_id || depot?.refinery_id || '',
+        depot_id: depotId,
+        product_code: option.product_code,
+        product_name: option.product_name,
+        unit_price: Number((option.base_cost_price * 1.07 + extraCost).toFixed(2)),
+        liters: preserveLiters
+          ? litersByProduct.get(`${option.product_code}__${option.product_name}`) || 0
+          : 0,
+      }));
+  }, [customerPriceOptions, depots, paymentConditions]);
 
   useEffect(() => {
     if (!filteredPaymentConditions.length) return;
     setForm((prev) => {
-      const hasCurrent = filteredPaymentConditions.some((x) => x.id === prev.payment_condition_id);
-      if (hasCurrent) return prev;
-      return { ...prev, payment_condition_id: filteredPaymentConditions[0].id };
+      if (!prev.customer_id || prev.id) return prev;
+
+      const customerDefaultPaymentId = customers.find((customer) => customer.id === prev.customer_id)?.payment_condition_id;
+      const currentCondition = filteredPaymentConditions.find((condition) => condition.id === prev.payment_condition_id);
+      const customerDefaultCondition = filteredPaymentConditions.find((condition) => condition.id === customerDefaultPaymentId);
+      const nextCondition = currentCondition ?? customerDefaultCondition ?? filteredPaymentConditions[0];
+      const paymentChanged = nextCondition.id !== prev.payment_condition_id;
+      const dueDate = paymentChanged || !prev.due_date
+        ? calculateDueDate(nextCondition.credit_days)
+        : prev.due_date;
+      const items = paymentChanged && prev.selected_depot_id
+        ? buildPricedItems(prev.items, prev.selected_depot_id, nextCondition.id, true)
+        : prev.items;
+
+      if (!paymentChanged && dueDate === prev.due_date && items === prev.items) return prev;
+      return { ...prev, payment_condition_id: nextCondition.id, due_date: dueDate, items };
     });
-  }, [filteredPaymentConditions]);
+  }, [filteredPaymentConditions, customers, form.customer_id, buildPricedItems]);
+
+  const selectPaymentCondition = (paymentConditionId: string) => {
+    const paymentCondition = filteredPaymentConditions.find((condition) => condition.id === paymentConditionId);
+    setForm((prev) => ({
+      ...prev,
+      payment_condition_id: paymentConditionId,
+      due_date: !prev.id && paymentCondition ? calculateDueDate(paymentCondition.credit_days) : prev.due_date,
+      items: prev.selected_depot_id
+        ? buildPricedItems(prev.items, prev.selected_depot_id, paymentConditionId, true)
+        : prev.items,
+    }));
+  };
+
+  const selectRefinery = (refinery: MasterRefinery | null) => {
+    setForm((prev) => ({
+      ...prev,
+      refinery_summary: refinery?.name ?? '',
+      depot_summary: '',
+      selected_refinery_id: refinery?.id ?? '',
+      selected_depot_id: '',
+      items: [],
+    }));
+  };
+
+  const selectDepot = (depot: MasterDepot | null) => {
+    const refinery = refineries.find((item) => item.id === depot?.refinery_id);
+    setForm((prev) => {
+      const previousDepotId = prev.selected_depot_id;
+      return {
+        ...prev,
+        refinery_summary: refinery?.name ?? prev.refinery_summary,
+        depot_summary: depot ? `${depot.code} - ${depot.name}` : '',
+        selected_refinery_id: depot?.refinery_id || prev.selected_refinery_id,
+        selected_depot_id: depot?.id || '',
+        items: depot && prev.payment_condition_id
+          ? buildPricedItems(prev.items, depot.id, prev.payment_condition_id || '', previousDepotId === depot.id)
+          : [],
+      };
+    });
+  };
 
   const save = async () => {
     const cleanedItems = form.items
@@ -417,6 +632,8 @@ export default function OrdersPage() {
       id: data.id,
       order_no: data.order_no || '',
       payment_condition_id: data.payment_condition_id || '',
+      selected_refinery_id: String(data.sale_order_items?.find((it: any) => it.refinery_id)?.refinery_id || ''),
+      selected_depot_id: String(data.sale_order_items?.find((it: any) => it.depot_id)?.depot_id || ''),
       refinery_summary: Array.from(
         new Set((data.sale_order_items || []).map((it: any) => String(it.refineries?.name || '').trim()).filter(Boolean)),
       ).join(', '),
@@ -724,8 +941,8 @@ export default function OrdersPage() {
           <Box
             sx={{
               position: 'sticky',
-              top: 0,
-              zIndex: 5,
+              top:10,
+              zIndex: 110,
               bgcolor: '#fff',
               borderBottom: '1px solid #e5e7eb',
               px: { xs: 2, md: 3 },
@@ -750,27 +967,54 @@ export default function OrdersPage() {
             <Card sx={{
               borderRadius: 1, border: '1px solid',
               borderColor: '#e5e7eb',
-
+           
               bgcolor: '#fff',
               boxShadow: '0 8px 24px rgba(15,23,42,0.04)',
-              p: 2
+              p: 2, 
+              
             }} >
               <Stack spacing={1.5}>
                 <Stack direction={{ xs: 'column', md: 'row' }} spacing={1.5}>
-                  <TextField
+                  <Autocomplete
                     size="small"
-                    select
-                    label="ลูกค้า"
-                    value={form.customer_id}
-                    onChange={(e) => setForm((p) => ({ ...p, customer_id: e.target.value }))}
+                    options={customers}
+                    value={customers.find((customer) => customer.id === form.customer_id) ?? null}
+                    onChange={(_, customer) => {
+                      const customerId = customer?.id ?? '';
+                      if (customerId === form.customer_id) return;
+                      setCustomerAccess(null);
+                      setCustomerPriceOptions([]);
+                      setCustomerAccessLoading(Boolean(customer));
+                      setCustomerAccessCustomerId('');
+                      setForm((previous) => ({
+                        ...previous,
+                        customer_id: customerId,
+                        payment_condition_id: previous.id ? previous.payment_condition_id : '',
+                        due_date: previous.id ? previous.due_date : '',
+                        refinery_summary: previous.id ? previous.refinery_summary : '',
+                        depot_summary: previous.id ? previous.depot_summary : '',
+                        selected_refinery_id: previous.id ? previous.selected_refinery_id : '',
+                        selected_depot_id: previous.id ? previous.selected_depot_id : '',
+                        items: previous.id
+                          ? previous.items
+                          : [],
+                      }));
+                    }}
+                    getOptionLabel={(customer) => customer.company_name || customer.id}
+                    isOptionEqualToValue={(option, value) => option.id === value.id}
+                    filterOptions={filterCustomerOptions}
+                    noOptionsText="ไม่พบลูกค้า"
+                    autoHighlight
+                    openOnFocus
                     fullWidth
-                  >
-                    {customers.map((c) => (
-                      <MenuItem key={c.id} value={c.id}>
-                        {c.company_name}
-                      </MenuItem>
-                    ))}
-                  </TextField>
+                    renderInput={(params) => (
+                      <TextField
+                        {...params}
+                        label="ลูกค้า"
+                        placeholder="ค้นหาชื่อ เลขผู้เสียภาษี หรือเบอร์โทร"
+                      />
+                    )}
+                  />
                   <TextField
                     size="small"
                     select
@@ -799,7 +1043,7 @@ export default function OrdersPage() {
                 <Stack direction={{ xs: 'column', md: 'row' }} spacing={1.5}>
                   <TextField
                     size="small"
-                    label="เลขจองโรงกลั่น"
+                    label="ตั๋วโรงกลั่น"
                     value={form.refinery_booking_number}
                     onChange={(e) => setForm((p) => ({ ...p, refinery_booking_number: e.target.value }))}
                     fullWidth
@@ -832,15 +1076,49 @@ export default function OrdersPage() {
             }} >
               <Stack spacing={1.5}>
                 <Stack direction={{ xs: 'column', md: 'row' }} spacing={1.5}>
-                  <TextField size="small" label="โรงกลั่นที่ลูกค้าเลือก" value={form.refinery_summary || '-'} InputProps={{ readOnly: true }} fullWidth />
-                  <TextField size="small" label="คลังที่ลูกค้าเลือก" value={form.depot_summary || '-'} InputProps={{ readOnly: true }} fullWidth />
+                  <Autocomplete
+                    size="small"
+                    options={customerRefineries}
+                    value={refineries.find((refinery) => refinery.id === selectedRefineryId) ?? null}
+                    onChange={(_, refinery) => selectRefinery(refinery)}
+                    getOptionLabel={(refinery) => refinery.name || refinery.id}
+                    isOptionEqualToValue={(option, value) => option.id === value.id}
+                    noOptionsText={form.customer_id ? 'ไม่พบโรงกลั่นตามสิทธิ์ลูกค้า' : 'กรุณาเลือกลูกค้าก่อน'}
+                    loading={customerAccessLoading}
+                    loadingText="กำลังโหลดสิทธิ์ลูกค้า..."
+                    disabled={!form.customer_id || customerAccessLoading}
+                    autoHighlight
+                    openOnFocus
+                    fullWidth
+                    renderInput={(params) => (
+                      <TextField {...params} label="โรงกลั่น" placeholder="ค้นหาโรงกลั่น" />
+                    )}
+                  />
+                  <Autocomplete
+                    size="small"
+                    options={filteredDepots}
+                    value={depots.find((depot) => depot.id === selectedDepotId) ?? null}
+                    onChange={(_, depot) => selectDepot(depot)}
+                    getOptionLabel={(depot) => `${depot.code} - ${depot.name}`}
+                    isOptionEqualToValue={(option, value) => option.id === value.id}
+                    noOptionsText={selectedRefineryId ? 'ไม่พบคลังตามสิทธิ์ลูกค้า' : 'กรุณาเลือกโรงกลั่นก่อน'}
+                    loading={customerAccessLoading}
+                    loadingText="กำลังโหลดสิทธิ์ลูกค้า..."
+                    disabled={!form.customer_id || !selectedRefineryId || customerAccessLoading}
+                    autoHighlight
+                    openOnFocus
+                    fullWidth
+                    renderInput={(params) => (
+                      <TextField {...params} label="คลัง" placeholder="ค้นหารหัสหรือชื่อคลัง" />
+                    )}
+                  />
                 </Stack>
                 <FormControl fullWidth>
                   <FormLabel sx={{ color: '#334155', fontWeight: 800, mb: 0.7 }}>เครดิตที่เลือก</FormLabel>
                   <RadioGroup
                     row
                     value={form.payment_condition_id || ''}
-                    onChange={(e) => setForm((p) => ({ ...p, payment_condition_id: e.target.value }))}
+                    onChange={(e) => selectPaymentCondition(e.target.value)}
                     sx={{ gap: 0.8, flexWrap: 'wrap' }}
                   >
                     {filteredPaymentConditions.map((pc) => (
@@ -956,11 +1234,9 @@ export default function OrdersPage() {
                   maxHeight: 420,
                 }}
               >
-                <Table size="small" stickyHeader sx={{ minWidth: 980 }}>
+                <Table size="small" stickyHeader sx={{ minWidth: 680 }}>
                   <TableHead>
                     <TableRow sx={{ '& th': { bgcolor: '#f8fafc', color: '#334155', fontWeight: 900, whiteSpace: 'nowrap' } }}>
-                      <TableCell>โรงกลั่น</TableCell>
-                      <TableCell>คลัง</TableCell>
                       <TableCell>รหัสน้ำมัน</TableCell>
                       <TableCell align="right">ราคาขาย/ลิตร (รวม VAT)</TableCell>
                       <TableCell align="right">จำนวนที่ซื้อ</TableCell>
@@ -975,45 +1251,38 @@ export default function OrdersPage() {
                           <TextField
                             select
                             size="small"
-                            value={it.refinery_id}
-                            onChange={(e) => updateItem(idx, { refinery_id: e.target.value })}
-                            sx={{ minWidth: 160 }}
-                          >
-                            {refineries.map((r) => (
-                              <MenuItem key={r.id} value={r.id}>
-                                {r.name}
-                              </MenuItem>
-                            ))}
-                          </TextField>
-                        </TableCell>
-                        <TableCell>
-                          <TextField
-                            select
-                            size="small"
-                            value={it.depot_id}
-                            onChange={(e) => updateItem(idx, { depot_id: e.target.value })}
-                            sx={{ minWidth: 190 }}
-                          >
-                            {depots.map((d) => (
-                              <MenuItem key={d.id} value={d.id}>
-                                {d.code} - {d.name}
-                              </MenuItem>
-                            ))}
-                          </TextField>
-                        </TableCell>
-                        <TableCell>
-                          <TextField
-                            select
-                            size="small"
                             value={it.product_code}
                             onChange={(e) => {
                               const p = products.find((x) => x.code === e.target.value);
-                              updateItem(idx, { product_code: e.target.value, product_name: p?.name || '' });
+                              const priceOption = customerPriceOptions
+                                .filter((option) => option.depot_id === selectedDepotId && option.product_code === e.target.value)
+                                .reduce<CustomerPriceOption | null>(
+                                  (best, option) => !best || option.base_cost_price < best.base_cost_price ? option : best,
+                                  null,
+                                );
+                              const paymentCondition = paymentConditions.find(
+                                (condition) => condition.id === form.payment_condition_id,
+                              );
+                              const unitPrice = priceOption
+                                ? priceOption.base_cost_price * 1.07 + Number(paymentCondition?.extra_cost_per_liter || 0)
+                                : 0;
+                              updateItem(idx, {
+                                refinery_id: priceOption?.refinery_id || it.refinery_id,
+                                depot_id: selectedDepotId || it.depot_id,
+                                product_code: e.target.value,
+                                product_name: p?.name || priceOption?.product_name || '',
+                                unit_price: Number(unitPrice.toFixed(2)),
+                              });
                             }}
                             sx={{ minWidth: 190 }}
                           >
                             {products
-                              .filter((p) => p.is_active)
+                              .filter((p) => p.is_active && (
+                                p.code === it.product_code
+                                || customerPriceOptions.some(
+                                  (option) => option.depot_id === selectedDepotId && option.product_code === p.code,
+                                )
+                              ))
                               .map((p) => (
                                 <MenuItem key={p.code} value={p.code}>
                                   {p.code} - {p.name}
@@ -1058,6 +1327,17 @@ export default function OrdersPage() {
                         </TableCell>
                       </TableRow>
                     ))}
+                    {!form.items.length ? (
+                      <TableRow>
+                        <TableCell colSpan={5} align="center" sx={{ py: 4, color: 'text.secondary' }}>
+                          {selectedDepotId
+                            ? form.payment_condition_id
+                              ? 'ไม่พบรายการน้ำมันที่มีราคาปัจจุบันสำหรับคลังและสิทธิ์ของลูกค้ารายนี้'
+                              : 'กรุณาเลือกเครดิต เพื่อแสดงรายการน้ำมันพร้อมราคา'
+                            : 'กรุณาเลือกโรงกลั่นและคลัง เพื่อแสดงรายการน้ำมันพร้อมราคา'}
+                        </TableCell>
+                      </TableRow>
+                    ) : null}
                   </TableBody>
                 </Table>
               </TableContainer>
@@ -1066,9 +1346,22 @@ export default function OrdersPage() {
                 variant="outlined"
                 startIcon={<Add />}
                 onClick={() => {
-                  setForm((p) => ({ ...p, items: [...p.items, { ...emptyItem }] }));
+                  setForm((p) => {
+                    return {
+                      ...p,
+                      items: [
+                        ...p.items,
+                        {
+                          ...emptyItem,
+                          refinery_id: p.selected_refinery_id,
+                          depot_id: p.selected_depot_id,
+                        },
+                      ],
+                    };
+                  });
                   showSnack('เพิ่มรายการน้ำมันแล้ว', 'info');
                 }}
+                disabled={!selectedDepotId || !form.payment_condition_id}
                 sx={{ mt: 1.5, borderRadius: 1 }}
               >
                 เพิ่มรายการน้ำมัน

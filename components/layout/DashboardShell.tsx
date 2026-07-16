@@ -55,7 +55,7 @@ const menuGroups: MenuGroup[] = [
       { label: 'ราคาน้ำมัน อ่านจากภาพ', href: '/dashboard/prices/ocr-upload', icon: <ScannerOutlined fontSize='small' />, badge: '2' },
       { label: 'ข้อมูลน้ำมัน', href: '/dashboard/oil-products', icon: <TagOutlined fontSize='small' /> },
       { label: 'ราคาน้ำมัน', href: '/dashboard/prices', icon: <TagOutlined fontSize='small' /> },
-      { label: 'แจ้งราคา LINE', href: '/dashboard/line/broadcast-price', icon: <CampaignOutlined fontSize='small' /> },
+    /*   { label: 'แจ้งราคา LINE', href: '/dashboard/line/broadcast-price', icon: <CampaignOutlined fontSize='small' /> }, */
       { label: 'แสดงราคาขาย', href: '/dashboard/selling-prices', icon: <PriceCheckOutlined fontSize='small' /> },
 
     ],
