@@ -30,16 +30,13 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
 
   const { data: current, error: currentError } = await supabaseAdmin
     .from('line_news_broadcasts')
-    .select('id, status')
+    .select('id')
     .eq('id', id)
     .eq('company_id', companyId)
     .eq('is_deleted', false)
     .single();
 
   if (currentError || !current) return NextResponse.json({ error: currentError?.message || 'ไม่พบข่าวสาร LINE' }, { status: 404 });
-  if (['SENT', 'PARTIAL'].includes(current.status)) {
-    return NextResponse.json({ error: 'ข่าวสารที่ส่งแล้วไม่อนุญาตให้แก้ไข' }, { status: 409 });
-  }
 
   const { data: news, error } = await supabaseAdmin
     .from('line_news_broadcasts')

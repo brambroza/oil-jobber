@@ -265,15 +265,18 @@ export default function LineNewsPage() {
     }
   };
 
-  const sendExisting = async (id: string) => {
+  const sendExisting = async (row: NewsBroadcast) => {
+    const isResend = ['SENT', 'PARTIAL'].includes(row.status);
     setSaving(true);
     setError('');
     try {
-      const res = await fetch(`/api/line/news-broadcasts/${id}/send`, { method: 'POST' });
+      const res = await fetch(`/api/line/news-broadcasts/${row.id}/send`, { method: 'POST' });
       const data = await res.json();
       if (!res.ok && res.status !== 207) throw new Error(data.error || 'ส่งข่าวสาร LINE ไม่สำเร็จ');
       showSnack(
-        res.status === 207 ? 'ส่งข่าวสารบางรายการไม่สำเร็จ กรุณาตรวจสอบสถานะ' : 'ส่งข่าวสาร LINE เรียบร้อยแล้ว',
+        res.status === 207
+          ? `${isResend ? 'ส่งข่าวสารซ้ำ' : 'ส่งข่าวสาร'}บางรายการไม่สำเร็จ กรุณาตรวจสอบสถานะ`
+          : `${isResend ? 'ส่งข่าวสาร LINE ซ้ำ' : 'ส่งข่าวสาร LINE'} เรียบร้อยแล้ว`,
         res.status === 207 ? 'warning' : 'success',
       );
       await load();
@@ -357,12 +360,25 @@ export default function LineNewsPage() {
                   </TableCell>
                   <TableCell><Chip size='small' color={statusColor(row.status) as any} label={row.status} /></TableCell>
                   <TableCell align='right'>
-                    {!['SENT', 'PARTIAL'].includes(row.status) ? (
-                      <>
-                        <IconButton size='small' onClick={() => openEdit(row)}><Edit fontSize='small' /></IconButton>
-                        <IconButton size='small' color='primary' disabled={saving} onClick={() => void sendExisting(row.id)}><Send fontSize='small' /></IconButton>
-                      </>
-                    ) : null}
+                    <IconButton
+                      size='small'
+                      aria-label='แก้ไขข่าวสาร'
+                      title='แก้ไขข่าวสาร'
+                      disabled={saving || row.status === 'SENDING'}
+                      onClick={() => openEdit(row)}
+                    >
+                      <Edit fontSize='small' />
+                    </IconButton>
+                 {/*    <IconButton
+                      size='small'
+                      color='primary'
+                      aria-label={['SENT', 'PARTIAL'].includes(row.status) ? 'ส่งข่าวสาร LINE ซ้ำ' : 'ส่งข่าวสาร LINE'}
+                      title={['SENT', 'PARTIAL'].includes(row.status) ? 'ส่ง LINE อีกครั้ง' : 'ส่ง LINE'}
+                      disabled={saving || row.status === 'SENDING'}
+                      onClick={() => void sendExisting(row)}
+                    >
+                      <Send fontSize='small' />
+                    </IconButton> */}
                     <IconButton size='small' color='error' onClick={() => openDeleteDialog(row.id)}><Delete fontSize='small' /></IconButton>
                   </TableCell>
                 </TableRow>

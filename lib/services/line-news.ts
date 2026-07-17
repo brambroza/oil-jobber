@@ -125,24 +125,20 @@ export async function sendLineNewsBroadcast(newsId: string) {
     const lineCustomer = Array.isArray(recipient.line_customers) ? recipient.line_customers[0] : recipient.line_customers;
     const lineUserId = String(lineCustomer?.line_user_id || '').trim();
     const lineCustomerId = String(recipient.line_customer_id || '');
-
-    if (!lineUserId) {
-      failures.push({ lineCustomerId, error: 'ไม่พบ LINE user id' });
-      await supabaseAdmin
-        .from('line_news_broadcast_recipients')
-        .update({ error_message: 'ไม่พบ LINE user id' })
-        .eq('id', recipient.id);
-      continue;
-    }
+    const imageUrls = Array.isArray(news.image_urls) ? news.image_urls.slice(0, 4) : [];
+    const imageReplyUrls = imageUrls.length > 1 ? imageUrls : [];
+    const messages = [
+      flexMessage,
+      ...imageReplyUrls.map((url) => ({ type: 'image' as const, originalContentUrl: url, previewImageUrl: url })),
+    ];
 
     try {
-      const imageUrls = Array.isArray(news.image_urls) ? news.image_urls.slice(0, 4) : [];
-      const imageReplyUrls = imageUrls.length > 1 ? imageUrls : [];
-      const messages = [
-        flexMessage,
-        ...imageReplyUrls.map((url) => ({ type: 'image' as const, originalContentUrl: url, previewImageUrl: url })),
-      ];
-      await pushLinePayload(lineUserId, messages);
+      await pushLinePayload(lineUserId, messages, {
+        companyId: news.company_id,
+        lineCustomerId,
+        recipientType: 'USER',
+        source: `line_news_broadcast:${news.id}`,
+      });
       await supabaseAdmin
         .from('line_news_broadcast_recipients')
         .update({ sent_at: sentAt, error_message: null })
