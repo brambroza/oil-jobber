@@ -109,7 +109,7 @@ export async function sendLineNewsBroadcast(newsId: string) {
 
   const { data: recipients, error: recipientsError } = await supabaseAdmin
     .from('line_news_broadcast_recipients')
-    .select('id, line_customer_id, line_customers(id, line_user_id)')
+    .select('id, line_customer_id, line_customers(id, line_user_id, group_id)')
     .eq('company_id', news.company_id)
     .eq('line_news_broadcast_id', news.id)
     .eq('is_deleted', false);
@@ -123,7 +123,8 @@ export async function sendLineNewsBroadcast(newsId: string) {
 
   for (const recipient of recipients) {
     const lineCustomer = Array.isArray(recipient.line_customers) ? recipient.line_customers[0] : recipient.line_customers;
-    const lineUserId = String(lineCustomer?.line_user_id || '').trim();
+    const groupId = String(lineCustomer?.group_id || '').trim();
+    const lineRecipientId = groupId || String(lineCustomer?.line_user_id || '').trim();
     const lineCustomerId = String(recipient.line_customer_id || '');
     const imageUrls = Array.isArray(news.image_urls) ? news.image_urls.slice(0, 4) : [];
     const imageReplyUrls = imageUrls.length > 1 ? imageUrls : [];
@@ -133,10 +134,10 @@ export async function sendLineNewsBroadcast(newsId: string) {
     ];
 
     try {
-      await pushLinePayload(lineUserId, messages, {
+      await pushLinePayload(lineRecipientId, messages, {
         companyId: news.company_id,
         lineCustomerId,
-        recipientType: 'USER',
+        recipientType: groupId ? 'GROUP' : 'USER',
         source: `line_news_broadcast:${news.id}`,
       });
       await supabaseAdmin
@@ -146,6 +147,7 @@ export async function sendLineNewsBroadcast(newsId: string) {
       await supabaseAdmin.from('line_messages').insert({
         company_id: news.company_id,
         line_customer_id: lineCustomerId,
+        group_id: groupId || null,
         direction: 'OUT',
         message_type: 'flex',
         message_text: news.title,
@@ -154,6 +156,7 @@ export async function sendLineNewsBroadcast(newsId: string) {
         await supabaseAdmin.from('line_messages').insert(imageReplyUrls.map((url) => ({
           company_id: news.company_id,
           line_customer_id: lineCustomerId,
+          group_id: groupId || null,
           direction: 'OUT',
           message_type: 'image',
           message_text: url,
