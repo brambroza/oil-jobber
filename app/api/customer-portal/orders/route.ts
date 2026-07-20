@@ -80,27 +80,6 @@ async function ensureVehicleFromPayload(ctx: { customerId: string; companyId: st
   return inserted?.id ?? null;
 }
 
-async function generateOrderNo(companyId: string): Promise<string> {
-  const now = new Date();
-  const yy = String(now.getFullYear()).slice(-2);
-  const mm = String(now.getMonth() + 1).padStart(2, '0');
-  const dd = String(now.getDate()).padStart(2, '0');
-  const prefix = `PO-${yy}${mm}${dd}`;
-
-  const { data: latest } = await supabaseAdmin
-    .from('sale_orders')
-    .select('order_no')
-    .eq('company_id', companyId)
-    .like('order_no', `${prefix}%`)
-    .order('order_no', { ascending: false })
-    .limit(1)
-    .maybeSingle();
-
-  const current = String(latest?.order_no ?? '');
-  const run = Number(current.slice(-4) || 0) + 1;
-  return `${prefix}${String(run).padStart(4, '0')}`;
-}
-
 async function validateCreditLimit(ctx: { customerId: string; companyId: string }, orderAmount: number, replacingOrderAmount = 0) {
   const [customerRes, creditRes] = await Promise.all([
     supabaseAdmin
@@ -189,7 +168,6 @@ export async function POST(req: NextRequest) {
   const creditCheck = await validateCreditLimit(ctx, orderAmount);
   if ('error' in creditCheck) return NextResponse.json({ error: creditCheck.error }, { status: creditCheck.status });
 
-  const orderNo = await generateOrderNo(ctx.companyId);
   const vehicleId = isPickupByTruck ? await ensureVehicleFromPayload(ctx, body) : null;
   const vehicleLicensePlate = isPickupByTruck ? String(body.vehicle_license_plate ?? '').trim() || null : null;
   const vehicleDriverName = isPickupByTruck ? String(body.vehicle_driver_name ?? '').trim() || null : null;
@@ -204,7 +182,6 @@ export async function POST(req: NextRequest) {
     .insert({
       company_id: ctx.companyId,
       customer_id: ctx.customerId,
-      order_no: orderNo,
       order_status: 'SUBMITTED',
       requested_delivery_date: body.requested_delivery_date || null,
       customer_po_no: body.customer_po_no || null,

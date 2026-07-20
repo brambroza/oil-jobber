@@ -1,13 +1,15 @@
 'use client';
 
-import { useCallback, useEffect, useMemo, useState } from 'react';
-import { Add, Delete, Edit, Remove } from '@mui/icons-material';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { Add, Delete, DirectionsCar, Edit, LocalShipping, PictureAsPdf, Remove } from '@mui/icons-material';
 import {
   Alert,
   Autocomplete,
   Box,
   Button,
   Card,
+  CardActionArea,
+  CardContent,
   Chip,
   Dialog,
   DialogActions,
@@ -52,6 +54,10 @@ type OrderRow = {
   delivery_order_no?: string | null;
   delivery_order_file_url?: string | null;
   due_date: string | null;
+  receive_method?: string | null;
+  requested_delivery_date?: string | null;
+  customer_po_no?: string | null;
+  created_at?: string | null;
   total_liters?: number;
   total_amount?: number;
   customers?: { company_name?: string } | null;
@@ -62,6 +68,7 @@ type MasterCustomer = {
   company_name: string;
   tax_id?: string | null;
   phone?: string | null;
+  address?: string | null;
   payment_condition_id?: string | null;
 };
 type MasterRefinery = { id: string; name: string };
@@ -112,8 +119,29 @@ type OrderForm = {
   delivery_order_no: string;
   delivery_order_file_url: string;
   due_date: string;
+  receive_method: string;
+  requested_delivery_date: string;
+  customer_vehicle_id: string;
+  vehicle_license_plate: string;
+  vehicle_driver_name: string;
+  vehicle_driver_phone: string;
+  vehicle_pickup_license_number: string;
   items: OrderItemForm[];
 };
+
+type CustomerVehicle = {
+  id: string;
+  customer_id: string;
+  license_plate: string;
+  driver_name: string | null;
+  driver_phone: string | null;
+  pickup_license_number: string | null;
+};
+
+const receiveMethods = [
+  { code: 'DELIVER_BY_TRUCK', label: 'จัดส่งให้ทางรถ', icon: <LocalShipping /> },
+  { code: 'PICKUP_BY_TRUCK', label: 'รับเองทางรถ', icon: <DirectionsCar /> },
+];
 
 const statuses: OrderStatus[] = [
   'DRAFT',
@@ -161,6 +189,13 @@ const emptyForm: OrderForm = {
   delivery_order_no: '',
   delivery_order_file_url: '',
   due_date: '',
+  receive_method: 'PICKUP_BY_TRUCK',
+  requested_delivery_date: new Date().toISOString().slice(0, 10),
+  customer_vehicle_id: '',
+  vehicle_license_plate: '',
+  vehicle_driver_name: '',
+  vehicle_driver_phone: '',
+  vehicle_pickup_license_number: '',
   payment_condition_id: '',
   refinery_summary: '',
   depot_summary: '',
@@ -198,6 +233,27 @@ function money(v: number): string {
     minimumFractionDigits: 2,
     maximumFractionDigits: 2,
   });
+}
+
+function receiveMethodThai(code?: string | null): string {
+  if (code === 'DELIVER_BY_TRUCK') return 'จัดส่งให้ทางรถ';
+  if (code === 'PICKUP_BY_TRUCK') return 'รับเองทางรถ';
+  return code || '-';
+}
+
+function escapeHtml(value: unknown): string {
+  return String(value ?? '')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+}
+
+function dateTh(value?: string | null): string {
+  if (!value) return '-';
+  const date = new Date(value);
+  return Number.isNaN(date.getTime()) ? String(value) : date.toLocaleDateString('th-TH');
 }
 
 function SectionCard({
@@ -241,6 +297,7 @@ export default function OrdersPage() {
   const [depots, setDepots] = useState<MasterDepot[]>([]);
   const [products, setProducts] = useState<MasterProduct[]>([]);
   const [paymentConditions, setPaymentConditions] = useState<MasterPaymentCondition[]>([]);
+  const [vehicles, setVehicles] = useState<CustomerVehicle[]>([]);
   const [customerAccess, setCustomerAccess] = useState<CustomerAccess>(null);
   const [customerPriceOptions, setCustomerPriceOptions] = useState<CustomerPriceOption[]>([]);
   const [customerAccessLoading, setCustomerAccessLoading] = useState(false);
@@ -256,6 +313,9 @@ export default function OrdersPage() {
   const [form, setForm] = useState<OrderForm>(emptyForm);
   const [deleteId, setDeleteId] = useState<string | null>(null);
   const [uploadingDo, setUploadingDo] = useState(false);
+  const [drGeneratingId, setDrGeneratingId] = useState<string | null>(null);
+  const [drPreview, setDrPreview] = useState({ open: false, title: '', html: '' });
+  const drFrameRef = useRef<HTMLIFrameElement | null>(null);
   const [snack, setSnack] = useState<{
     open: boolean;
     message: string;
@@ -279,6 +339,10 @@ export default function OrdersPage() {
   const totalLiters = useMemo(() => form.items.reduce((sum, it) => sum + Number(it.liters || 0), 0), [form.items]);
   const selectedDepotId = form.selected_depot_id;
   const selectedRefineryId = form.selected_refinery_id;
+  const customerVehicles = useMemo(
+    () => vehicles.filter((vehicle) => vehicle.customer_id === form.customer_id),
+    [vehicles, form.customer_id],
+  );
 
   const customerRefineries = useMemo(() => {
     if (!form.customer_id || customerAccessLoading || customerAccessCustomerId !== form.customer_id) return [];
@@ -371,15 +435,16 @@ export default function OrdersPage() {
 
   const loadMasters = async () => {
     if (!companyId) return;
-    const [r1, r2, r3, r4, r5] = await Promise.all([
+    const [r1, r2, r3, r4, r5, r6] = await Promise.all([
       fetch(`/api/customers?company_id=${companyId}`),
       fetch(`/api/refineries?company_id=${companyId}`),
       fetch(`/api/depots?company_id=${companyId}`),
       fetch(`/api/oil-products?company_id=${companyId}`),
       fetch(`/api/payment-conditions?company_id=${companyId}`),
+      fetch(`/api/customer-vehicles?company_id=${companyId}`),
     ]);
 
-    const [d1, d2, d3, d4, d5] = await Promise.all([r1.json(), r2.json(), r3.json(), r4.json(), r5.json()]);
+    const [d1, d2, d3, d4, d5, d6] = await Promise.all([r1.json(), r2.json(), r3.json(), r4.json(), r5.json(), r6.json()]);
 
     if (r1.ok) {
       setCustomers((d1 || []).map((x: any) => ({
@@ -387,6 +452,7 @@ export default function OrdersPage() {
         company_name: x.company_name,
         tax_id: x.tax_id,
         phone: x.phone,
+        address: x.address,
         payment_condition_id: x.payment_condition_id,
       })));
     }
@@ -411,6 +477,7 @@ export default function OrdersPage() {
         })),
       );
     }
+    if (r6.ok) setVehicles(d6 || []);
   };
 
   useEffect(() => {
@@ -593,6 +660,13 @@ export default function OrdersPage() {
       delivery_order_file_url: form.delivery_order_file_url || null,
       payment_condition_id: form.payment_condition_id || null,
       due_date: form.due_date || null,
+      receive_method: form.receive_method,
+      requested_delivery_date: form.requested_delivery_date || null,
+      customer_vehicle_id: form.receive_method === 'PICKUP_BY_TRUCK' ? form.customer_vehicle_id || null : null,
+      vehicle_license_plate: form.receive_method === 'PICKUP_BY_TRUCK' ? form.vehicle_license_plate || null : null,
+      vehicle_driver_name: form.receive_method === 'PICKUP_BY_TRUCK' ? form.vehicle_driver_name || null : null,
+      vehicle_driver_phone: form.receive_method === 'PICKUP_BY_TRUCK' ? form.vehicle_driver_phone || null : null,
+      vehicle_pickup_license_number: form.receive_method === 'PICKUP_BY_TRUCK' ? form.vehicle_pickup_license_number || null : null,
       items: cleanedItems,
     };
 
@@ -651,6 +725,13 @@ export default function OrdersPage() {
       delivery_order_no: data.delivery_order_no || '',
       delivery_order_file_url: data.delivery_order_file_url || '',
       due_date: data.due_date || '',
+      receive_method: data.receive_method || 'PICKUP_BY_TRUCK',
+      requested_delivery_date: data.requested_delivery_date || '',
+      customer_vehicle_id: data.customer_vehicle_id || '',
+      vehicle_license_plate: data.vehicle_license_plate || '',
+      vehicle_driver_name: data.vehicle_driver_name || '',
+      vehicle_driver_phone: data.vehicle_driver_phone || '',
+      vehicle_pickup_license_number: data.vehicle_pickup_license_number || '',
       items: (data.sale_order_items || []).map((it: any) => ({
         refinery_id: it.refinery_id || '',
         depot_id: it.depot_id || '',
@@ -731,6 +812,47 @@ export default function OrdersPage() {
     } finally {
       setUploadingDo(false);
     }
+  };
+
+  const createDeliveryRecordPdf = async (orderId: string) => {
+    setDrGeneratingId(orderId);
+    try {
+      const res = await fetch(`/api/orders/${orderId}?company_id=${companyId}`, { cache: 'no-store' });
+      const detail = await res.json();
+      if (!res.ok) throw new Error(detail.error || 'โหลดรายละเอียดคำสั่งซื้อไม่สำเร็จ');
+
+      const customer = customers.find((item) => item.id === detail.customer_id);
+      const items = (detail.sale_order_items || []).filter((item: any) => !item.is_deleted);
+      const docNo = detail.delivery_order_no || detail.order_no || detail.id?.slice(0, 8) || '-';
+      const refNo = detail.customer_po_no || detail.order_no || detail.id?.slice(0, 8) || '-';
+      const docDate = detail.requested_delivery_date || detail.created_at;
+      const total = items.reduce((sum: number, item: any) => sum + Number(item.liters || 0), 0);
+      const rowHeight = Math.max(18, Math.min(153, Math.floor(153 / Math.max(items.length, 1))));
+      const itemRows = items.map((item: any, index: number) => {
+        const liters = Number(item.liters || 0);
+        const depot = [item.depots?.code, item.depots?.name].filter(Boolean).join(' - ');
+        const location = detail.delivery_location || receiveMethodThai(detail.receive_method);
+        return `<tr><td class="desc"><strong>${index + 1})&nbsp;&nbsp;${escapeHtml(item.product_name || item.product_code || '-')}</strong><div>${escapeHtml(depot || '-')}</div><div>${escapeHtml(location)}</div></td><td class="num shade">${liters.toLocaleString('th-TH')}</td><td class="num">${money(liters)}</td><td class="num shade">${money(liters)}</td><td class="num">${money(liters)}</td></tr>`;
+      }).join('');
+
+      const html = `<!doctype html><html><head><meta charset="utf-8"><title>Delivery Record ${escapeHtml(docNo)}</title><style>
+        @page{size:A4 portrait;margin:0}*{box-sizing:border-box}html,body{margin:0;background:#e5e7eb;font-family:Arial,"Tahoma",sans-serif;color:#111827;font-size:10.5px}.page{position:relative;width:210mm;min-height:297mm;margin:0 auto;background:#fff;border:1px solid #111;overflow:hidden}.topbar{height:3px;background:#222}.content{padding:11mm 10.5mm 0}.seller{line-height:1.42}.seller h1{margin:0 0 3px;font-size:14px}.seller .tax{margin-top:14px}.divider{border-top:1px solid #cfcfd4;margin:7px -10.5mm 9px}.info{display:grid;grid-template-columns:.95fr 1.05fr;gap:16px}.customer{line-height:1.48}.label{color:#4b4f60;margin-bottom:7px}.name{font-weight:700}.titleBox{text-align:right;padding-top:21px}.titleBox h2{margin:0;color:#6d66a8;font-size:17px}.titleBox .en{margin-top:7px;font-size:12px;color:#444}.meta{margin-top:33px;margin-left:auto;width:380px;display:grid;grid-template-columns:repeat(3,1fr);background:#716ab0;color:#fff}.meta div{padding:8px 12px;min-height:43px;font-weight:700}.meta strong{display:block;margin-bottom:5px;font-size:10px}table{width:calc(100% + 21mm);margin-left:-10.5mm;border-collapse:collapse;margin-top:9px;table-layout:fixed}thead th{color:#4e4a78;padding:6px 8px;border-bottom:1px solid #ececf2}thead .descHead{text-align:left;width:50%;padding-left:40px}thead .qty{width:12.5%}thead small{display:block;font-size:8.5px;font-weight:400}tbody td{vertical-align:top;padding:7px 10px;border-top:1px solid #f2f2f6}tbody tr td{height:${rowHeight}mm}.desc{line-height:1.48;padding-left:10.5mm}.num{text-align:right}.shade{background:#f0eff7}.totals{position:absolute;right:0;bottom:20mm;width:79mm}.totalRow{display:grid;grid-template-columns:1fr 1fr;min-height:10mm;align-items:center}.totalRow div{padding:4px 10px;text-align:right;font-weight:700}.totalRow.final{background:#716ab0;color:#fff;font-size:12px}.footerLine{position:absolute;left:0;right:0;bottom:10mm;border-top:2px solid #716ab0}.footer{position:absolute;left:10.5mm;right:10.5mm;bottom:4mm;display:flex;justify-content:space-between;font-size:7px}@media print{html,body{background:#fff}.page{border:0;margin:0}}
+      </style></head><body><div class="page"><div class="topbar"></div><div class="content"><section class="seller"><h1>บริษัท เจเอฟซี โซลูชั่น จำกัด <small>(สำนักงานใหญ่)</small></h1><div>1000/53 อาคารลิเบอร์ตี้พลาซ่า ชั้น 3 ซอยสุขุมวิท 55 (ทองหล่อ)</div><div>แขวงคลองตันเหนือ เขตวัฒนา กรุงเทพมหานคร 10110</div><div class="tax">เลขประจำตัวผู้เสียภาษี: 0105564136372</div></section><div class="divider"></div><section class="info"><div class="customer"><div class="label">ข้อมูลลูกค้า:</div><div class="name">${escapeHtml(customer?.company_name || '-')}</div><div>${escapeHtml(customer?.address || '-')}</div><div>T: ${escapeHtml(customer?.phone || '-')}</div><div style="margin-top:9px">เลขประจำตัวผู้เสียภาษี: ${escapeHtml(customer?.tax_id || '-')}</div></div><div><div class="titleBox"><h2>บันทึกการส่งของ</h2><div class="en">Delivery Record</div></div><div class="meta"><div><strong>เอกสารอ้างอิง</strong>${escapeHtml(refNo)}</div><div><strong>วันที่</strong>${escapeHtml(dateTh(docDate))}</div><div><strong>เลขที่เอกสาร</strong>${escapeHtml(docNo)}</div></div></div></section><table><thead><tr><th class="descHead">รายละเอียด<small>Product Description</small></th><th class="qty">จำนวน<small>Quantity</small></th><th class="qty">บรรจุแล้ว<small>Packed</small></th><th class="qty">ส่งแล้ว<small>Shipped</small></th><th class="qty">ได้รับของแล้ว<small>Delivered</small></th></tr></thead><tbody>${itemRows || '<tr><td class="desc">ไม่พบรายการสินค้า</td><td></td><td></td><td></td><td></td></tr>'}</tbody></table></div><div class="totals"><div class="totalRow"><div>บรรจุแล้ว</div><div>${money(total)}</div></div><div class="totalRow"><div>ส่งแล้ว</div><div>${money(total)}</div></div><div class="totalRow final"><div>ได้รับแล้ว</div><div>${money(total)}</div></div></div><div class="footerLine"></div><div class="footer"><div>Printed by: ${escapeHtml(customer?.company_name || '-')} ${escapeHtml(new Date().toLocaleString('th-TH'))}</div><div>Page 1 of 1</div></div></div></body></html>`;
+
+      setDrPreview({ open: true, title: `Delivery Record ${docNo}`, html });
+      showSnack('สร้างตัวอย่างใบส่งของแล้ว', 'success');
+    } catch (caughtError) {
+      const message = (caughtError as Error).message;
+      setError(message);
+      showSnack(message, 'error');
+    } finally {
+      setDrGeneratingId(null);
+    }
+  };
+
+  const printDeliveryRecordPdf = () => {
+    drFrameRef.current?.contentWindow?.focus();
+    drFrameRef.current?.contentWindow?.print();
   };
 
   const remove = async () => {
@@ -891,6 +1013,13 @@ export default function OrdersPage() {
                 <TableCell sx={{ display: { xs: 'none', lg: 'table-cell' } }}>{r.refinery_booking_number || '-'}</TableCell>
                 <TableCell sx={{ display: { xs: 'none', md: 'table-cell' } }}>{r.delivery_order_no || '-'}</TableCell>
                 <TableCell align="right" sx={{ width: 88, minWidth: 88 }}>
+                  <Tooltip title="Preview ใบส่งของ">
+                    <span>
+                      <IconButton size="small" color="primary" onClick={() => void createDeliveryRecordPdf(r.id)} disabled={drGeneratingId === r.id}>
+                        <PictureAsPdf fontSize="small" />
+                      </IconButton>
+                    </span>
+                  </Tooltip>
                   <Tooltip title="แก้ไข">
                     <IconButton size="small" onClick={() => void openEdit(r.id)}>
                       <Edit fontSize="small" />
@@ -1393,6 +1522,92 @@ export default function OrdersPage() {
                 </Stack>
               </Box>
             </SectionCard>
+
+            <SectionCard title="วิธีการรับสินค้า" subtitle="เลือกการจัดส่งแบบเดียวกับหน้า Customer">
+              <Stack spacing={1.5}>
+                <Stack direction={{ xs: 'column', md: 'row' }} spacing={1}>
+                  {receiveMethods.map((method) => (
+                    <Card
+                      key={method.code}
+                      variant="outlined"
+                      sx={{
+                        flex: 1,
+                        borderWidth: form.receive_method === method.code ? 2 : 1,
+                        borderColor: form.receive_method === method.code ? '#2563eb' : '#cfd8e3',
+                        bgcolor: form.receive_method === method.code ? '#eff6ff' : '#fff',
+                      }}
+                    >
+                      <CardActionArea
+                        onClick={() => setForm((prev) => ({
+                          ...prev,
+                          receive_method: method.code,
+                          customer_vehicle_id: method.code === 'PICKUP_BY_TRUCK' ? prev.customer_vehicle_id : '',
+                          vehicle_license_plate: method.code === 'PICKUP_BY_TRUCK' ? prev.vehicle_license_plate : '',
+                          vehicle_driver_name: method.code === 'PICKUP_BY_TRUCK' ? prev.vehicle_driver_name : '',
+                          vehicle_driver_phone: method.code === 'PICKUP_BY_TRUCK' ? prev.vehicle_driver_phone : '',
+                          vehicle_pickup_license_number: method.code === 'PICKUP_BY_TRUCK' ? prev.vehicle_pickup_license_number : '',
+                        }))}
+                      >
+                        <CardContent>
+                          <Stack spacing={0.8} alignItems="center">
+                            {method.icon}
+                            <Typography fontWeight={800}>{method.label}</Typography>
+                          </Stack>
+                        </CardContent>
+                      </CardActionArea>
+                    </Card>
+                  ))}
+                </Stack>
+
+                <TextField
+                  size="small"
+                  label="วันที่ต้องการให้จัดส่ง"
+                  type="date"
+                  value={form.requested_delivery_date}
+                  onChange={(event) => setForm((prev) => ({ ...prev, requested_delivery_date: event.target.value }))}
+                  InputLabelProps={{ shrink: true }}
+                  fullWidth
+                />
+
+                {form.receive_method === 'PICKUP_BY_TRUCK' ? (
+                  <Stack spacing={1.2}>
+                    <TextField
+                      select
+                      size="small"
+                      label="เลือกรถบรรทุกของลูกค้า (ถ้ามี)"
+                      value={form.customer_vehicle_id}
+                      onChange={(event) => {
+                        const vehicle = customerVehicles.find((item) => item.id === event.target.value);
+                        setForm((prev) => ({
+                          ...prev,
+                          customer_vehicle_id: event.target.value,
+                          vehicle_license_plate: vehicle?.license_plate || '',
+                          vehicle_driver_name: vehicle?.driver_name || '',
+                          vehicle_driver_phone: vehicle?.driver_phone || '',
+                          vehicle_pickup_license_number: vehicle?.pickup_license_number || '',
+                        }));
+                      }}
+                      disabled={!form.customer_id}
+                    >
+                      <MenuItem value="">ไม่เลือกรถ (กรอกข้อมูลเอง)</MenuItem>
+                      {customerVehicles.map((vehicle) => (
+                        <MenuItem key={vehicle.id} value={vehicle.id}>
+                          {vehicle.license_plate}{vehicle.driver_name ? ` - ${vehicle.driver_name}` : ''}
+                        </MenuItem>
+                      ))}
+                    </TextField>
+                    <Stack direction={{ xs: 'column', md: 'row' }} spacing={1.2}>
+                      <TextField size="small" required fullWidth label="ทะเบียนรถ" value={form.vehicle_license_plate} onChange={(event) => setForm((prev) => ({ ...prev, customer_vehicle_id: '', vehicle_license_plate: event.target.value }))} />
+                      <TextField size="small" fullWidth label="ชื่อคนขับ" value={form.vehicle_driver_name} onChange={(event) => setForm((prev) => ({ ...prev, customer_vehicle_id: '', vehicle_driver_name: event.target.value }))} />
+                    </Stack>
+                    <Stack direction={{ xs: 'column', md: 'row' }} spacing={1.2}>
+                      <TextField size="small" fullWidth label="เบอร์คนขับ" value={form.vehicle_driver_phone} onChange={(event) => setForm((prev) => ({ ...prev, customer_vehicle_id: '', vehicle_driver_phone: event.target.value }))} />
+                      <TextField size="small" fullWidth label="เลขใบอนุญาตรับสินค้า" value={form.vehicle_pickup_license_number} onChange={(event) => setForm((prev) => ({ ...prev, customer_vehicle_id: '', vehicle_pickup_license_number: event.target.value }))} />
+                    </Stack>
+                  </Stack>
+                ) : null}
+              </Stack>
+            </SectionCard>
           </Stack>
 
           <Box
@@ -1410,7 +1625,32 @@ export default function OrdersPage() {
               <Button variant="outlined" onClick={() => setOpen(false)} sx={{ borderRadius: 2 }}>
                 ยกเลิก
               </Button>
-              <Button variant="contained" onClick={() => void save()} disabled={!form.customer_id || !form.items.length} sx={{ borderRadius: 2 }}>
+              <Button
+                variant="contained"
+                startIcon={<PictureAsPdf />}
+                onClick={() => form.id && void createDeliveryRecordPdf(form.id)}
+                disabled={!form.id || drGeneratingId === form.id}
+                sx={{
+                  borderRadius: 2,
+                  px: 2.5,
+                  color: '#fff',
+                  fontWeight: 800,
+                  background: 'linear-gradient(135deg, #ef4444 0%, #b91c1c 100%)',
+                  boxShadow: '0 8px 18px rgba(185, 28, 28, 0.24)',
+                  '&:hover': {
+                    background: 'linear-gradient(135deg, #dc2626 0%, #991b1b 100%)',
+                    boxShadow: '0 10px 22px rgba(185, 28, 28, 0.32)',
+                  },
+                  '&.Mui-disabled': {
+                    color: '#94a3b8',
+                    background: '#e2e8f0',
+                    boxShadow: 'none',
+                  },
+                }}
+              >
+                {drGeneratingId === form.id ? 'กำลังสร้าง PDF...' : 'Preview PDF DR'}
+              </Button>
+              <Button variant="contained" onClick={() => void save()} disabled={!form.customer_id || !form.items.length || (form.receive_method === 'PICKUP_BY_TRUCK' && !form.vehicle_license_plate.trim())} sx={{ borderRadius: 2 }}>
                 บันทึกใบสั่งซื้อ
               </Button>
             </Stack>
@@ -1426,6 +1666,19 @@ export default function OrdersPage() {
           <Button color="error" onClick={() => void remove()}>
             ลบ
           </Button>
+        </DialogActions>
+      </Dialog>
+
+      <Dialog open={drPreview.open} onClose={() => setDrPreview({ open: false, title: '', html: '' })} maxWidth="lg" fullWidth>
+        <DialogTitle>{drPreview.title || 'Delivery Record'}</DialogTitle>
+        <DialogContent sx={{ p: 0, height: { xs: '74vh', md: '82vh' }, bgcolor: '#e5e7eb' }}>
+          {drPreview.html ? (
+            <iframe ref={drFrameRef} title="Delivery Record PDF Preview" srcDoc={drPreview.html} style={{ width: '100%', height: '100%', border: 'none', display: 'block' }} />
+          ) : null}
+        </DialogContent>
+        <DialogActions>
+          <Button variant="contained" onClick={printDeliveryRecordPdf} disabled={!drPreview.html}>PDF DR</Button>
+          <Button onClick={() => setDrPreview({ open: false, title: '', html: '' })}>ปิด</Button>
         </DialogActions>
       </Dialog>
 
