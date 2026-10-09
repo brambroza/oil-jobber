@@ -24,6 +24,7 @@ import {
   Typography,
 } from '@mui/material';
 import { PageScaffold } from '@/components/common/PageScaffold';
+import { computeUnitPrice } from '@/lib/services/order-pricing';
 
 type PriceRound = {
   id: string;
@@ -145,7 +146,9 @@ export default function SellingPricesPage() {
   const [searchDate, setSearchDate] = useState('');
   const [page, setPage] = useState(0);
   const [rowsPerPage, setRowsPerPage] = useState(10);
-  const accessCache = useMemo(() => new Map<string, CustomerAccess>(), []);
+  /** Per-customer access rules + price adjustment (ค่ากลาง + ค่าธรรมเนียมเซล, บาท/ลิตร รวม VAT). */
+  type CustomerBroadcastInfo = { access: CustomerAccess; adjust: number };
+  const accessCache = useMemo(() => new Map<string, CustomerBroadcastInfo>(), []);
   const productIdByCode = useMemo(() => {
     const map = new Map<string, string>();
     for (const product of oilProducts) {
@@ -329,15 +332,24 @@ export default function SellingPricesPage() {
     setLineCustomers(data || []);
   };
 
-  const loadCustomerAccess = async (customerId: string): Promise<CustomerAccess> => {
+  const loadCustomerAccess = async (customerId: string): Promise<CustomerBroadcastInfo> => {
     const cached = accessCache.get(customerId);
     if (cached !== undefined) return cached;
 
     const res = await fetch(`/api/customer-portal/access/${customerId}?company_id=${companyId}`);
     const data = await res.json();
     const access: CustomerAccess = res.ok ? (data.access ?? null) : null;
-    accessCache.set(customerId, access);
-    return access;
+    const pricing = res.ok ? data.customer_pricing : null;
+    const adjust = Number(pricing?.price_adjustment_per_liter || 0) + Number(pricing?.sales_fee_per_liter || 0);
+    const info = { access, adjust: Number.isFinite(adjust) ? adjust : 0 };
+    accessCache.set(customerId, info);
+    return info;
+  };
+
+  /** Same formula as the LIFF order page: (base × 1.07 + credit extra) + customer adjust; transport fee is never included here. */
+  const broadcastPrice = (baseCostPrice: number, pc: any, customerAdjust: number) => {
+    const base = Number(baseCostPrice || 0);
+    return base > 0 ? computeUnitPrice(base, Number(pc?.extra_cost_per_liter || 0), customerAdjust) : 0;
   };
 
   const toggleCustomer = (id: string, checked: boolean) => {
@@ -433,7 +445,7 @@ export default function SellingPricesPage() {
 
   const getCheapestPriceKey = (productCode: string) => String(productCode || '').trim().toUpperCase();
 
-  const buildCheapestPriceMap = (access: CustomerAccess, roundsToSend: PriceRoundDetail[]) => {
+  const buildCheapestPriceMap = (access: CustomerAccess, roundsToSend: PriceRoundDetail[], customerAdjust: number) => {
     const cheapest = new Map<string, number>();
 
     for (const round of roundsToSend) {
@@ -446,7 +458,7 @@ export default function SellingPricesPage() {
 
           for (const pc of visibleData.visiblePaymentConditions as any[]) {
             const key = getCheapestPriceKey(item.product_code);
-            const price = Number(item.base_cost_price || 0) === 0 ? 0 : ( Number(item.base_cost_price || 0) * 1.07) + Number(pc.extra_cost_per_liter || 0);
+            const price = broadcastPrice(item.base_cost_price, pc, customerAdjust);
             const current = cheapest.get(key);
             if (current == null || price < current) cheapest.set(key, price);
           }
@@ -457,7 +469,7 @@ export default function SellingPricesPage() {
     return cheapest;
   };
 
-  const buildBroadcastMessage = (access: CustomerAccess, roundsToSend: PriceRoundDetail[], cheapestPriceByKey: Map<string, number>): string => {
+  const buildBroadcastMessage = (access: CustomerAccess, roundsToSend: PriceRoundDetail[], cheapestPriceByKey: Map<string, number>, customerAdjust: number): string => {
     const lines: string[] = [`ราคาน้ำมันรอบ ${formatDateTimeNow()}`];
 
     for (const round of roundsToSend) {
@@ -476,7 +488,7 @@ export default function SellingPricesPage() {
         lines.push(`ชำระเงิน | ${visiblePaymentConditions.map((pc: any) => pc.name).join(' | ')}`);
         for (const item of visibleItems.slice(0, MAX_BROADCAST_PRODUCTS_PER_GROUP)) {
           const prices = visiblePaymentConditions.map((pc: any) => {
-            const price = Number(item.base_cost_price || 0) ===0 ? 0 : (Number(item.base_cost_price || 0) * 1.07) + Number(pc.extra_cost_per_liter || 0);
+            const price = broadcastPrice(item.base_cost_price, pc, customerAdjust);
             const cheapestPrice = cheapestPriceByKey.get(getCheapestPriceKey(item.product_code));
             const isCheapest = cheapestPrice != null && Math.abs(price - cheapestPrice) < 0.0001;
             return `${price.toFixed(2)}${isCheapest ? ' (ถูกสุด)' : ''}`;
@@ -491,7 +503,7 @@ export default function SellingPricesPage() {
     return lines.join('\n').slice(0, 4900);
   };
 
-  const buildPriceRoundSection = (access: CustomerAccess, round: PriceRoundDetail, cheapestPriceByKey: Map<string, number>) => {
+  const buildPriceRoundSection = (access: CustomerAccess, round: PriceRoundDetail, cheapestPriceByKey: Map<string, number>, customerAdjust: number) => {
     const visibleData = getVisibleDataForAccess(round, access);
     if (!visibleData) return [] as Array<Record<string, unknown>>;
     const { visibleGroups, visiblePaymentConditions } = visibleData;
@@ -530,7 +542,7 @@ export default function SellingPricesPage() {
         contents: [
           { type: 'text', text: item.product_code, size: 'xs', color: '#1e3a8a', weight: 'bold', flex: 3 },
           ...conditionsToUse.map((pc: any) => {
-            const basePrice = Number(item.base_cost_price || 0) === 0 ? 0 : (Number(item.base_cost_price || 0) * 1.07) + Number(pc.extra_cost_per_liter || 0);
+            const basePrice = broadcastPrice(item.base_cost_price, pc, customerAdjust);
             const cheapestPrice = cheapestPriceByKey.get(getCheapestPriceKey(item.product_code));
             const isCheapest = cheapestPrice != null && Math.abs(basePrice - cheapestPrice) < 0.0001;
 
@@ -631,9 +643,9 @@ export default function SellingPricesPage() {
     };
   };
 
-  const buildPriceFlexMessages = (access: CustomerAccess, roundsToSend: PriceRoundDetail[], cheapestPriceByKey: Map<string, number>) => {
+  const buildPriceFlexMessages = (access: CustomerAccess, roundsToSend: PriceRoundDetail[], cheapestPriceByKey: Map<string, number>, customerAdjust: number) => {
     const roundSections = roundsToSend
-      .map((round) => buildPriceRoundSection(access, round, cheapestPriceByKey))
+      .map((round) => buildPriceRoundSection(access, round, cheapestPriceByKey, customerAdjust))
       .filter((section: any) => section?.type === 'box');
     if (!roundSections.length) return [] as Array<Record<string, unknown>>;
 
@@ -669,13 +681,15 @@ export default function SellingPricesPage() {
     for (const recipient of recipients) {
       const lc = lineCustomers.find((x) => x.id === recipient.lineCustomerId);
       const customerId = String(lc?.customer_id || '').trim();
-      const access = customerId ? await loadCustomerAccess(customerId) : null;
+      // Recipients not linked to a customer (e.g. LINE groups) get the standard price with no adjustment.
+      const info = customerId ? await loadCustomerAccess(customerId) : { access: null, adjust: 0 };
+      const { access, adjust } = info;
       const visibleRounds = broadcastRounds.filter((round) => getVisibleDataForAccess(round, access));
       if (!visibleRounds.length) {
         fail += 1;
         continue;
       }
-      const cheapestPriceByKey = buildCheapestPriceMap(access, visibleRounds);
+      const cheapestPriceByKey = buildCheapestPriceMap(access, visibleRounds, adjust);
 
       const res = await fetch('/api/line/broadcast-price', {
         method: 'POST',
@@ -683,8 +697,8 @@ export default function SellingPricesPage() {
         body: JSON.stringify({
           company_id: companyId,
           title: `ราคาขาย ${visibleRounds.length} รอบ`,
-          message: buildBroadcastMessage(access, visibleRounds, cheapestPriceByKey),
-          messages: buildPriceFlexMessages(access, visibleRounds, cheapestPriceByKey),
+          message: buildBroadcastMessage(access, visibleRounds, cheapestPriceByKey, adjust),
+          messages: buildPriceFlexMessages(access, visibleRounds, cheapestPriceByKey, adjust),
           recipients: [recipient],
         }),
       });
@@ -930,8 +944,8 @@ export default function SellingPricesPage() {
                             <TableCell>{it.product_code}</TableCell>
                             <TableCell>{formatMoney(it.base_cost_price)}</TableCell>
                             {sortedConditions.map((pc) => {
-                              const basePriceWithVat = Number(it.base_cost_price || 0) * 1.07;
-                              const sellingPrice = it.base_cost_price > 0 ? basePriceWithVat + Number(pc.extra_cost_per_liter || 0) : 0;
+                              // Standard price (no customer adjustment); the LINE broadcast adds each customer's adjustment on top.
+                              const sellingPrice = broadcastPrice(it.base_cost_price, pc, 0);
                               return <TableCell key={`${it.id}-${pc.id}`}>{formatMoney(sellingPrice)}</TableCell>;
                             })}
                           </TableRow>
@@ -987,6 +1001,9 @@ export default function SellingPricesPage() {
               {sendResult ? <Alert severity={sendResult.ok ? 'success' : 'error'}>{sendResult.message}</Alert> : null}
               <Alert severity='info'>
                 กำลังส่งราคาที่เลือก {broadcastRounds.length} รอบใน LINE message เดียว
+              </Alert>
+              <Alert severity='warning'>
+                ราคาของแต่ละรายบวกค่ากลางปรับราคาและค่าธรรมเนียมเซลตามที่ตั้งในข้อมูลลูกค้า ผู้รับที่ไม่ได้ผูกกับลูกค้า (เช่น LINE Group) ได้ราคามาตรฐาน
               </Alert>
               <Stack direction='row' spacing={1}>
                 <Button size='small' variant='outlined' onClick={selectAll}>เลือกทั้งหมด</Button>

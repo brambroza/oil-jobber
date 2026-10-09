@@ -30,7 +30,7 @@ export async function GET(req: NextRequest, { params }: { params: Promise<{ cust
   if (!companyId) return NextResponse.json({ error: 'กรุณาระบุ company_id' }, { status: 422 });
   if (!(await canAccessCustomer(guard.ctx, customerId))) return customerForbidden();
 
-  const [accessRes, userRes] = await Promise.all([
+  const [accessRes, userRes, customerRes] = await Promise.all([
     supabaseAdmin
       .from('customer_portal_access')
       .select('*')
@@ -44,6 +44,13 @@ export async function GET(req: NextRequest, { params }: { params: Promise<{ cust
       .eq('company_id', companyId)
       .eq('is_active', true)
       .maybeSingle(),
+    supabaseAdmin
+      .from('customers')
+      .select('price_adjustment_per_liter, sales_fee_per_liter')
+      .eq('id', customerId)
+      .eq('company_id', companyId)
+      .eq('is_deleted', false)
+      .maybeSingle(),
   ]);
 
   if (accessRes.error) return NextResponse.json({ error: accessRes.error.message }, { status: 400 });
@@ -56,7 +63,12 @@ export async function GET(req: NextRequest, { params }: { params: Promise<{ cust
     portalUser.email = authData.user.email ?? '';
   }
 
-  return NextResponse.json({ access: accessRes.data, portal_user: portalUser });
+  // Per-customer price adjustments (admin baseline + sales fee), used by the LINE price broadcast.
+  const customerPricing = {
+    price_adjustment_per_liter: Number(customerRes.data?.price_adjustment_per_liter || 0),
+    sales_fee_per_liter: Number(customerRes.data?.sales_fee_per_liter || 0),
+  };
+  return NextResponse.json({ access: accessRes.data, portal_user: portalUser, customer_pricing: customerPricing });
 }
 
 export async function PATCH(req: NextRequest, { params }: { params: Promise<{ customerId: string }> }) {
