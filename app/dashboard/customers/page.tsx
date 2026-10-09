@@ -21,6 +21,7 @@ import {
   FormControlLabel,
   FormGroup,
   IconButton,
+  InputAdornment,
   MenuItem,
   Paper,
   Stack,
@@ -602,66 +603,93 @@ export default function CustomersPage() {
                 <TextField size='small' label='เบอร์โทร' value={form.phone} onChange={(e) => setForm((p) => ({ ...p, phone: e.target.value }))} fullWidth />
               </Stack>
               <TextField size='small' label='ที่อยู่' multiline minRows={3} value={form.address} onChange={(e) => setForm((p) => ({ ...p, address: e.target.value }))} />
-              <Stack direction={{ xs: 'column', md: 'row' }} spacing={1}>
-                <TextField
-                  size='small'
-                  label='วงเงินเครดิต'
-                  disabled={lockCredit}
-                  value={creditLimitInput}
-                  onChange={(e) => {
-                    const next = normalizeCurrencyInput(e.target.value);
-                    setCreditLimitInput(formatCurrencyInput(next));
-                    setForm((p) => ({ ...p, credit_limit: Number(next || 0) }));
-                  }}
-                  onFocus={(e) => {
-                    setCreditLimitInput(form.credit_limit ? formatCurrencyInput(String(form.credit_limit)) : '');
-                    e.target.select();
-                  }}
-                  onBlur={() => setCreditLimitInput(formatCurrency(form.credit_limit))}
-                  inputProps={{ inputMode: 'decimal' }}
-                  fullWidth
-                />
-                <TextField
-                  size='small'
-                  label='ค่ากลางปรับราคา (บาท/ลิตร)'
-                  type='number'
-                  value={form.price_adjustment_per_liter}
-                  onFocus={(e) => e.target.select()}
-                  onChange={(e) => setForm((p) => ({ ...p, price_adjustment_per_liter: Number(e.target.value || 0) }))}
-                  inputProps={{ step: '0.01' }}
-                  helperText={lockCredit ? 'ผู้ดูแลระบบเป็นผู้กำหนด' : 'ติดลบ = ส่วนลด เช่น -0.20, บวก = เพิ่ม, 0 = ราคามาตรฐาน'}
-                  disabled={lockCredit}
-                  fullWidth
-                />
-                <TextField
-                  size='small'
-                  label='ค่าธรรมเนียมเซลบวกเพิ่ม (บาท/ลิตร)'
-                  type='number'
-                  value={form.sales_fee_per_liter}
-                  onFocus={(e) => e.target.select()}
-                  onChange={(e) => setForm((p) => ({ ...p, sales_fee_per_liter: Math.max(0, Number(e.target.value || 0)) }))}
-                  inputProps={{ step: '0.01', min: 0 }}
-                  helperText={`ราคาต่อลิตรที่ลูกค้าเห็น = มาตรฐาน ${form.price_adjustment_per_liter >= 0 ? '+' : '−'} ${Math.abs(form.price_adjustment_per_liter).toFixed(2)} + ${Number(form.sales_fee_per_liter || 0).toFixed(2)}`}
-                  fullWidth
-                />
-                <Box sx={{ display: 'flex', alignItems: 'center', px: 1, border: '1px solid #dbe4f0', borderRadius: 1, minHeight: 40, flex: 1 }}>
-                  <FormControlLabel
-                    control={
-                      <Checkbox
+              <Paper variant='outlined' sx={{ p: 1.25, borderColor: '#dbe4f0', borderRadius: 2, bgcolor: '#f8fbff' }}>
+                <Stack spacing={1.1}>
+                  <Stack direction='row' justifyContent='space-between' alignItems='center' spacing={1}>
+                    <Stack spacing={0.2}>
+                      <Typography fontWeight={700}>เครดิตและราคา</Typography>
+                      <Typography variant='caption' color='text.secondary'>
+                        {lockCredit ? 'วงเงินเครดิตกำหนดโดยผู้ดูแลระบบ' : 'กำหนดวงเงินเครดิตและค่าธรรมเนียมเซลของลูกค้ารายนี้'}
+                      </Typography>
+                    </Stack>
+                    <Chip
+                      size='small'
+                      label={form.status === 'ACTIVE' ? 'ใช้งาน' : 'ปิดใช้งาน'}
+                      color={form.status === 'ACTIVE' ? 'success' : 'default'}
+                    />
+                  </Stack>
+                  <Stack direction={{ xs: 'column', md: 'row' }} spacing={1} alignItems={{ md: 'flex-start' }}>
+                    <TextField
+                      size='small'
+                      label='วงเงินเครดิต'
+                      disabled={lockCredit}
+                      value={creditLimitInput}
+                      onChange={(e) => {
+                        const next = normalizeCurrencyInput(e.target.value);
+                        setCreditLimitInput(formatCurrencyInput(next));
+                        setForm((p) => ({ ...p, credit_limit: Number(next || 0) }));
+                      }}
+                      onFocus={(e) => {
+                        setCreditLimitInput(form.credit_limit ? formatCurrencyInput(String(form.credit_limit)) : '');
+                        e.target.select();
+                      }}
+                      onBlur={() => setCreditLimitInput(formatCurrency(form.credit_limit))}
+                      inputProps={{ inputMode: 'decimal', style: { textAlign: 'right' } }}
+                      InputProps={{ endAdornment: <InputAdornment position='end'>บาท</InputAdornment> }}
+                      helperText={lockCredit ? 'ผู้ดูแลระบบเป็นผู้กำหนด' : 'วงเงินสูงสุดที่ให้ลูกค้าซื้อเชื่อ'}
+                      fullWidth
+                    />
+                    <TextField
+                      size='small'
+                      label='ค่าธรรมเนียมเซลบวกเพิ่ม'
+                      type='number'
+                      value={form.sales_fee_per_liter}
+                      onFocus={(e) => e.target.select()}
+                      onChange={(e) => setForm((p) => ({ ...p, sales_fee_per_liter: Math.max(0, Number(e.target.value || 0)) }))}
+                      inputProps={{ step: '0.01', min: 0, style: { textAlign: 'right' } }}
+                      InputProps={{ endAdornment: <InputAdornment position='end'>บาท/ลิตร</InputAdornment> }}
+                      helperText='บวกเพิ่มจากราคามาตรฐาน ใส่ 0 ถ้าไม่บวก'
+                      fullWidth
+                    />
+                    <Box
+                      sx={{
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'space-between',
+                        gap: 1.5,
+                        px: 1.25,
+                        minHeight: 40,
+                        flex: { xs: '1 1 auto', md: '0 0 auto' },
+                        flexShrink: 0,
+                        whiteSpace: 'nowrap',
+                        border: '1px solid',
+                        borderColor: form.status === 'ACTIVE' ? '#bbf7d0' : '#dbe4f0',
+                        bgcolor: form.status === 'ACTIVE' ? '#f0fdf4' : '#fff',
+                        borderRadius: 1,
+                        transition: 'background-color .15s, border-color .15s',
+                      }}
+                    >
+                      <Stack spacing={0}>
+                        <Typography variant='body2' fontWeight={600}>สถานะลูกค้า</Typography>
+                        <Typography variant='caption' color='text.secondary'>
+                          {form.status === 'ACTIVE' ? 'สั่งซื้อได้' : 'ระงับชั่วคราว'}
+                        </Typography>
+                      </Stack>
+                      <Switch
                         size='small'
+                        color='success'
                         checked={form.status === 'ACTIVE'}
                         onChange={(e) => setForm((p) => ({ ...p, status: e.target.checked ? 'ACTIVE' : 'INACTIVE' }))}
                       />
-                    }
-                    label={<Typography variant='body2'>{form.status === 'ACTIVE' ? 'สถานะ: ใช้งาน' : 'สถานะ: ปิดใช้งาน'}</Typography>}
-                    sx={{ m: 0 }}
-                  />
-                </Box>
-              </Stack>
+                    </Box>
+                  </Stack>
+                 
+                </Stack>
+              </Paper>
               <TextField
                 size='small'
                 select
-                label='พนักงานขายประจำ'
+                label='พนักงานขาย'
                 disabled={isSalesRole}
                 value={form.sales_user_id}
                 onChange={(e) => setForm((p) => ({ ...p, sales_user_id: e.target.value }))}
