@@ -11,6 +11,7 @@ import {
   resolveDeliveryFeeSurcharge,
   resolveSalesUserId,
   validateDiscount,
+  recomputeOrderProfit,
 } from '@/lib/services/order-items';
 import { canAccessCustomer, customerForbidden, loadCustomerScope } from '@/lib/services/customer-scope';
 
@@ -54,9 +55,10 @@ export async function GET() {
           .filter(Boolean),
       ),
     );
-    const creditLabel = r.payment_conditions?.name
-      ? `${r.payment_conditions.name}${r.payment_conditions?.payment_type ? ` (${r.payment_conditions.payment_type}${r.payment_conditions?.credit_days ? ` ${r.payment_conditions.credit_days} วัน` : ''})` : ''}`
-      : null;
+    // แสดงเฉพาะประเภท + จำนวนวัน เช่น "CREDIT 15 วัน" / "CASH" (ไม่เอาชื่อเงื่อนไขซ้ำ)
+    const creditLabel = r.payment_conditions?.payment_type
+      ? `${r.payment_conditions.payment_type}${r.payment_conditions?.credit_days ? ` ${r.payment_conditions.credit_days} วัน` : ''}`
+      : (r.payment_conditions?.name ?? null);
     const goodsAmount = (r.sale_order_items ?? []).reduce((s: number, it: any) => s + Number(it.amount || 0), 0);
     const deliveryFee = Number(r.delivery_fee_amount || 0);
     const discount = Number(r.discount_amount || 0);
@@ -142,6 +144,9 @@ export async function POST(req: NextRequest) {
     await supabaseAdmin.from('sale_orders').update({ is_deleted: true }).eq('id', created.id);
     return NextResponse.json({ error: itemError.message }, { status: 400 });
   }
+
+  const profit = await recomputeOrderProfit(ctx.companyId, created.id);
+  if ('error' in profit) return NextResponse.json({ error: profit.error }, { status: 400 });
 
   const { data: fresh } = await supabaseAdmin.from('sale_orders').select('*').eq('id', created.id).single();
   return NextResponse.json(fresh ?? created);

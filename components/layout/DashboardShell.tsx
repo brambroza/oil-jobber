@@ -3,6 +3,7 @@
 import Link from 'next/link';
 import { useEffect, useMemo, useState, type ReactNode } from 'react';
 import { usePathname } from 'next/navigation';
+import { statusThai } from '@/lib/utils/order-status';
 import {
   AppBar,
   Avatar,
@@ -317,7 +318,7 @@ export default function DashboardShell({ children, currentUser }: { children: Re
                       ลูกค้า: {n.customer_name}
                     </Typography>
                     <Typography variant='caption' color='text.secondary' noWrap>
-                      ออเดอร์ #{n.id.slice(0, 8)} • {n.order_status}
+                      ออเดอร์ #{n.id.slice(0, 8)} • {statusThai(n.order_status)}
                     </Typography>
                     <Typography variant='caption' color='text.disabled'>
                       {new Date(n.created_at).toLocaleString('th-TH')}

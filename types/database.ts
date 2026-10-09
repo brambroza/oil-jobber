@@ -7,11 +7,14 @@ export type OrderStatus =
   | 'SUBMITTED'
   | 'ADMIN_REVIEW'
   | 'CONFIRMED'
+  | 'PO_SENT'
   | 'REFINERY_BOOKED'
   | 'WAITING_PAYMENT'
   | 'PAID'
   | 'PICKUP_READY'
   | 'DELIVERING'
+  | 'DOCS_SENT'
+  | 'DELIVERED'
   | 'COMPLETED'
   | 'CANCELLED';
 
@@ -118,6 +121,29 @@ export interface SaleOrder extends BaseEntity {
   discount_note: string | null;
   remark: string | null;
   sales_user_id: UUID | null;
+  /** เวลาที่ส่งใบสั่งซื้อ PDF ให้ลูกค้าทาง LINE ครั้งแรก */
+  po_sent_at: string | null;
+  /** เวลาที่ส่งใบส่งของ/ใบแจ้งหนี้/ใบกำกับภาษี PDF ให้ลูกค้าทาง LINE ครั้งแรก */
+  documents_sent_at: string | null;
+  /** วันเวลาที่ส่งของจริง (บันทึกการส่งของ) */
+  delivered_at: string | null;
+  delivery_receiver_name: string | null;
+  delivery_record_note: string | null;
+  delivery_recorded_by: UUID | null;
+  /** เลขที่เอกสารบันทึกการส่งของ DR-YYMMDD#### */
+  delivery_record_no: string | null;
+  /** รายได้ก่อน VAT (snapshot) */
+  revenue_ex_vat_amount: number;
+  /** ต้นทุนน้ำมันก่อน VAT = Σ ลิตร × ราคาโรงกลั่น */
+  cost_goods_amount: number;
+  /** ต้นทุนขนส่งก่อน VAT = ลิตร × ค่าขนส่งมาตรฐาน / 1.07 */
+  cost_delivery_amount: number;
+  /** กำไร (+) / ขาดทุน (−) ก่อน VAT */
+  profit_amount: number;
+  /** GP % ของรายได้ก่อน VAT */
+  gp_percent: number;
+  /** true เมื่อมีรายการที่ไม่มี base_cost_price */
+  cost_incomplete: boolean;
 }
 
 export interface SaleOrderItem extends BaseEntity {

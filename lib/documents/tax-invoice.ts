@@ -64,10 +64,21 @@ export function buildTaxInvoicePdf(data: OrderDocumentData, copy: 'original' | '
         ],
     ),
     { text: `(${thaiBahtText(t.net_incl_vat)})`, bold: true, alignment: 'right', margin: [0, 4, 0, 10] },
-    data.remark
-      ? { text: [{ text: 'หมายเหตุ: ', bold: true }, data.remark], margin: [0, 0, 0, 4] }
-      : '',
-    { text: `วิธีรับสินค้า: ${data.receive_method_label}${data.delivery_location ? `   สถานที่ส่ง: ${data.delivery_location}` : ''}`, color: COLORS.muted, fontSize: 9 },
+    {
+      table: {
+        widths: ['*'],
+        body: [[{
+          stack: [
+            { text: [{ text: 'วิธีรับสินค้า: ', bold: true }, data.receive_method_label, data.delivery_location ? `   สถานที่ส่ง: ${data.delivery_location}` : ''] },
+            data.remark ? { text: [{ text: 'หมายเหตุ: ', bold: true }, data.remark] } : '',
+            data.vehicle ? { text: [{ text: 'รถ: ', bold: true }, `${data.vehicle.license_plate || '-'}${data.vehicle.driver_name ? ` คนขับ ${data.vehicle.driver_name}` : ''}${data.vehicle.driver_phone ? ` โทร ${data.vehicle.driver_phone}` : ''}`] } : '',
+          ],
+          margin: [8, 6, 8, 6],
+          fillColor: '#fafafe',
+        }]],
+      },
+      layout: { hLineWidth: () => 0.5, vLineWidth: () => 0.5, hLineColor: () => COLORS.line, vLineColor: () => COLORS.line },
+    },
     signatures(['ผู้รับสินค้า', 'ผู้ส่งสินค้า', 'ผู้มีอำนาจลงนาม']),
   ]);
 }

@@ -22,8 +22,10 @@ import {
 } from '@mui/material';
 import { CameraAltOutlined, UploadFileOutlined } from '@mui/icons-material';
 import { PageScaffold } from '@/components/common/PageScaffold';
+import { parseCartex, type ParsedDepotPrice } from '@/lib/ocr/cartex';
+import { findDepotByFuzzyCode } from '@/lib/ocr/depot-match';
 
-type Depot = { id: string; code: string; name: string };
+type Depot = { id: string; code: string; name: string; refinery_id?: string | null };
 type OilProduct = { id: string; code: string; name: string; is_active: boolean };
 type Refinery = { id: string; name: string; active: boolean };
 
@@ -33,12 +35,6 @@ type PriceRow = {
   product_code: string;
   product_name: string;
   price: number | string;
-};
-
-type ParsedDepotPrice = {
-  depotCode: string;
-  depotName?: string;
-  prices: Record<string, number>;
 };
 
 function fileToBase64(file: File): Promise<string> {
@@ -79,10 +75,6 @@ function isoToDdMmYyyy(value: string): string {
   const [yyyy, mm, dd] = String(value || '').split('-');
   if (!yyyy || !mm || !dd) return '';
   return `${dd}/${mm}/${yyyy}`;
-}
-
-function cleanRaw(raw: string): string {
-  return raw.replace(/\r/g, '').replace(/\s+/g, ' ').replace(/\*+/g, '').trim();
 }
 
 function parseIrpc(raw: string): ParsedDepotPrice[] {
@@ -132,63 +124,6 @@ function parseIrpc(raw: string): ParsedDepotPrice[] {
   }
 
   return result;
-}
-
-function parseCartex(raw: string): ParsedDepotPrice[] {
-  const oneLine = cleanRaw(raw)
-    .replace(/\bS20\b/g, 'B20')
-    .replace(/\b([A-Z])\s+([A-Z]{2,11})\s*=/g, '$1$2=')
-    .replace(/(\d)\s*-\s*(?=\d)/g, '$1 ');
-  const headerRegex = /Price\s*=\s*([A-Z0-9/ ]+)-/gi;
-  const headers = [...oneLine.matchAll(headerRegex)];
-  const parseProducts = (value: string): string[] =>
-    (value || 'ULG/G95/G91/E20/B7/B20')
-      .replace(/\s+/g, '')
-      .split('/')
-      .map((s) => s.trim())
-      .filter(Boolean);
-  const parseNumbers = (value: string): number[] =>
-    value
-      .replace(/(\d)\s+\.(\d+)/g, '$1.$2')
-      // OCR sometimes splits one decimal with an underscore, e.g. 31.4_2 => 31.42.
-      .replace(/(\d+\.\d)_([0-9])(?=_|\s|$)/g, '$1$2')
-      // OCR can split a two-digit price after a separator, e.g. _2 8.63 => _28.63.
-      .replace(/_([0-9])\s+([0-9]\.[0-9]+)/g, '_$1$2')
-      .replace(/(\d+\.\d)\s+([0-9])(?=\s|$)/g, '$1$2')
-      .replace(/\b(\d)\s+(\d\.\d+)/g, '$1$2')
-      .replace(/_/g, ' ')
-      .trim()
-      .split(/\s+/)
-      .map((n) => Number(n || 0));
-
-  const resultByDepot = new Map<string, ParsedDepotPrice>();
-  const parseBlock = (products: string[], block: string) => {
-    const regex = /-?\s*([A-Z]{2,12})\s*=\s*([0-9._ ]+?)(?=-\s*[A-Z]{2,12}\s*=|-Eff\b|$)/gi;
-    let match: RegExpExecArray | null;
-
-    while ((match = regex.exec(block)) !== null) {
-      const depotCode = match[1].trim().toUpperCase();
-      const nums = parseNumbers(match[2]);
-      const prices: Record<string, number> = {};
-      products.forEach((p, idx) => {
-        prices[p] = nums[idx] ?? 0;
-      });
-      resultByDepot.set(depotCode, { depotCode, prices });
-    }
-  };
-
-  if (headers.length) {
-    headers.forEach((header, idx) => {
-      const products = parseProducts(header[1]);
-      const blockStart = (header.index ?? 0) + header[0].length;
-      const blockEnd = idx + 1 < headers.length ? headers[idx + 1].index ?? oneLine.length : oneLine.length;
-      parseBlock(products, oneLine.slice(blockStart, blockEnd).split(/-Eff\b/i)[0]);
-    });
-  } else {
-    parseBlock(parseProducts(''), oneLine.split(/-Eff\b/i)[0]);
-  }
-
-  return [...resultByDepot.values()];
 }
 
 function parsePTT(raw: string): ParsedDepotPrice[] {
@@ -355,15 +290,25 @@ export default function OCRUploadPage() {
       .trim()
       .replace(/\s+/g, '')
       .replace(/ไทย(?:อออล์|ออฟล์)/g, 'ไทยออยล์');
-    const depotMap = new Map(depots.map((d) => [d.code.toUpperCase(), d]));
-    const depotNameMap = new Map(depots.map((d) => [normalizeDepotName(d.name), d]));
-    const productMap = new Map(products.map((p) => [p.code.toUpperCase(), p]));
     const depotCodeAliases: Record<string, string[]> = {
       BSP: ['BPSP', 'PSP'],
       OSP: ['PSP'],
       PHICHIT: ['PICHIT'],
       'ไทยออยล์': ['TOP'],
     };
+    // Match codes only against the selected refinery's depots so a code that exists
+    // elsewhere (e.g. BPI at Bangchak) is not picked up from a Cartex message.
+    // Fall back to every depot when the refinery has none assigned yet.
+    const refineryDepots = depots.filter((d) => d.refinery_id === refineryId);
+    const scopedDepots = refineryDepots.length ? refineryDepots : depots;
+    const depotMap = new Map(scopedDepots.map((d) => [d.code.toUpperCase(), d]));
+    const depotNameMap = new Map(depots.map((d) => [normalizeDepotName(d.name), d]));
+    const exactCodes = new Set(
+      parsed
+        .map((entry) => entry.depotCode.toUpperCase())
+        .filter((code) => depotMap.has(code) || depotCodeAliases[code]?.some((alias) => depotMap.has(alias))),
+    );
+    const productMap = new Map(products.map((p) => [p.code.toUpperCase(), p]));
 
     const out: PriceRow[] = [];
     for (const entry of parsed) {
@@ -374,7 +319,10 @@ export default function OCRUploadPage() {
         (entry.depotName ? depotNameMap.get(normalizeDepotName(entry.depotName)) : undefined) ||
         (entry.depotName
           ? depots.find((item) => normalizeDepotName(item.name).includes(normalizeDepotName(entry.depotName!)))
-          : undefined);
+          : undefined) ||
+        // OCR often misreads one letter of a short code (LLK => LLL); accept a unique
+        // one-character neighbour within the selected refinery's depots.
+        findDepotByFuzzyCode(depotCode, scopedDepots, exactCodes);
       if (!depot) continue;
 
       for (const [productCodeRaw, price] of Object.entries(entry.prices)) {

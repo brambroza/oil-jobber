@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { requireStaff } from '@/lib/auth/api-guard';
 import { supabaseAdmin } from '@/lib/supabase/server';
+import { loadCustomerScope } from '@/lib/services/customer-scope';
 
 export async function GET(req: NextRequest) {
   const guard = await requireStaff();
@@ -10,26 +11,26 @@ export async function GET(req: NextRequest) {
     return NextResponse.json({ error: 'กรุณาตั้งค่า company_id หรือ DEFAULT_COMPANY_ID' }, { status: 400 });
   }
 
+  // SALES only sees recipients linked to their own customers.
+  const scope = await loadCustomerScope(guard.ctx);
+  if (scope && 'error' in scope) return NextResponse.json({ error: scope.error }, { status: 400 });
+  if (Array.isArray(scope) && !scope.length) return NextResponse.json([]);
+
   const selectFields = 'id, customer_id, line_user_id, group_id, conversation_key, display_name, profile_image_url, created_at, updated_at, customers!inner(company_name, is_deleted)';
+  const baseQuery = () => {
+    let q = supabaseAdmin
+      .from('line_customers')
+      .select(selectFields)
+      .eq('company_id', companyId)
+      .eq('is_deleted', false)
+      .not('customer_id', 'is', null)
+      .eq('customers.is_deleted', false);
+    if (Array.isArray(scope)) q = q.in('customer_id', scope);
+    return q;
+  };
   const [directRes, groupRes] = await Promise.all([
-    supabaseAdmin
-      .from('line_customers')
-      .select(selectFields)
-      .eq('company_id', companyId)
-      .eq('is_deleted', false)
-      .not('customer_id', 'is', null)
-      .eq('customers.is_deleted', false)
-      .is('group_id', null)
-      .order('updated_at', { ascending: false }),
-    supabaseAdmin
-      .from('line_customers')
-      .select(selectFields)
-      .eq('company_id', companyId)
-      .eq('is_deleted', false)
-      .not('customer_id', 'is', null)
-      .eq('customers.is_deleted', false)
-      .not('group_id', 'is', null)
-      .order('updated_at', { ascending: false }),
+    baseQuery().is('group_id', null).order('updated_at', { ascending: false }),
+    baseQuery().not('group_id', 'is', null).order('updated_at', { ascending: false }),
   ]);
 
   if (directRes.error) return NextResponse.json({ error: directRes.error.message }, { status: 400 });

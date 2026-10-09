@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { createSupabaseServerClient } from '@/lib/supabase/server-client';
 import { supabaseAdmin } from '@/lib/supabase/server';
-import { enrichOrderItems, loadPricingContext, resolveDeliveryFeeStd, resolveDeliveryFeeSurcharge } from '@/lib/services/order-items';
+import { enrichOrderItems, loadPricingContext, recomputeOrderProfit, resolveDeliveryFeeStd, resolveDeliveryFeeSurcharge } from '@/lib/services/order-items';
 import { computeDeliveryFeeAmount } from '@/lib/services/order-pricing';
 
 async function resolvePortalContext() {
@@ -236,6 +236,9 @@ export async function POST(req: NextRequest) {
 
   const { error: itemErr } = await supabaseAdmin.from('sale_order_items').insert(itemPayload);
   if (itemErr) return NextResponse.json({ error: itemErr.message }, { status: 400 });
+
+  const profit = await recomputeOrderProfit(ctx.companyId, order.id);
+  if ('error' in profit) return NextResponse.json({ error: profit.error }, { status: 400 });
 
   return NextResponse.json(order);
 }

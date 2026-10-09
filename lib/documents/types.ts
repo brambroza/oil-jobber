@@ -1,6 +1,6 @@
 import type { PaymentMethod } from '@/types/database';
 
-export type DocumentType = 'purchase-order' | 'tax-invoice' | 'receipt';
+export type DocumentType = 'purchase-order' | 'tax-invoice' | 'receipt' | 'delivery-record';
 
 export type SellerInfo = {
   name: string;
@@ -60,6 +60,16 @@ export type PaymentLine = {
   note: string | null;
 };
 
+export type DeliveryRecordInfo = {
+  record_no: string;
+  delivered_at: string;
+  receiver_name: string | null;
+  note: string | null;
+  recorded_by_name: string | null;
+  /** ลายเซ็นพนักงานผู้บันทึก (data URI) ถ้ามี */
+  recorded_by_signature: string | null;
+};
+
 export type OrderDocumentData = {
   order_id: string;
   order_no: string;
@@ -86,6 +96,8 @@ export type OrderDocumentData = {
   delivery_location: string | null;
   vehicle: { license_plate: string | null; driver_name: string | null; driver_phone: string | null } | null;
   invoice: { invoice_no: string; issued_at: string; due_date: string | null; status: string } | null;
+  /** บันทึกการส่งของ (null until a delivery is recorded) */
+  delivery: DeliveryRecordInfo | null;
   payments: PaymentLine[];
   paid_amount: number;
   outstanding_amount: number;

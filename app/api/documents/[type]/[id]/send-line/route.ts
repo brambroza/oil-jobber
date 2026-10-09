@@ -24,7 +24,7 @@ export async function POST(_: Request, { params }: { params: Promise<{ type: str
   if (!(await canAccessDocument(guard.ctx, type as DocumentType, id))) return customerForbidden();
 
   try {
-    const result = await sendDocumentToLine(guard.ctx.companyId, type as DocumentType, id);
+    const result = await sendDocumentToLine(guard.ctx.companyId, type as DocumentType, id, guard.ctx.userId);
     if ('error' in result) return NextResponse.json({ error: result.error }, { status: result.status });
     return NextResponse.json({ ok: true, ...result });
   } catch (error) {

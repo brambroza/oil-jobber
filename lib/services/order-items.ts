@@ -1,5 +1,5 @@
 import { supabaseAdmin } from '@/lib/supabase/server';
-import { computeOrderTotals, computeUnitPrice, isPickupMethod } from '@/lib/services/order-pricing';
+import { computeFloorUnitPrice, computeOrderProfit, computeOrderTotals, computeStandardUnitPrice, isPickupMethod, round2, type OrderProfit } from '@/lib/services/order-pricing';
 
 export type IncomingOrderItem = {
   refinery_id?: string | null;
@@ -27,6 +27,8 @@ export type EnrichedOrderItem = {
 export type PricingContext = {
   /** admin baseline + sales fee */
   customerAdjustPerLiter: number;
+  /** ค่ากลางที่ admin ตั้งให้ลูกค้า (±) ใช้เป็นขั้นต่ำราคาขาย */
+  adminAdjustPerLiter: number;
   salesFeePerLiter: number;
   paymentExtraPerLiter: number;
   depotTransportFees: Record<string, number>;
@@ -103,6 +105,7 @@ export async function loadPricingContext(
   return {
     ctx: {
       customerAdjustPerLiter: Number(customerRes.data.price_adjustment_per_liter || 0) + Number(customerRes.data.sales_fee_per_liter || 0),
+      adminAdjustPerLiter: Number(customerRes.data.price_adjustment_per_liter || 0),
       salesFeePerLiter: Number(customerRes.data.sales_fee_per_liter || 0),
       paymentExtraPerLiter: Number(paymentRes.data?.extra_cost_per_liter || 0),
       depotTransportFees,
@@ -112,8 +115,10 @@ export async function loadPricingContext(
 }
 
 /**
- * Applies server-known pricing inputs to incoming items and verifies that the
- * client-supplied unit price matches the formula when a base cost was sent.
+ * Applies server-known pricing inputs to incoming items. When a base cost was
+ * sent, the unit price must not be below the floor (standard price + admin
+ * customer adjustment); any higher price is accepted and the actual markup
+ * above the standard price is stored in `customer_adjust_per_liter`.
  */
 export function enrichOrderItems(
   items: IncomingOrderItem[],
@@ -125,11 +130,13 @@ export function enrichOrderItems(
     const unitPrice = Number(item.unit_price || 0);
     const baseCost = item.base_cost_price == null ? null : Number(item.base_cost_price);
 
+    let markupPerLiter = ctx.customerAdjustPerLiter;
     if (baseCost != null && baseCost > 0) {
-      const expected = computeUnitPrice(baseCost, ctx.paymentExtraPerLiter, ctx.customerAdjustPerLiter);
-      if (Math.abs(expected - unitPrice) >= 0.01) {
-        return { error: `ราคาต่อลิตรของ ${item.product_code} ไม่ตรงกับสูตรคำนวณ (ควรเป็น ${expected.toFixed(2)})` };
+      const floor = computeFloorUnitPrice(baseCost, ctx.paymentExtraPerLiter, ctx.adminAdjustPerLiter);
+      if (unitPrice < floor - 0.005) {
+        return { error: `ราคาต่อลิตรของ ${item.product_code} ต่ำกว่าราคากลาง (ขั้นต่ำ ${floor.toFixed(2)})` };
       }
+      markupPerLiter = round2(unitPrice - computeStandardUnitPrice(baseCost, ctx.paymentExtraPerLiter));
     }
 
     enriched.push({
@@ -141,7 +148,7 @@ export function enrichOrderItems(
       unit_price: unitPrice,
       base_cost_price: baseCost,
       payment_extra_per_liter: ctx.paymentExtraPerLiter,
-      customer_adjust_per_liter: ctx.customerAdjustPerLiter,
+      customer_adjust_per_liter: markupPerLiter,
       sales_fee_per_liter: ctx.salesFeePerLiter,
     });
   }
@@ -246,4 +253,47 @@ export async function loadSalesUserNames(companyId: string, salesUserIds: Array<
     .eq('company_id', companyId)
     .in('id', ids);
   return new Map((data ?? []).map((row) => [row.id, String(row.full_name || row.email || '')]));
+}
+
+/**
+ * Recomputes the before-VAT profit snapshot of an order from its current
+ * items and delivery fee / discount settings and stores it on `sale_orders`.
+ * Call after items or bill settings change.
+ */
+export async function recomputeOrderProfit(companyId: string, orderId: string): Promise<OrderProfit | { error: string }> {
+  const { data: order, error } = await supabaseAdmin
+    .from('sale_orders')
+    .select('id, receive_method, delivery_fee_std_per_liter, delivery_fee_surcharge_per_liter, delivery_fee_adjust_per_liter, discount_amount, sale_order_items(liters, unit_price, base_cost_price, is_deleted)')
+    .eq('id', orderId)
+    .eq('company_id', companyId)
+    .maybeSingle();
+  if (error) return { error: error.message };
+  if (!order) return { error: 'ไม่พบคำสั่งซื้อ' };
+
+  const items = ((order as any).sale_order_items ?? [])
+    .filter((it: any) => !it.is_deleted)
+    .map((it: any) => ({ liters: Number(it.liters || 0), unit_price: Number(it.unit_price || 0), base_cost_price: it.base_cost_price == null ? null : Number(it.base_cost_price) }));
+  const profit = computeOrderProfit({
+    items,
+    deliveryFeeStdPerLiter: Number(order.delivery_fee_std_per_liter || 0),
+    deliveryFeeSurchargePerLiter: Number(order.delivery_fee_surcharge_per_liter || 0),
+    deliveryFeeAdjustPerLiter: Number(order.delivery_fee_adjust_per_liter || 0),
+    receiveMethod: order.receive_method,
+    discountAmount: Number(order.discount_amount || 0),
+  });
+
+  const { error: updateError } = await supabaseAdmin
+    .from('sale_orders')
+    .update({
+      revenue_ex_vat_amount: profit.revenueExVat,
+      cost_goods_amount: profit.costGoods,
+      cost_delivery_amount: profit.costDelivery,
+      profit_amount: profit.profit,
+      gp_percent: profit.gpPercent,
+      cost_incomplete: profit.costIncomplete,
+    })
+    .eq('id', orderId)
+    .eq('company_id', companyId);
+  if (updateError) return { error: updateError.message };
+  return profit;
 }

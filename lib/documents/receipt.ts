@@ -68,6 +68,7 @@ export function buildReceiptPdf(data: ReceiptDocumentData): TDocumentDefinitions
       { label: 'คงค้าง', value: money(data.outstanding_amount) },
     ]),
     { text: `(${thaiBahtText(data.receipt.amount)})`, bold: true, alignment: 'right', margin: [0, 4, 0, 12] },
+    data.remark ? { text: [{ text: 'หมายเหตุ: ', bold: true }, data.remark], margin: [0, 0, 0, 8] } : '',
     { text: 'ประวัติการรับชำระของบิลนี้', bold: true, margin: [0, 4, 0, 4] },
     {
       table: { headerRows: 1, widths: [70, 90, 70, '*', 90], body: historyBody },

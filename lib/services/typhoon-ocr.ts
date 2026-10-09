@@ -31,6 +31,7 @@ export async function callTyphoonOCR(base64Image: string): Promise<TyphoonOCRRes
                 'คืนเฉพาะข้อความ plain text เท่านั้น ห้ามคืน JSON, markdown, bullet, ตาราง, คำอธิบาย หรือคำแปล',
                 'รักษาอักขระสำคัญ เช่น -, =, /, _, จุดทศนิยม และการขึ้นบรรทัดใหม่ให้ใกล้เคียงภาพที่สุด',
                 'ถ้าเป็นข้อความราคา SFL/Cartex ให้รักษา token รหัสคลังพร้อมเครื่องหมาย เช่น -SPRC=, -SRC=, -SRB=, -BPI=, -LLK=, -PICHIT=, -LAMP=, -KKAEN= อย่าตัดทิ้ง',
+                'รหัสคลัง SFL/Cartex ที่ถูกต้องมีเพียง SRB, BPI, LLK, PICHIT, LAMP, KKAEN, SPRC, SRC (เช่น LLK ไม่ใช่ LLL และ KKAEN เขียนติดกันไม่มี = คั่น)',
                 'ถ้าราคา SFL/Cartex ถูกตัดขึ้นบรรทัด เช่น _2 แล้วบรรทัดถัดไปเป็น 8.63 ให้ถอดเป็น _28.63 ไม่ใช่แยกเป็น _2 และ 8.63',
                 'ถ้าเป็น IRPC-PRICE หรือ BC-esso ให้รักษารหัสคลังและชุดราคาที่คั่นด้วย / ให้ครบ',
                 'ถ้าเป็น Bangchak ให้รักษาข้อความในวงเล็บให้ถูกต้อง เช่น (PSP), (SRC), (Phichit), (SRB), (SUSR), (SK)',
@@ -46,8 +47,6 @@ export async function callTyphoonOCR(base64Image: string): Promise<TyphoonOCRRes
 
   const text = await res.text();
 
-  console.log("text" ,text);
- 
   let parsed: any = null;
   try {
     parsed = text ? JSON.parse(text) : null;

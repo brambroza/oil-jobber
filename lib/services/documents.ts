@@ -4,16 +4,20 @@ import { loadOrderDocumentData, loadReceiptDocumentData } from '@/lib/documents/
 import { buildPurchaseOrderPdf } from '@/lib/documents/purchase-order';
 import { buildTaxInvoicePdf } from '@/lib/documents/tax-invoice';
 import { buildReceiptPdf } from '@/lib/documents/receipt';
+import { buildDeliveryRecordPdf } from '@/lib/documents/delivery-record';
+import { advanceOrderStatus } from '@/lib/services/order-status';
+import { dateTh } from '@/lib/documents/format';
 import { money } from '@/lib/documents/format';
 import { pushLinePayload, type LinePushContext } from '@/lib/services/line';
 import type { DocumentType } from '@/lib/documents/types';
 
-export const DOCUMENT_TYPES: DocumentType[] = ['purchase-order', 'tax-invoice', 'receipt'];
+export const DOCUMENT_TYPES: DocumentType[] = ['purchase-order', 'tax-invoice', 'receipt', 'delivery-record'];
 
 export const DOCUMENT_TITLES: Record<DocumentType, string> = {
   'purchase-order': 'ใบสั่งซื้อ',
   'tax-invoice': 'ใบส่งของ/ใบแจ้งหนี้/ใบกำกับภาษี',
   receipt: 'ใบเสร็จรับเงิน',
+  'delivery-record': 'บันทึกการส่งของ',
 };
 
 export type GeneratedDocument = {
@@ -67,6 +71,20 @@ export async function generateDocumentPdf(
       orderId: data.order_id,
       customerId: customerRow?.customer_id ?? null,
       summary: `ยอดรวม ${money(data.totals.net_incl_vat)} บาท ครบกำหนด ${data.invoice.due_date || data.due_date || '-'}`,
+    };
+  }
+
+  if (type === 'delivery-record') {
+    if (!data.delivery) return { error: 'ยังไม่ได้บันทึกการส่งของสำหรับคำสั่งซื้อนี้', status: 409 };
+    const buffer = await renderPdf(buildDeliveryRecordPdf(data));
+    return {
+      buffer,
+      filename: `${data.delivery.record_no}.pdf`,
+      title: DOCUMENT_TITLES['delivery-record'],
+      docNo: data.delivery.record_no,
+      orderId: data.order_id,
+      customerId: customerRow?.customer_id ?? null,
+      summary: `${money(data.totals.total_liters, 0)} ลิตร ส่งเมื่อ ${dateTh(data.delivery.delivered_at)}${data.delivery.receiver_name ? ` ผู้รับ ${data.delivery.receiver_name}` : ''}`,
     };
   }
 
@@ -137,7 +155,8 @@ export async function sendDocumentToLine(
   companyId: string,
   type: DocumentType,
   id: string,
-): Promise<{ url: string; recipient: string; docNo: string } | { error: string; status: number }> {
+  userId: string | null = null,
+): Promise<{ url: string; recipient: string; docNo: string; order_status: string | null; status_advanced: boolean } | { error: string; status: number }> {
   const doc = await generateDocumentPdf(companyId, type, id);
   if ('error' in doc) return doc;
   if (!doc.customerId) return { error: 'ไม่พบลูกค้าของเอกสารนี้', status: 404 };
@@ -175,5 +194,24 @@ export async function sendDocumentToLine(
     message_text: `${doc.title} ${doc.docNo}: ${uploaded.url}`,
   });
 
-  return { url: uploaded.url, recipient: lineCustomer?.group_id ? 'GROUP' : 'USER', docNo: doc.docNo };
+  // Sending the PO / tax invoice is a lifecycle milestone: stamp it and advance the status when allowed.
+  let orderStatus: string | null = null;
+  let statusAdvanced = false;
+  const milestone = type === 'purchase-order' ? 'PO_SENT' : type === 'tax-invoice' ? 'DOCS_SENT' : null;
+  if (milestone) {
+    const advanced = await advanceOrderStatus(
+      companyId,
+      doc.orderId,
+      userId,
+      milestone,
+      {},
+      milestone === 'PO_SENT' ? 'ส่งใบสั่งซื้อให้ลูกค้าทาง LINE' : 'ส่งใบส่งของ/ใบแจ้งหนี้/ใบกำกับภาษีให้ลูกค้าทาง LINE',
+    );
+    if (!('error' in advanced)) {
+      orderStatus = advanced.order_status;
+      statusAdvanced = advanced.advanced;
+    }
+  }
+
+  return { url: uploaded.url, recipient: lineCustomer?.group_id ? 'GROUP' : 'USER', docNo: doc.docNo, order_status: orderStatus, status_advanced: statusAdvanced };
 }

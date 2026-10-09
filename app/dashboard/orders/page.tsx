@@ -1,7 +1,7 @@
 'use client';
 
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Add, Delete, DirectionsCar, Edit, LocalShipping, Payments, PictureAsPdf, Print, ReceiptLong, Remove } from '@mui/icons-material';
+import { useCallback, useEffect, useMemo, useState } from 'react';
+import { Add, Block, Close, Delete, DirectionsCar, Edit, LocalShipping, Payments, PictureAsPdf, Print, ReceiptLong, Remove } from '@mui/icons-material';
 import {
   Alert,
   Autocomplete,
@@ -41,12 +41,14 @@ import {
 } from '@mui/material';
 import { ActionSnackbar, type ActionSnackbarSeverity } from '@/components/common/ActionSnackbar';
 import type { OrderStatus } from '@/types/database';
-import { computeOrderTotals, computeStandardUnitPrice, computeUnitPrice, isPickupMethod } from '@/lib/services/order-pricing';
+import { computeFloorUnitPrice, computeOrderProfit, computeOrderTotals, computeStandardUnitPrice, computeUnitPrice, isPickupMethod, VAT_MULTIPLIER } from '@/lib/services/order-pricing';
 import { useCurrentUser } from '@/components/layout/CurrentUserProvider';
 import { PaymentDialog, type PaymentDialogOrder } from '@/components/accounting/PaymentDialog';
 import { PdfPreviewDialog, type PdfPreviewTarget } from '@/components/documents/PdfPreviewDialog';
 import { canAccess, canApproveOrders } from '@/lib/auth/permissions';
 import ApproveOrderDialog from '@/components/orders/ApproveOrderDialog';
+import DeliveryRecordDialog, { type DeliveryRecordDialogOrder } from '@/components/orders/DeliveryRecordDialog';
+import { DELIVERY_RECORDABLE_STATUSES, ORDER_STATUS_ORDER, statusColor, statusThai } from '@/lib/utils/order-status';
 
 type OrderRow = {
   id: string;
@@ -72,6 +74,11 @@ type OrderRow = {
   sales_user_name?: string | null;
   approved_by_name?: string | null;
   approved_at?: string | null;
+  po_sent_at?: string | null;
+  documents_sent_at?: string | null;
+  delivered_at?: string | null;
+  delivery_record_no?: string | null;
+  delivery_receiver_name?: string | null;
   customers?: { company_name?: string } | null;
 };
 type StaffUser = { id: string; full_name: string; role: string };
@@ -128,6 +135,15 @@ type OrderForm = {
   approved_by_name?: string | null;
   approved_at?: string | null;
   approved_over_credit?: boolean;
+  po_sent_at?: string | null;
+  documents_sent_at?: string | null;
+  delivered_at?: string | null;
+  delivery_receiver_name?: string | null;
+  delivery_record_note?: string | null;
+  delivery_record_no?: string | null;
+  delivery_recorded_by_name?: string | null;
+  /** snapshot กำไรที่บันทึกไว้บน server (บิลเดิม) */
+  saved_profit?: { revenue_ex_vat_amount: number; cost_goods_amount: number; cost_delivery_amount: number; profit_amount: number; gp_percent: number; cost_incomplete: boolean } | null;
   payment_condition_id?: string;
   refinery_summary?: string;
   depot_summary?: string;
@@ -170,23 +186,10 @@ type CustomerVehicle = {
 };
 
 const receiveMethods = [
-  { code: 'DELIVER_BY_TRUCK', label: 'จัดส่งให้ทางรถ', icon: <LocalShipping /> },
-  { code: 'PICKUP_BY_TRUCK', label: 'รับเองทางรถ', icon: <DirectionsCar /> },
+  { code: 'DELIVER_BY_TRUCK', label: 'จัดส่งให้', icon: <LocalShipping /> },
+  { code: 'PICKUP_BY_TRUCK', label: 'รับเอง', icon: <DirectionsCar /> },
 ];
 
-const statuses: OrderStatus[] = [
-  'DRAFT',
-  'SUBMITTED',
-  'ADMIN_REVIEW',
-  'CONFIRMED',
-  'REFINERY_BOOKED',
-  'WAITING_PAYMENT',
-  'PAID',
-  'PICKUP_READY',
-  'DELIVERING',
-  'COMPLETED',
-  'CANCELLED',
-];
 
 const filterCustomerOptions = createFilterOptions<MasterCustomer>({
   stringify: (customer) => [customer.company_name, customer.tax_id, customer.phone].filter(Boolean).join(' '),
@@ -243,30 +246,6 @@ const emptyForm: OrderForm = {
   items: [],
 };
 
-function statusColor(status: OrderStatus): 'default' | 'warning' | 'success' | 'error' | 'info' {
-  if (['COMPLETED', 'PAID'].includes(status)) return 'success';
-  if (status === 'CANCELLED') return 'error';
-  if (['SUBMITTED', 'ADMIN_REVIEW', 'WAITING_PAYMENT'].includes(status)) return 'warning';
-  return 'info';
-}
-
-function statusThai(status: OrderStatus): string {
-  const map: Record<OrderStatus, string> = {
-    DRAFT: 'ร่าง',
-    SUBMITTED: 'ส่งคำสั่งซื้อ',
-    ADMIN_REVIEW: 'รอตรวจสอบ',
-    CONFIRMED: 'ยืนยันแล้ว',
-    REFINERY_BOOKED: 'จองโรงกลั่นแล้ว',
-    WAITING_PAYMENT: 'รอชำระเงิน',
-    PAID: 'ชำระแล้ว',
-    PICKUP_READY: 'พร้อมรับสินค้า',
-    DELIVERING: 'กำลังจัดส่ง',
-    COMPLETED: 'เสร็จสิ้น',
-    CANCELLED: 'ยกเลิก',
-  };
-  return map[status] || status;
-}
-
 function money(v: number): string {
   return Number(v || 0).toLocaleString('th-TH', {
     minimumFractionDigits: 2,
@@ -278,21 +257,6 @@ function receiveMethodThai(code?: string | null): string {
   if (code === 'DELIVER_BY_TRUCK') return 'จัดส่งให้ทางรถ';
   if (code === 'PICKUP_BY_TRUCK') return 'รับเองทางรถ';
   return code || '-';
-}
-
-function escapeHtml(value: unknown): string {
-  return String(value ?? '')
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;')
-    .replace(/'/g, '&#39;');
-}
-
-function dateTh(value?: string | null): string {
-  if (!value) return '-';
-  const date = new Date(value);
-  return Number.isNaN(date.getTime()) ? String(value) : date.toLocaleDateString('th-TH');
 }
 
 function SectionCard({
@@ -341,10 +305,10 @@ export default function OrdersPage() {
   const canAccounting = canAccess(me?.role, 'accounting');
   const [paymentOrder, setPaymentOrder] = useState<PaymentDialogOrder | null>(null);
   const [pdfTarget, setPdfTarget] = useState<PdfPreviewTarget>(null);
-  const [printMenu, setPrintMenu] = useState<{ anchor: HTMLElement; orderId: string; orderNo: string } | null>(null);
+  const [printMenu, setPrintMenu] = useState<{ anchor: HTMLElement; orderId: string; orderNo: string; row?: OrderRow | null } | null>(null);
   const [issuingInvoice, setIssuingInvoice] = useState(false);
 
-  const openPdf = (type: 'purchase-order' | 'tax-invoice' | 'receipt', id: string, title: string, copy = false) => {
+  const openPdf = (type: 'purchase-order' | 'tax-invoice' | 'receipt' | 'delivery-record', id: string, title: string, copy = false) => {
     setPdfTarget({ type, id, title, copy });
   };
 
@@ -388,10 +352,9 @@ export default function OrdersPage() {
   const [open, setOpen] = useState(false);
   const [form, setForm] = useState<OrderForm>(emptyForm);
   const [deleteId, setDeleteId] = useState<string | null>(null);
+  const [cancelOpen, setCancelOpen] = useState(false);
   const [uploadingDo, setUploadingDo] = useState(false);
-  const [drGeneratingId, setDrGeneratingId] = useState<string | null>(null);
-  const [drPreview, setDrPreview] = useState({ open: false, title: '', html: '' });
-  const drFrameRef = useRef<HTMLIFrameElement | null>(null);
+  const [deliveryRecordOrder, setDeliveryRecordOrder] = useState<DeliveryRecordDialogOrder>(null);
   const [snack, setSnack] = useState<{
     open: boolean;
     message: string;
@@ -425,6 +388,23 @@ export default function OrdersPage() {
     receiveMethod: form.receive_method,
     discountAmount: form.discount_amount,
   }), [form.items, form.delivery_fee_std_per_liter, effectiveSurcharge, form.delivery_fee_adjust_per_liter, form.receive_method, form.discount_amount]);
+  /** กำไร/ขาดทุนก่อน VAT คำนวณสดจากฟอร์ม (สูตรเดียวกับ server) */
+  const profit = useMemo(() => computeOrderProfit({
+    items: form.items,
+    deliveryFeeStdPerLiter: form.delivery_fee_std_per_liter,
+    deliveryFeeSurchargePerLiter: effectiveSurcharge,
+    deliveryFeeAdjustPerLiter: form.delivery_fee_adjust_per_liter,
+    receiveMethod: form.receive_method,
+    discountAmount: form.discount_amount,
+  }), [form.items, form.delivery_fee_std_per_liter, effectiveSurcharge, form.delivery_fee_adjust_per_liter, form.receive_method, form.discount_amount]);
+  /** ค่าเงื่อนไขชำระ บาท/ลิตร ของเครดิตที่เลือก */
+  const paymentExtra = Number(paymentConditions.find((pc) => pc.id === form.payment_condition_id)?.extra_cost_per_liter || 0);
+  /** ขั้นต่ำราคาขายของรายการ (มาตรฐาน + ค่ากลาง admin) หรือ null เมื่อไม่มีราคาโรงกลั่น */
+  const floorFor = (it: OrderItemForm): number | null => (
+    Number(it.base_cost_price || 0) > 0 ? computeFloorUnitPrice(Number(it.base_cost_price), paymentExtra, customerBaseline) : null
+  );
+  const belowFloor = (it: OrderItemForm): boolean => { const f = floorFor(it); return f != null && Number(it.unit_price || 0) < f - 0.005; };
+  const hasBelowFloor = form.items.some(belowFloor);
   const grandTotal = totals.net;
   const subTotal = totals.beforeVat;
   const vatAmount = totals.vat;
@@ -738,7 +718,12 @@ export default function OrdersPage() {
     });
   };
 
-  const save = async () => {
+  /**
+   * Saves the drawer form. With `keepOpen` the drawer stays open and reloads
+   * the saved order (used before printing so the PDF reflects unsaved edits).
+   * Returns true on success.
+   */
+  const save = async (options: { keepOpen?: boolean } = {}): Promise<boolean> => {
     const cleanedItems = form.items
       .filter((it) => it.product_code && it.liters > 0)
       .map((it) => ({
@@ -755,7 +740,7 @@ export default function OrdersPage() {
       const message = 'กรุณาระบุรายการน้ำมันและจำนวนลิตรอย่างน้อย 1 รายการ';
       setError(message);
       showSnack(message, 'warning');
-      return;
+      return false;
     }
 
     const payload = {
@@ -770,11 +755,12 @@ export default function OrdersPage() {
       due_date: form.due_date || null,
       receive_method: form.receive_method,
       requested_delivery_date: form.requested_delivery_date || null,
-      customer_vehicle_id: form.receive_method === 'PICKUP_BY_TRUCK' ? form.customer_vehicle_id || null : null,
-      vehicle_license_plate: form.receive_method === 'PICKUP_BY_TRUCK' ? form.vehicle_license_plate || null : null,
-      vehicle_driver_name: form.receive_method === 'PICKUP_BY_TRUCK' ? form.vehicle_driver_name || null : null,
-      vehicle_driver_phone: form.receive_method === 'PICKUP_BY_TRUCK' ? form.vehicle_driver_phone || null : null,
-      vehicle_pickup_license_number: form.receive_method === 'PICKUP_BY_TRUCK' ? form.vehicle_pickup_license_number || null : null,
+      // ทะเบียน/คนขับ ใช้ได้ทั้งรับเองและจัดส่งให้ (จัดส่งให้ = รถที่บริษัทจัดไปส่ง)
+      customer_vehicle_id: form.customer_vehicle_id || null,
+      vehicle_license_plate: form.vehicle_license_plate || null,
+      vehicle_driver_name: form.vehicle_driver_name || null,
+      vehicle_driver_phone: form.vehicle_driver_phone || null,
+      vehicle_pickup_license_number: form.vehicle_pickup_license_number || null,
       remark: form.remark || null,
       sales_user_id: form.sales_user_id || null,
       delivery_fee_std_per_liter: isPickup ? 0 : Number(form.delivery_fee_std_per_liter || 0),
@@ -794,20 +780,37 @@ export default function OrdersPage() {
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || 'บันทึกไม่สำเร็จ');
       const lineWarning = data.line_warning ? String(data.line_warning) : '';
-      setOpen(false);
-      setForm(emptyForm);
-      await load();
+      if (options.keepOpen && data.id) {
+        await load();
+        await openEdit(String(data.id));
+      } else {
+        setOpen(false);
+        setForm(emptyForm);
+        await load();
+      }
       if (lineWarning) {
         setError(lineWarning);
         showSnack(lineWarning, 'warning');
       } else {
         showSnack(wasEditing ? 'แก้ไขใบสั่งซื้อเรียบร้อยแล้ว' : 'เพิ่มใบสั่งซื้อเรียบร้อยแล้ว', 'success');
       }
+      return true;
     } catch (e) {
       const message = (e as Error).message;
       setError(message);
       showSnack(message, 'error');
+      return false;
     }
+  };
+
+  /** Print from the drawer: save first so the PDF includes what is on screen. */
+  const printFromDrawer = async (anchor: HTMLElement) => {
+    if (!form.id) return;
+    const orderId = form.id;
+    const orderNo = form.order_no || orderId.slice(0, 8);
+    const saved = await save({ keepOpen: true });
+    if (!saved) return;
+    setPrintMenu({ anchor, orderId, orderNo });
   };
 
   const openEdit = async (id: string) => {
@@ -822,6 +825,23 @@ export default function OrdersPage() {
         approved_by_name: data.approved_by_name ?? null,
         approved_at: data.approved_at ?? null,
         approved_over_credit: Boolean(data.approved_over_credit),
+        po_sent_at: data.po_sent_at ?? null,
+        documents_sent_at: data.documents_sent_at ?? null,
+        delivered_at: data.delivered_at ?? null,
+        delivery_receiver_name: data.delivery_receiver_name ?? null,
+        delivery_record_note: data.delivery_record_note ?? null,
+        delivery_record_no: data.delivery_record_no ?? null,
+        delivery_recorded_by_name: data.delivery_recorded_by_name ?? null,
+        saved_profit: data.profit_amount != null
+          ? {
+            revenue_ex_vat_amount: Number(data.revenue_ex_vat_amount || 0),
+            cost_goods_amount: Number(data.cost_goods_amount || 0),
+            cost_delivery_amount: Number(data.cost_delivery_amount || 0),
+            profit_amount: Number(data.profit_amount || 0),
+            gp_percent: Number(data.gp_percent || 0),
+            cost_incomplete: Boolean(data.cost_incomplete),
+          }
+          : null,
         payment_condition_id: data.payment_condition_id || '',
         selected_refinery_id: String(data.sale_order_items?.find((it: any) => it.refinery_id)?.refinery_id || ''),
         selected_depot_id: String(data.sale_order_items?.find((it: any) => it.depot_id)?.depot_id || ''),
@@ -886,7 +906,9 @@ export default function OrdersPage() {
       ? 'กำลังส่งอนุมัติ...'
       : patch.order_status === 'PAID'
         ? 'กำลังบันทึกการชำระเงิน...'
-        : 'กำลังส่งข้อมูล...';
+        : patch.order_status === 'CANCELLED'
+          ? 'กำลังยกเลิกการสั่งซื้อ...'
+          : 'กำลังส่งข้อมูล...';
     setSnack({ open: true, message: actionLabel, severity: 'info' });
 
     const res = await fetch(`/api/orders/${form.id}`, {
@@ -908,7 +930,9 @@ export default function OrdersPage() {
         ? 'อนุมัติคำสั่งซื้อเรียบร้อย'
         : patch.order_status === 'PAID'
           ? 'บันทึกการชำระเงินเรียบร้อย'
-          : 'อัปเดตข้อมูลเรียบร้อย';
+          : patch.order_status === 'CANCELLED'
+            ? 'ยกเลิกการสั่งซื้อแล้ว'
+            : 'อัปเดตข้อมูลเรียบร้อย';
       setSnack({ open: true, message: doneLabel, severity: 'success' });
     }
     await load();
@@ -943,45 +967,29 @@ export default function OrdersPage() {
     }
   };
 
-  const createDeliveryRecordPdf = async (orderId: string) => {
-    setDrGeneratingId(orderId);
-    try {
-      const res = await fetch(`/api/orders/${orderId}?company_id=${companyId}`, { cache: 'no-store' });
-      const detail = await res.json();
-      if (!res.ok) throw new Error(detail.error || 'โหลดรายละเอียดคำสั่งซื้อไม่สำเร็จ');
-
-      const customer = customers.find((item) => item.id === detail.customer_id);
-      const items = (detail.sale_order_items || []).filter((item: any) => !item.is_deleted);
-      const docNo = detail.delivery_order_no || detail.order_no || detail.id?.slice(0, 8) || '-';
-      const refNo = detail.customer_po_no || detail.order_no || detail.id?.slice(0, 8) || '-';
-      const docDate = detail.requested_delivery_date || detail.created_at;
-      const total = items.reduce((sum: number, item: any) => sum + Number(item.liters || 0), 0);
-      const rowHeight = Math.max(18, Math.min(153, Math.floor(153 / Math.max(items.length, 1))));
-      const itemRows = items.map((item: any, index: number) => {
-        const liters = Number(item.liters || 0);
-        const depot = [item.depots?.code, item.depots?.name].filter(Boolean).join(' - ');
-        const location = detail.delivery_location || receiveMethodThai(detail.receive_method);
-        return `<tr><td class="desc"><strong>${index + 1})&nbsp;&nbsp;${escapeHtml(item.product_name || item.product_code || '-')}</strong><div>${escapeHtml(depot || '-')}</div><div>${escapeHtml(location)}</div></td><td class="num shade">${liters.toLocaleString('th-TH')}</td><td class="num">${money(liters)}</td><td class="num shade">${money(liters)}</td><td class="num">${money(liters)}</td></tr>`;
-      }).join('');
-
-      const html = `<!doctype html><html><head><meta charset="utf-8"><title>Delivery Record ${escapeHtml(docNo)}</title><style>
-        @page{size:A4 portrait;margin:0}*{box-sizing:border-box}html,body{margin:0;background:#e5e7eb;font-family:Arial,"Tahoma",sans-serif;color:#111827;font-size:10.5px}.page{position:relative;width:210mm;min-height:297mm;margin:0 auto;background:#fff;border:1px solid #111;overflow:hidden}.topbar{height:3px;background:#222}.content{padding:11mm 10.5mm 0}.seller{line-height:1.42}.seller h1{margin:0 0 3px;font-size:14px}.seller .tax{margin-top:14px}.divider{border-top:1px solid #cfcfd4;margin:7px -10.5mm 9px}.info{display:grid;grid-template-columns:.95fr 1.05fr;gap:16px}.customer{line-height:1.48}.label{color:#4b4f60;margin-bottom:7px}.name{font-weight:700}.titleBox{text-align:right;padding-top:21px}.titleBox h2{margin:0;color:#6d66a8;font-size:17px}.titleBox .en{margin-top:7px;font-size:12px;color:#444}.meta{margin-top:33px;margin-left:auto;width:380px;display:grid;grid-template-columns:repeat(3,1fr);background:#716ab0;color:#fff}.meta div{padding:8px 12px;min-height:43px;font-weight:700}.meta strong{display:block;margin-bottom:5px;font-size:10px}table{width:calc(100% + 21mm);margin-left:-10.5mm;border-collapse:collapse;margin-top:9px;table-layout:fixed}thead th{color:#4e4a78;padding:6px 8px;border-bottom:1px solid #ececf2}thead .descHead{text-align:left;width:50%;padding-left:40px}thead .qty{width:12.5%}thead small{display:block;font-size:8.5px;font-weight:400}tbody td{vertical-align:top;padding:7px 10px;border-top:1px solid #f2f2f6}tbody tr td{height:${rowHeight}mm}.desc{line-height:1.48;padding-left:10.5mm}.num{text-align:right}.shade{background:#f0eff7}.totals{position:absolute;right:0;bottom:20mm;width:79mm}.totalRow{display:grid;grid-template-columns:1fr 1fr;min-height:10mm;align-items:center}.totalRow div{padding:4px 10px;text-align:right;font-weight:700}.totalRow.final{background:#716ab0;color:#fff;font-size:12px}.footerLine{position:absolute;left:0;right:0;bottom:10mm;border-top:2px solid #716ab0}.footer{position:absolute;left:10.5mm;right:10.5mm;bottom:4mm;display:flex;justify-content:space-between;font-size:7px}@media print{html,body{background:#fff}.page{border:0;margin:0}}
-      </style></head><body><div class="page"><div class="topbar"></div><div class="content"><section class="seller"><h1>บริษัท เจเอฟซี โซลูชั่น จำกัด <small>(สำนักงานใหญ่)</small></h1><div>1000/53 อาคารลิเบอร์ตี้พลาซ่า ชั้น 3 ซอยสุขุมวิท 55 (ทองหล่อ)</div><div>แขวงคลองตันเหนือ เขตวัฒนา กรุงเทพมหานคร 10110</div><div class="tax">เลขประจำตัวผู้เสียภาษี: 0105564136372</div></section><div class="divider"></div><section class="info"><div class="customer"><div class="label">ข้อมูลลูกค้า:</div><div class="name">${escapeHtml(customer?.company_name || '-')}</div><div>${escapeHtml(customer?.address || '-')}</div><div>T: ${escapeHtml(customer?.phone || '-')}</div><div style="margin-top:9px">เลขประจำตัวผู้เสียภาษี: ${escapeHtml(customer?.tax_id || '-')}</div></div><div><div class="titleBox"><h2>บันทึกการส่งของ</h2><div class="en">Delivery Record</div></div><div class="meta"><div><strong>เอกสารอ้างอิง</strong>${escapeHtml(refNo)}</div><div><strong>วันที่</strong>${escapeHtml(dateTh(docDate))}</div><div><strong>เลขที่เอกสาร</strong>${escapeHtml(docNo)}</div></div></div></section><table><thead><tr><th class="descHead">รายละเอียด<small>Product Description</small></th><th class="qty">จำนวน<small>Quantity</small></th><th class="qty">บรรจุแล้ว<small>Packed</small></th><th class="qty">ส่งแล้ว<small>Shipped</small></th><th class="qty">ได้รับของแล้ว<small>Delivered</small></th></tr></thead><tbody>${itemRows || '<tr><td class="desc">ไม่พบรายการสินค้า</td><td></td><td></td><td></td><td></td></tr>'}</tbody></table></div><div class="totals"><div class="totalRow"><div>บรรจุแล้ว</div><div>${money(total)}</div></div><div class="totalRow"><div>ส่งแล้ว</div><div>${money(total)}</div></div><div class="totalRow final"><div>ได้รับแล้ว</div><div>${money(total)}</div></div></div><div class="footerLine"></div><div class="footer"><div>Printed by: ${escapeHtml(customer?.company_name || '-')} ${escapeHtml(new Date().toLocaleString('th-TH'))}</div><div>Page 1 of 1</div></div></div></body></html>`;
-
-      setDrPreview({ open: true, title: `Delivery Record ${docNo}`, html });
-      showSnack('สร้างตัวอย่างใบส่งของแล้ว', 'success');
-    } catch (caughtError) {
-      const message = (caughtError as Error).message;
-      setError(message);
-      showSnack(message, 'error');
-    } finally {
-      setDrGeneratingId(null);
+  /** Opens the delivery record dialog for a row, or the DR PDF when it was already recorded. */
+  const openDeliveryRecord = (row: { id: string; order_no?: string | null; customer_name?: string | null; delivered_at?: string | null; delivery_receiver_name?: string | null; delivery_record_note?: string | null; delivery_record_no?: string | null }, forceDialog = false) => {
+    const orderNo = row.order_no || row.id.slice(0, 8);
+    if (row.delivery_record_no && !forceDialog) {
+      openPdf('delivery-record', row.id, `บันทึกการส่งของ · ${orderNo}`);
+      return;
     }
+    setDeliveryRecordOrder({
+      id: row.id,
+      order_no: orderNo,
+      customer_name: row.customer_name || '',
+      delivered_at: row.delivered_at ?? null,
+      delivery_receiver_name: row.delivery_receiver_name ?? null,
+      delivery_record_note: row.delivery_record_note ?? null,
+      delivery_record_no: row.delivery_record_no ?? null,
+    });
   };
 
-  const printDeliveryRecordPdf = () => {
-    drFrameRef.current?.contentWindow?.focus();
-    drFrameRef.current?.contentWindow?.print();
+  const onDeliveryRecordSaved = async (saved: Record<string, any>) => {
+    showSnack(saved.advanced ? `บันทึกการส่งของแล้ว สถานะเป็น "${statusThai('DELIVERED')}" เลขที่ ${saved.delivery_record_no || ''}` : `บันทึกการส่งของแล้ว เลขที่ ${saved.delivery_record_no || ''}`, 'success');
+    await load();
+    if (form.id === saved.id) await openEdit(saved.id);
+    openPdf('delivery-record', saved.id, `บันทึกการส่งของ · ${saved.order_no || saved.id.slice(0, 8)}`);
   };
 
   const remove = async () => {
@@ -1148,7 +1156,7 @@ export default function OrdersPage() {
                 <TableCell align="right" sx={{ width: 130, minWidth: 130 }}>
                   <Tooltip title="พิมพ์เอกสาร">
                     <span>
-                      <IconButton size="small" color="primary" onClick={(event) => setPrintMenu({ anchor: event.currentTarget, orderId: r.id, orderNo: r.order_no || r.id.slice(0, 8) })}>
+                      <IconButton size="small" color="primary" onClick={(event) => setPrintMenu({ anchor: event.currentTarget, orderId: r.id, orderNo: r.order_no || r.id.slice(0, 8), row: r })}>
                         <Print fontSize="small" />
                       </IconButton>
                     </span>
@@ -1204,7 +1212,7 @@ export default function OrdersPage() {
         anchor="right"
         open={open}
         onClose={() => setOpen(false)}
-        PaperProps={{ sx: { width: { xs: '100%', sm: '96vw', lg: 1180 }, bgcolor: '#f8fafc' } }}
+        PaperProps={{ sx: { width: '100%', maxWidth: '100%', bgcolor: '#f8fafc' } }}
       >
         <Stack sx={{ minHeight: '100%' }}>
           <Box
@@ -1224,14 +1232,34 @@ export default function OrdersPage() {
                   {form.id ? 'แก้ไขใบสั่งซื้อ' : 'เพิ่มใบสั่งซื้อ'}
                 </Typography>
                 <Typography variant="body2" color="text.secondary">
-                  {form.order_no ? `เลขคำสั่งซื้อ: ${form.order_no}` : 'สร้างคำสั่งซื้อใหม่'}
+                  {form.order_no ? `เลขที่ ${form.order_no}` : 'ใบใหม่'}
                 </Typography>
               </Box>
               <Stack alignItems="flex-end" spacing={0.5}>
-                <Chip size="small" label={statusThai(form.order_status)} color={statusColor(form.order_status)} />
+                <Stack direction="row" spacing={0.5} alignItems="center">
+                  <Chip size="small" label={statusThai(form.order_status)} color={statusColor(form.order_status)} />
+                  <Tooltip title="ปิด">
+                    <IconButton size="small" onClick={() => setOpen(false)} aria-label="ปิด">
+                      <Close fontSize="small" />
+                    </IconButton>
+                  </Tooltip>
+                </Stack>
                 {form.approved_by_name ? (
                   <Typography variant="caption" color={form.approved_over_credit ? 'error.main' : 'text.secondary'}>
                     อนุมัติโดย {form.approved_by_name}{form.approved_at ? ` ${new Date(form.approved_at).toLocaleDateString('th-TH')}` : ''}{form.approved_over_credit ? ' (เกินวงเงิน)' : ''}
+                  </Typography>
+                ) : null}
+                {form.po_sent_at ? (
+                  <Typography variant="caption" color="text.secondary">ส่ง PO {new Date(form.po_sent_at).toLocaleString('th-TH', { dateStyle: 'short', timeStyle: 'short' })}</Typography>
+                ) : null}
+                {form.documents_sent_at ? (
+                  <Typography variant="caption" color="text.secondary">ส่งใบกำกับ {new Date(form.documents_sent_at).toLocaleString('th-TH', { dateStyle: 'short', timeStyle: 'short' })}</Typography>
+                ) : null}
+                {form.delivered_at ? (
+                  <Typography variant="caption" color="success.main">
+                    ส่งของแล้ว {new Date(form.delivered_at).toLocaleString('th-TH', { dateStyle: 'short', timeStyle: 'short' })}
+                    {form.delivery_receiver_name ? ` · ผู้รับ ${form.delivery_receiver_name}` : ''}
+                    {form.delivery_record_no ? ` · ${form.delivery_record_no}` : ''}
                   </Typography>
                 ) : null}
               </Stack>
@@ -1290,19 +1318,19 @@ export default function OrdersPage() {
                       <TextField
                         {...params}
                         label="ลูกค้า"
-                        placeholder="ค้นหาชื่อ เลขผู้เสียภาษี หรือเบอร์โทร"
+                        placeholder="ชื่อ / เลขภาษี / เบอร์"
                       />
                     )}
                   />
                   <TextField
                     size="small"
                     select
-                    label="สถานะออเดอร์"
+                    label="สถานะ"
                     value={form.order_status}
                     onChange={(e) => setForm((p) => ({ ...p, order_status: e.target.value as OrderStatus }))}
                     fullWidth
                   >
-                    {statuses
+                    {ORDER_STATUS_ORDER
                       .filter((status) => status !== 'CONFIRMED' || canApprove || form.order_status === 'CONFIRMED')
                       .map((status) => (
                         <MenuItem key={status} value={status}>
@@ -1356,12 +1384,12 @@ export default function OrdersPage() {
                     disabled={isSalesRole}
                     sx={{ minWidth: { md: 260 } }}
                     renderInput={(params) => (
-                      <TextField {...params} label="พนักงานขาย" helperText={isSalesRole ? 'บันทึกเป็นชื่อคุณอัตโนมัติ' : undefined} />
+                      <TextField {...params} label="พนักงานขาย" helperText={isSalesRole ? 'ใช้ชื่อคุณ' : undefined} />
                     )}
                   />
                   <TextField
                     size="small"
-                    label="หมายเหตุ (แสดงในเอกสาร)"
+                    label="หมายเหตุ (ลงเอกสาร)"
                     value={form.remark}
                     onChange={(e) => setForm((p) => ({ ...p, remark: e.target.value }))}
                     multiline
@@ -1390,9 +1418,9 @@ export default function OrdersPage() {
                     onChange={(_, refinery) => selectRefinery(refinery)}
                     getOptionLabel={(refinery) => refinery.name || refinery.id}
                     isOptionEqualToValue={(option, value) => option.id === value.id}
-                    noOptionsText={form.customer_id ? 'ไม่พบโรงกลั่นตามสิทธิ์ลูกค้า' : 'กรุณาเลือกลูกค้าก่อน'}
+                    noOptionsText={form.customer_id ? 'ไม่มีโรงกลั่น' : 'เลือกลูกค้าก่อน'}
                     loading={customerAccessLoading}
-                    loadingText="กำลังโหลดสิทธิ์ลูกค้า..."
+                    loadingText="กำลังโหลด..."
                     disabled={!form.customer_id || customerAccessLoading}
                     autoHighlight
                     openOnFocus
@@ -1408,20 +1436,20 @@ export default function OrdersPage() {
                     onChange={(_, depot) => selectDepot(depot)}
                     getOptionLabel={(depot) => `${depot.code} - ${depot.name}`}
                     isOptionEqualToValue={(option, value) => option.id === value.id}
-                    noOptionsText={selectedRefineryId ? 'ไม่พบคลังตามสิทธิ์ลูกค้า' : 'กรุณาเลือกโรงกลั่นก่อน'}
+                    noOptionsText={selectedRefineryId ? 'ไม่มีคลัง' : 'เลือกโรงกลั่นก่อน'}
                     loading={customerAccessLoading}
-                    loadingText="กำลังโหลดสิทธิ์ลูกค้า..."
+                    loadingText="กำลังโหลด..."
                     disabled={!form.customer_id || !selectedRefineryId || customerAccessLoading}
                     autoHighlight
                     openOnFocus
                     fullWidth
                     renderInput={(params) => (
-                      <TextField {...params} label="คลัง" placeholder="ค้นหารหัสหรือชื่อคลัง" />
+                      <TextField {...params} label="คลัง" placeholder="รหัส / ชื่อคลัง" />
                     )}
                   />
                 </Stack>
                 <FormControl fullWidth>
-                  <FormLabel sx={{ color: '#334155', fontWeight: 800, mb: 0.7 }}>เครดิตที่เลือก</FormLabel>
+                  <FormLabel sx={{ color: '#334155', fontWeight: 800, mb: 0.7 }}>เครดิต</FormLabel>
                   <RadioGroup
                     row
                     value={form.payment_condition_id || ''}
@@ -1433,7 +1461,7 @@ export default function OrdersPage() {
                         key={pc.id}
                         value={pc.id}
                         control={<Radio size="small" />}
-                        label={`${pc.name} (${pc.payment_type}${pc.credit_days ? ` ${pc.credit_days} วัน` : ''})`}
+                        label={`${pc.payment_type}${pc.credit_days ? ` ${pc.credit_days} วัน` : ''}`}
                         sx={{
                           m: 0,
                           px: 1,
@@ -1455,7 +1483,7 @@ export default function OrdersPage() {
                   </RadioGroup>
                   {!filteredPaymentConditions.length ? (
                     <Typography sx={{ mt: 0.5, fontSize: 12, color: '#64748b' }}>
-                      ลูกค้ารายนี้ยังไม่มีสิทธิ์เครดิตเทอม
+                      ลูกค้ายังไม่มีเครดิตเทอม
                     </Typography>
                   ) : null}
                 </FormControl>
@@ -1485,7 +1513,7 @@ export default function OrdersPage() {
                 </Button>
                 <TextField
                   size="small"
-                  label="ลิงก์/ไฟล์แนบ DO"
+                  label="ลิงก์ DO"
                   value={form.delivery_order_file_url}
                   onChange={(e) => setForm((p) => ({ ...p, delivery_order_file_url: e.target.value }))}
                   sx={{ flex: 1 }}
@@ -1528,10 +1556,10 @@ export default function OrdersPage() {
                   <TableHead>
                     <TableRow sx={{ '& th': { bgcolor: '#f8fafc', color: '#334155', fontWeight: 900, whiteSpace: 'nowrap' } }}>
                       <TableCell>รหัสน้ำมัน</TableCell>
-                      <TableCell align="right">ราคาขาย/ลิตร (รวม VAT)</TableCell>
-                      <TableCell align="right">จำนวนที่ซื้อ</TableCell>
-                      <TableCell align="right">รวม (รวม VAT)</TableCell>
-                      <TableCell align="right">จัดการ</TableCell>
+                      <TableCell align="right">ราคา/ลิตร</TableCell>
+                      <TableCell align="right">ลิตร</TableCell>
+                      <TableCell align="right">รวม</TableCell>
+                      <TableCell align="right" />
                     </TableRow>
                   </TableHead>
                   <TableBody>
@@ -1586,16 +1614,28 @@ export default function OrdersPage() {
                             type="number"
                             value={it.unit_price}
                             onFocus={(e) => e.target.select()}
-                            onChange={(e) => updateItem(idx, { unit_price: Number(e.target.value || 0), base_cost_price: null })}
+                            onChange={(e) => updateItem(idx, { unit_price: Number(e.target.value || 0) })}
+                            error={belowFloor(it)}
+                            helperText={floorFor(it) != null ? (belowFloor(it) ? `ต่ำกว่าราคากลาง ${money(floorFor(it) as number)}` : `ขั้นต่ำ ${money(floorFor(it) as number)}`) : undefined}
+                            FormHelperTextProps={{ sx: { mx: 0, whiteSpace: 'nowrap', textAlign: 'right' } }}
                             sx={{ width: 140 }}
                           />
-                          {customerAdjust !== 0 && it.std_unit_price != null ? (
+                          {/* {customerAdjust !== 0 && it.std_unit_price != null ? (
                             <Typography variant="caption" sx={{ display: 'block', color: customerAdjust < 0 ? '#15803d' : '#b45309', whiteSpace: 'nowrap' }}>
                               มาตรฐาน {money(it.std_unit_price)}
-                              {customerBaseline !== 0 ? ` ${customerBaseline < 0 ? '−' : '+'} ค่ากลาง ${money(Math.abs(customerBaseline))}` : ''}
-                              {customerSalesFee !== 0 ? ` + ค่าธรรมเนียมเซล ${money(customerSalesFee)}` : ''}
+                              {customerBaseline !== 0 ? ` ${customerBaseline < 0 ? '−' : '+'} กลาง ${money(Math.abs(customerBaseline))}` : ''}
+                              {customerSalesFee !== 0 ? ` + เซล ${money(customerSalesFee)}` : ''}
                             </Typography>
                           ) : null}
+                          {Number(it.base_cost_price || 0) > 0 ? (
+                            <Typography variant="caption" sx={{ display: 'block', color: 'text.secondary', whiteSpace: 'nowrap' }}>
+                              ทุน {money(Number(it.base_cost_price))} · กำไร {money(Number(it.unit_price || 0) / VAT_MULTIPLIER - Number(it.base_cost_price))} /ลิตร
+                            </Typography>
+                          ) : (
+                            <Typography variant="caption" sx={{ display: 'block', color: '#b45309', whiteSpace: 'nowrap' }}>
+                              ไม่มีต้นทุน
+                            </Typography>
+                          )} */}
                         </TableCell>
                         <TableCell align="right">
                           <TextField
@@ -1615,7 +1655,7 @@ export default function OrdersPage() {
                             color="error"
                             onClick={() => {
                               setForm((p) => ({ ...p, items: p.items.filter((_, i) => i !== idx) }));
-                              showSnack(`ลบรายการน้ำมันที่ ${idx + 1} แล้ว`, 'warning');
+                              showSnack(`ลบรายการที่ ${idx + 1}`, 'warning');
                             }}
                             disabled={form.items.length <= 1}
                           >
@@ -1629,9 +1669,9 @@ export default function OrdersPage() {
                         <TableCell colSpan={5} align="center" sx={{ py: 4, color: 'text.secondary' }}>
                           {selectedDepotId
                             ? form.payment_condition_id
-                              ? 'ไม่พบรายการน้ำมันที่มีราคาปัจจุบันสำหรับคลังและสิทธิ์ของลูกค้ารายนี้'
-                              : 'กรุณาเลือกเครดิต เพื่อแสดงรายการน้ำมันพร้อมราคา'
-                            : 'กรุณาเลือกโรงกลั่นและคลัง เพื่อแสดงรายการน้ำมันพร้อมราคา'}
+                              ? 'คลังนี้ยังไม่มีราคาวันนี้'
+                              : 'เลือกเครดิตก่อน'
+                            : 'เลือกโรงกลั่นและคลังก่อน'}
                         </TableCell>
                       </TableRow>
                     ) : null}
@@ -1656,18 +1696,18 @@ export default function OrdersPage() {
                       ],
                     };
                   });
-                  showSnack('เพิ่มรายการน้ำมันแล้ว', 'info');
+                  showSnack('เพิ่มรายการแล้ว', 'info');
                 }}
                 disabled={!selectedDepotId || !form.payment_condition_id}
                 sx={{ mt: 1.5, borderRadius: 1 }}
               >
-                เพิ่มรายการน้ำมัน
+                เพิ่มรายการ
               </Button>
             </Card>
 
-            <SectionCard title="ค่าขนส่ง" subtitle="คิดต่อลิตรจากค่าขนส่งมาตรฐานของคลัง + ค่าขนส่งเพิ่มส่วนกลาง (ถ้ามี) ปรับเพิ่ม/ลดได้ต่อบิล">
+            <SectionCard title="ค่าขนส่ง" subtitle="มาตรฐานคลัง + ส่วนกลาง ปรับได้ต่อบิล">
               {isPickup ? (
-                <Alert severity="info" sx={{ borderRadius: 1 }}>รับเองที่คลัง ไม่คิดค่าขนส่ง</Alert>
+                <Alert severity="info" sx={{ borderRadius: 1 }}>รับเอง ไม่มีค่าขนส่ง</Alert>
               ) : (
                 <Stack direction={{ xs: 'column', md: 'row' }} spacing={1.5} alignItems={{ md: 'center' }}>
                   {/*     <TextField
@@ -1692,7 +1732,7 @@ export default function OrdersPage() {
                   /> */}
                   <TextField
                     size="small"
-                    label="ค่าขนส่ง ปรับ +/- (บาท/ลิตร)"
+                    label="ปรับ +/- (บาท/ลิตร)"
                     type="number"
                     value={form.delivery_fee_adjust_per_liter}
                     onFocus={(e) => e.target.select()}
@@ -1702,15 +1742,15 @@ export default function OrdersPage() {
                     fullWidth
                   />
                   <TextField size="small" label="คิดจริง (บาท/ลิตร)" value={money(totals.feePerLiter)} InputProps={{ readOnly: true }} fullWidth />
-                  <TextField size="small" label="ค่าขนส่งรวม (รวม VAT)" value={money(totals.feeGross)} InputProps={{ readOnly: true }} sx={{ '& input': { fontWeight: 800 } }} fullWidth />
+                  <TextField size="small" label="รวมค่าขนส่ง" value={money(totals.feeGross)} InputProps={{ readOnly: true }} sx={{ '& input': { fontWeight: 800 } }} fullWidth />
                 </Stack>
               )}
             </SectionCard>
 
-            <SectionCard title="สรุปท้ายบิล">
+            <SectionCard title="สรุป">
               <Stack direction={{ xs: 'column', md: 'row' }} spacing={2} alignItems={{ md: 'flex-start' }}>
                 <Stack spacing={1.2} sx={{ flex: 1, minWidth: 0 }}>
-                  <Typography fontWeight={800} fontSize={13}>ส่วนลดท้ายบิล</Typography>
+                  <Typography fontWeight={800} fontSize={13}>ส่วนลด</Typography>
                   <TextField
                     size="small"
                     label="ส่วนลด (บาท)"
@@ -1719,13 +1759,13 @@ export default function OrdersPage() {
                     onFocus={(e) => e.target.select()}
                     onChange={(e) => setForm((p) => ({ ...p, discount_amount: Math.max(0, Number(e.target.value || 0)) }))}
                     inputProps={{ step: '0.01', min: 0 }}
-                    helperText={`ไม่เกิน ${money(totals.grossBeforeDiscount)} บาท (ยอดน้ำมัน + ค่าขนส่ง)`}
+                    helperText={`ไม่เกิน ${money(totals.grossBeforeDiscount)} บาท`}
                     error={form.discount_amount > totals.grossBeforeDiscount + 0.005}
                     fullWidth
                   />
                   <TextField
                     size="small"
-                    label="เหตุผล/หมายเหตุส่วนลด (แสดงในเอกสาร)"
+                    label="เหตุผล(ส่วนลด)"
                     value={form.discount_note}
                     onChange={(e) => setForm((p) => ({ ...p, discount_note: e.target.value }))}
                     fullWidth
@@ -1734,23 +1774,23 @@ export default function OrdersPage() {
                 <Box sx={{ ml: 'auto', width: { xs: '100%', md: 420 } }}>
                   <Stack spacing={0.8}>
                     <Stack direction="row" justifyContent="space-between">
-                      <Typography color="text.secondary">รวมปริมาณ</Typography>
+                      <Typography color="text.secondary">ปริมาณ</Typography>
                       <Typography>{money(totalLiters)} ลิตร</Typography>
                     </Stack>
                     {totals.discount > 0 ? (
                       <>
                         <Stack direction="row" justifyContent="space-between">
-                          <Typography color="text.secondary">รวมรายการ (รวม VAT)</Typography>
+                          <Typography color="text.secondary">รวมก่อนลด</Typography>
                           <Typography>{money(totals.grossBeforeDiscount)} บาท</Typography>
                         </Stack>
                         <Stack direction="row" justifyContent="space-between">
-                          <Typography sx={{ color: '#15803d' }}>หัก ส่วนลดท้ายบิล</Typography>
+                          <Typography sx={{ color: '#15803d' }}>ส่วนลด</Typography>
                           <Typography sx={{ color: '#15803d' }}>-{money(totals.discount)} บาท</Typography>
                         </Stack>
                       </>
                     ) : null}
                     <Stack direction="row" justifyContent="space-between">
-                      <Typography color="text.secondary">ยอดก่อน VAT</Typography>
+                      <Typography color="text.secondary">ก่อน VAT</Typography>
                       <Typography>{money(subTotal)} บาท</Typography>
                     </Stack>
                     <Stack direction="row" justifyContent="space-between">
@@ -1759,7 +1799,7 @@ export default function OrdersPage() {
                     </Stack>
                     <Divider />
                     <Stack direction="row" justifyContent="space-between" alignItems="center">
-                      <Typography fontWeight={900}>ยอดรวมสุทธิ (รวม VAT)</Typography>
+                      <Typography fontWeight={900}>ยอดสุทธิ</Typography>
                       <Typography fontWeight={900} fontSize={22}>
                         {money(grandTotal)} บาท
                       </Typography>
@@ -1767,9 +1807,35 @@ export default function OrdersPage() {
                   </Stack>
                 </Box>
               </Stack>
+
+              <Stack
+                direction="row"
+                spacing={2}
+                alignItems="center"
+                flexWrap="wrap"
+                useFlexGap
+                sx={{
+                  mt: 1.5,
+                  px: 1.5,
+                  py: 0.75,
+                  borderRadius: 1,
+                  bgcolor: profit.profit < 0 ? '#fef2f2' : '#f0fdf4',
+                  color: profit.profit < 0 ? '#b91c1c' : '#15803d',
+                  fontSize: 13,
+                }}
+              >
+                <Typography variant="body2" color="text.secondary">รวมต้นทุน {money(profit.costTotal)} บาท</Typography>
+                <Typography variant="body2" fontWeight={800} sx={{ color: 'inherit' }}>
+                  {profit.profit < 0 ? 'ขาดทุน' : 'กำไร'} {profit.profit < 0 ? '−' : '+'}{money(Math.abs(profit.profit))} บาท
+                </Typography>
+                <Typography variant="body2" fontWeight={800} sx={{ color: 'inherit' }}>GP {money(profit.gpPercent)}%</Typography>
+                {profit.costIncomplete ? (
+                  <Typography variant="caption" sx={{ color: '#b45309' }}>บางรายการไม่มีต้นทุน</Typography>
+                ) : null}
+              </Stack>
             </SectionCard>
 
-            <SectionCard title="วิธีการรับสินค้า" subtitle="เลือกการจัดส่งแบบเดียวกับหน้า Customer">
+            <SectionCard title="การรับสินค้า">
               <Stack spacing={1.5}>
                 <Stack direction={{ xs: 'column', md: 'row' }} spacing={1}>
                   {receiveMethods.map((method) => (
@@ -1784,15 +1850,7 @@ export default function OrdersPage() {
                       }}
                     >
                       <CardActionArea
-                        onClick={() => setForm((prev) => ({
-                          ...prev,
-                          receive_method: method.code,
-                          customer_vehicle_id: method.code === 'PICKUP_BY_TRUCK' ? prev.customer_vehicle_id : '',
-                          vehicle_license_plate: method.code === 'PICKUP_BY_TRUCK' ? prev.vehicle_license_plate : '',
-                          vehicle_driver_name: method.code === 'PICKUP_BY_TRUCK' ? prev.vehicle_driver_name : '',
-                          vehicle_driver_phone: method.code === 'PICKUP_BY_TRUCK' ? prev.vehicle_driver_phone : '',
-                          vehicle_pickup_license_number: method.code === 'PICKUP_BY_TRUCK' ? prev.vehicle_pickup_license_number : '',
-                        }))}
+                        onClick={() => setForm((prev) => ({ ...prev, receive_method: method.code }))}
                       >
                         <CardContent>
                           <Stack spacing={0.8} alignItems="center">
@@ -1807,7 +1865,7 @@ export default function OrdersPage() {
 
                 <TextField
                   size="small"
-                  label="วันที่ต้องการให้จัดส่ง"
+                  label="วันที่ส่ง"
                   type="date"
                   value={form.requested_delivery_date}
                   onChange={(event) => setForm((prev) => ({ ...prev, requested_delivery_date: event.target.value }))}
@@ -1815,12 +1873,12 @@ export default function OrdersPage() {
                   fullWidth
                 />
 
-                {form.receive_method === 'PICKUP_BY_TRUCK' ? (
+                {(
                   <Stack spacing={1.2}>
                     <TextField
                       select
                       size="small"
-                      label="เลือกรถบรรทุกของลูกค้า (ถ้ามี)"
+                      label={isPickup ? 'รถของลูกค้า' : 'รถที่ไปส่ง (เลือกจากรถลูกค้าได้)'}
                       value={form.customer_vehicle_id}
                       onChange={(event) => {
                         const vehicle = customerVehicles.find((item) => item.id === event.target.value);
@@ -1835,7 +1893,7 @@ export default function OrdersPage() {
                       }}
                       disabled={!form.customer_id}
                     >
-                      <MenuItem value="">ไม่เลือกรถ (กรอกข้อมูลเอง)</MenuItem>
+                      <MenuItem value="">กรอกเอง</MenuItem>
                       {customerVehicles.map((vehicle) => (
                         <MenuItem key={vehicle.id} value={vehicle.id}>
                           {vehicle.license_plate}{vehicle.driver_name ? ` - ${vehicle.driver_name}` : ''}
@@ -1843,15 +1901,15 @@ export default function OrdersPage() {
                       ))}
                     </TextField>
                     <Stack direction={{ xs: 'column', md: 'row' }} spacing={1.2}>
-                      <TextField size="small" required fullWidth label="ทะเบียนรถ" value={form.vehicle_license_plate} onChange={(event) => setForm((prev) => ({ ...prev, customer_vehicle_id: '', vehicle_license_plate: event.target.value }))} />
+                      <TextField size="small" required={isPickup} fullWidth label="ทะเบียนรถ" value={form.vehicle_license_plate} onChange={(event) => setForm((prev) => ({ ...prev, customer_vehicle_id: '', vehicle_license_plate: event.target.value }))} />
                       <TextField size="small" fullWidth label="ชื่อคนขับ" value={form.vehicle_driver_name} onChange={(event) => setForm((prev) => ({ ...prev, customer_vehicle_id: '', vehicle_driver_name: event.target.value }))} />
                     </Stack>
                     <Stack direction={{ xs: 'column', md: 'row' }} spacing={1.2}>
                       <TextField size="small" fullWidth label="เบอร์คนขับ" value={form.vehicle_driver_phone} onChange={(event) => setForm((prev) => ({ ...prev, customer_vehicle_id: '', vehicle_driver_phone: event.target.value }))} />
-                      <TextField size="small" fullWidth label="เลขใบอนุญาตรับสินค้า" value={form.vehicle_pickup_license_number} onChange={(event) => setForm((prev) => ({ ...prev, customer_vehicle_id: '', vehicle_pickup_license_number: event.target.value }))} />
+                      <TextField size="small" fullWidth label="เลขใบอนุญาต" value={form.vehicle_pickup_license_number} onChange={(event) => setForm((prev) => ({ ...prev, customer_vehicle_id: '', vehicle_pickup_license_number: event.target.value }))} />
                     </Stack>
                   </Stack>
-                ) : null}
+                )}
               </Stack>
             </SectionCard>
           </Stack>
@@ -1868,17 +1926,27 @@ export default function OrdersPage() {
             }}
           >
             <Stack direction={{ xs: 'column', sm: 'row' }} spacing={1} justifyContent="flex-end">
-              <Button variant="outlined" onClick={() => setOpen(false)} sx={{ borderRadius: 2 }}>
-                ยกเลิก
+              <Button
+                variant="outlined"
+                color="error"
+                startIcon={<Block />}
+                onClick={() => setCancelOpen(true)}
+                disabled={!form.id || ['CANCELLED', 'COMPLETED'].includes(form.order_status)}
+                sx={{ borderRadius: 2, mr: { sm: 'auto' } }}
+              >
+                {form.order_status === 'CANCELLED' ? 'ยกเลิกแล้ว' : 'ยกเลิกการสั่งซื้อ'}
+              </Button>
+              <Button variant="outlined" startIcon={<Close />} onClick={() => setOpen(false)} sx={{ borderRadius: 2 }}>
+                ปิด
               </Button>
               <Button
                 variant="outlined"
                 startIcon={<Print />}
-                onClick={(event) => form.id && setPrintMenu({ anchor: event.currentTarget, orderId: form.id, orderNo: form.order_no || form.id.slice(0, 8) })}
-                disabled={!form.id}
+                onClick={(event) => void printFromDrawer(event.currentTarget)}
+                disabled={!form.id || !form.customer_id || !form.items.length || hasBelowFloor}
                 sx={{ borderRadius: 2 }}
               >
-                พิมพ์เอกสาร
+                พิมพ์
               </Button>
               {canApprove ? (
                 <Button
@@ -1892,6 +1960,24 @@ export default function OrdersPage() {
                 </Button>
               ) : null}
 
+              <Button
+                variant="outlined"
+                color="info"
+                startIcon={<LocalShipping />}
+                onClick={() => form.id && openDeliveryRecord({
+                  id: form.id,
+                  order_no: form.order_no,
+                  customer_name: customers.find((c) => c.id === form.customer_id)?.company_name,
+                  delivered_at: form.delivered_at,
+                  delivery_receiver_name: form.delivery_receiver_name,
+                  delivery_record_note: form.delivery_record_note,
+                  delivery_record_no: form.delivery_record_no,
+                }, true)}
+                disabled={!form.id || !DELIVERY_RECORDABLE_STATUSES.includes(form.order_status)}
+                sx={{ borderRadius: 2 }}
+              >
+                {form.delivery_record_no ? 'แก้บันทึกส่งของ' : 'บันทึกส่งของ'}
+              </Button>
               {canAccounting ? (
                 <Button
                   variant="outlined"
@@ -1901,16 +1987,27 @@ export default function OrdersPage() {
                   disabled={!form.id || ['DRAFT', 'CANCELLED'].includes(form.order_status)}
                   sx={{ borderRadius: 2 }}
                 >
-                  รับชำระเงิน
+                  รับชำระ
                 </Button>
               ) : null}
-              <Button variant="contained" onClick={() => void save()} disabled={!form.customer_id || !form.items.length || (form.receive_method === 'PICKUP_BY_TRUCK' && !form.vehicle_license_plate.trim())} sx={{ borderRadius: 2 }}>
-                บันทึกใบสั่งซื้อ
+              <Button variant="contained" onClick={() => void save()} disabled={!form.customer_id || !form.items.length || hasBelowFloor || (form.receive_method === 'PICKUP_BY_TRUCK' && !form.vehicle_license_plate.trim())} sx={{ borderRadius: 2 }}>
+                บันทึก
               </Button>
             </Stack>
           </Box>
         </Stack>
       </Drawer>
+
+      <Dialog open={cancelOpen} onClose={() => setCancelOpen(false)}>
+        <DialogTitle>ยกเลิกการสั่งซื้อ {form.order_no || ''}</DialogTitle>
+        <DialogContent>สถานะจะเปลี่ยนเป็น "ยกเลิก" และบิลนี้จะไม่ถูกนับยอดขาย/ยอดค้าง ต้องการยกเลิกใช่หรือไม่</DialogContent>
+        <DialogActions>
+          <Button onClick={() => setCancelOpen(false)}>ไม่ยกเลิก</Button>
+          <Button color="error" variant="contained" onClick={() => { setCancelOpen(false); void patchOrderQuick({ order_status: 'CANCELLED' }); }}>
+            ยืนยันยกเลิก
+          </Button>
+        </DialogActions>
+      </Dialog>
 
       <Dialog open={Boolean(deleteId)} onClose={() => setDeleteId(null)}>
         <DialogTitle>ยืนยันการลบ</DialogTitle>
@@ -1920,19 +2017,6 @@ export default function OrdersPage() {
           <Button color="error" onClick={() => void remove()}>
             ลบ
           </Button>
-        </DialogActions>
-      </Dialog>
-
-      <Dialog open={drPreview.open} onClose={() => setDrPreview({ open: false, title: '', html: '' })} maxWidth="lg" fullWidth>
-        <DialogTitle>{drPreview.title || 'Delivery Record'}</DialogTitle>
-        <DialogContent sx={{ p: 0, height: { xs: '74vh', md: '82vh' }, bgcolor: '#e5e7eb' }}>
-          {drPreview.html ? (
-            <iframe ref={drFrameRef} title="Delivery Record PDF Preview" srcDoc={drPreview.html} style={{ width: '100%', height: '100%', border: 'none', display: 'block' }} />
-          ) : null}
-        </DialogContent>
-        <DialogActions>
-          <Button variant="contained" onClick={printDeliveryRecordPdf} disabled={!drPreview.html}>PDF DR</Button>
-          <Button onClick={() => setDrPreview({ open: false, title: '', html: '' })}>ปิด</Button>
         </DialogActions>
       </Dialog>
 
@@ -1946,12 +2030,43 @@ export default function OrdersPage() {
         <MenuItem onClick={() => { if (printMenu) openPdf('tax-invoice', printMenu.orderId, `สำเนาใบกำกับภาษี · ${printMenu.orderNo}`, true); setPrintMenu(null); }}>
           <PictureAsPdf fontSize="small" sx={{ mr: 1 }} /> สำเนาใบกำกับภาษี
         </MenuItem>
-        <MenuItem onClick={() => { if (printMenu) void createDeliveryRecordPdf(printMenu.orderId); setPrintMenu(null); }}>
-          <LocalShipping fontSize="small" sx={{ mr: 1 }} /> บันทึกการส่งของ (Delivery Record)
+        <MenuItem onClick={() => {
+          if (printMenu) {
+            const row = printMenu.row ?? null;
+            const fromForm = form.id === printMenu.orderId;
+            openDeliveryRecord({
+              id: printMenu.orderId,
+              order_no: printMenu.orderNo,
+              customer_name: row?.customers?.company_name ?? customers.find((c) => c.id === form.customer_id)?.company_name,
+              delivered_at: row?.delivered_at ?? (fromForm ? form.delivered_at : null),
+              delivery_receiver_name: row?.delivery_receiver_name ?? (fromForm ? form.delivery_receiver_name : null),
+              delivery_record_note: fromForm ? form.delivery_record_note : null,
+              delivery_record_no: row?.delivery_record_no ?? (fromForm ? form.delivery_record_no : null),
+            });
+          }
+          setPrintMenu(null);
+        }}>
+          <LocalShipping fontSize="small" sx={{ mr: 1 }} /> {(printMenu?.row?.delivery_record_no ?? (form.id === printMenu?.orderId ? form.delivery_record_no : null)) ? 'บันทึกการส่งของ (PDF)' : 'บันทึกการส่งของ'}
         </MenuItem>
       </Menu>
 
-      <PdfPreviewDialog target={pdfTarget} onClose={() => setPdfTarget(null)} onNotify={showSnack} />
+      <PdfPreviewDialog
+        target={pdfTarget}
+        onClose={() => setPdfTarget(null)}
+        onNotify={showSnack}
+        onSent={(target, result) => {
+          if (result.status_advanced && result.order_status) {
+            showSnack(`ส่ง ${target.title} แล้ว สถานะเป็น "${statusThai(result.order_status)}"`, 'success');
+          }
+          void load();
+          if (form.id && open) void openEdit(form.id);
+        }}
+      />
+      <DeliveryRecordDialog
+        order={deliveryRecordOrder}
+        onClose={() => setDeliveryRecordOrder(null)}
+        onSaved={(saved) => { void onDeliveryRecordSaved(saved); }}
+      />
 
       <ApproveOrderDialog
         open={approveOpen}

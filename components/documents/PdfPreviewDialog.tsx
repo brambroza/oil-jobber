@@ -1,8 +1,8 @@
 'use client';
 
 import { useState } from 'react';
-import { Alert, Button, Dialog, DialogActions, DialogContent, DialogTitle, Stack } from '@mui/material';
-import { OpenInNew, Send } from '@mui/icons-material';
+import { Alert, Button, Dialog, DialogActions, DialogContent, DialogTitle, IconButton, Stack } from '@mui/material';
+import { Close, OpenInNew, Send } from '@mui/icons-material';
 import type { DocumentType } from '@/lib/documents/types';
 
 export type PdfPreviewTarget = { type: DocumentType; id: string; title: string; copy?: boolean } | null;
@@ -20,10 +20,20 @@ export function documentPdfUrl(type: DocumentType, id: string, options: { downlo
  * Shows a generated PDF in an iframe with actions to open it in a new tab and
  * to send it to the customer's LINE as a file link.
  */
-export function PdfPreviewDialog({ target, onClose, onNotify }: {
+export type PdfSentResult = {
+  docNo: string;
+  url: string;
+  /** Order status after the send (the server may advance it), null for documents that are not milestones. */
+  order_status: string | null;
+  status_advanced: boolean;
+};
+
+export function PdfPreviewDialog({ target, onClose, onNotify, onSent }: {
   target: PdfPreviewTarget;
   onClose: () => void;
   onNotify?: (message: string, severity: 'success' | 'error' | 'info' | 'warning') => void;
+  /** Called after a successful LINE send so the caller can refresh order data. */
+  onSent?: (target: NonNullable<PdfPreviewTarget>, result: PdfSentResult) => void;
 }) {
   const [sending, setSending] = useState(false);
   const [error, setError] = useState('');
@@ -37,6 +47,12 @@ export function PdfPreviewDialog({ target, onClose, onNotify }: {
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || 'ส่ง LINE ไม่สำเร็จ');
       onNotify?.(`ส่ง ${target.title} ${data.docNo} ทาง LINE แล้ว`, 'success');
+      onSent?.(target, {
+        docNo: String(data.docNo || ''),
+        url: String(data.url || ''),
+        order_status: data.order_status ?? null,
+        status_advanced: Boolean(data.status_advanced),
+      });
     } catch (e) {
       const message = (e as Error).message;
       setError(message);
@@ -48,7 +64,17 @@ export function PdfPreviewDialog({ target, onClose, onNotify }: {
 
   return (
     <Dialog open={Boolean(target)} onClose={onClose} maxWidth='lg' fullWidth>
-      <DialogTitle>{target?.title ?? 'เอกสาร'}</DialogTitle>
+      <DialogTitle sx={{ pr: 7 }}>
+        {target?.title ?? 'เอกสาร'}
+        <IconButton
+          aria-label='ปิด'
+          onClick={onClose}
+          sx={{ position: 'absolute', right: 12, top: 10, color: '#fff', bgcolor: '#dc2626', '&:hover': { bgcolor: '#b91c1c' } }}
+          size='small'
+        >
+          <Close fontSize='small' />
+        </IconButton>
+      </DialogTitle>
       <DialogContent sx={{ p: 0, height: { xs: '74vh', md: '82vh' }, bgcolor: '#e5e7eb' }}>
         {error ? <Alert severity='error' sx={{ m: 1 }}>{error}</Alert> : null}
         {target ? (
@@ -76,7 +102,7 @@ export function PdfPreviewDialog({ target, onClose, onNotify }: {
             {sending ? 'กำลังส่ง...' : 'ส่งไฟล์ให้ลูกค้าทาง LINE'}
           </Button>
         </Stack>
-        <Button onClick={onClose}>ปิด</Button>
+        <Button variant='outlined' color='error' startIcon={<Close />} onClick={onClose}>ปิด</Button>
       </DialogActions>
     </Dialog>
   );

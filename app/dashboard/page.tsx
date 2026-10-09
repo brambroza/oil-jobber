@@ -1,6 +1,7 @@
 'use client';
 
 import { useEffect, useMemo, useState } from 'react';
+import { statusThai } from '@/lib/utils/order-status';
 import {
   Alert,
   Box,
@@ -53,22 +54,6 @@ function labelMonth(key: string): string {
   return `${m}/${String(y).slice(2)}`;
 }
 
-function statusThai(status: string): string {
-  const map: Record<string, string> = {
-    DRAFT: 'ร่าง',
-    SUBMITTED: 'ส่งคำสั่งซื้อ',
-    ADMIN_REVIEW: 'รอแอดมินตรวจ',
-    CONFIRMED: 'ยืนยันแล้ว',
-    REFINERY_BOOKED: 'จองโรงกลั่นแล้ว',
-    WAITING_PAYMENT: 'รอชำระเงิน',
-    PAID: 'ชำระแล้ว',
-    PICKUP_READY: 'พร้อมรับสินค้า',
-    DELIVERING: 'กำลังจัดส่ง',
-    COMPLETED: 'เสร็จสิ้น',
-    CANCELLED: 'ยกเลิก',
-  };
-  return map[status] || status;
-}
 
 export default function DashboardPage() {
   const companyId = process.env.NEXT_PUBLIC_DEFAULT_COMPANY_ID ?? '';

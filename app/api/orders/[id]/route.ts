@@ -13,6 +13,7 @@ import {
   resolveDeliveryFeeSurcharge,
   resolveSalesUserId,
   validateDiscount,
+  recomputeOrderProfit,
 } from '@/lib/services/order-items';
 import { canAccessCustomer, canAccessOrder, customerForbidden } from '@/lib/services/customer-scope';
 import { canApproveOrders } from '@/lib/auth/permissions';
@@ -37,12 +38,13 @@ export async function GET(_: NextRequest, { params }: { params: Promise<{ id: st
     .single();
   if (error) return NextResponse.json({ error: error.message }, { status: 400 });
 
-  const names = await loadSalesUserNames(ctx.companyId, [data.sales_user_id, data.approved_by]);
+  const names = await loadSalesUserNames(ctx.companyId, [data.sales_user_id, data.approved_by, data.delivery_recorded_by]);
   const goodsAmount = (data.sale_order_items ?? []).reduce((s: number, it: any) => s + Number(it.amount || 0), 0);
   return NextResponse.json({
     ...data,
     sales_user_name: data.sales_user_id ? names.get(data.sales_user_id) ?? null : null,
     approved_by_name: data.approved_by ? names.get(data.approved_by) ?? null : null,
+    delivery_recorded_by_name: data.delivery_recorded_by ? names.get(data.delivery_recorded_by) ?? null : null,
     goods_amount: goodsAmount,
     total_amount: Math.max(0, goodsAmount + Number(data.delivery_fee_amount || 0) - Number(data.discount_amount || 0)),
   });
@@ -64,7 +66,7 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
 
   const { data: currentOrder, error: currentError } = await supabaseAdmin
     .from('sale_orders')
-    .select('id, customer_id, order_status, payment_condition_id, receive_method, delivery_fee_std_per_liter, delivery_fee_surcharge_per_liter, delivery_fee_adjust_per_liter, discount_amount, sales_user_id, approved_by, sale_order_items(liters, unit_price, is_deleted)')
+    .select('id, customer_id, order_status, payment_condition_id, receive_method, delivery_fee_std_per_liter, delivery_fee_surcharge_per_liter, delivery_fee_adjust_per_liter, discount_amount, sales_user_id, approved_by, delivered_at, sale_order_items(liters, unit_price, is_deleted)')
     .eq('id', id)
     .eq('company_id', ctx.companyId)
     .eq('is_deleted', false)
@@ -103,6 +105,12 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
   if (orderPayload.order_status === 'CONFIRMED' && currentOrder.order_status !== 'CONFIRMED' && !currentOrder.approved_by) {
     effectivePayload.approved_by = ctx.userId;
     effectivePayload.approved_at = new Date().toISOString();
+  }
+
+  // Manual DELIVERED from the form: stamp the delivery time so the DR number is assigned.
+  if (orderPayload.order_status === 'DELIVERED' && currentOrder.order_status !== 'DELIVERED' && !currentOrder.delivered_at) {
+    effectivePayload.delivered_at = new Date().toISOString();
+    effectivePayload.delivery_recorded_by = ctx.userId;
   }
 
   if (sales_user_id !== undefined || !currentOrder.sales_user_id) {
@@ -178,6 +186,9 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
     );
     if (itemErr) return NextResponse.json({ error: itemErr.message }, { status: 400 });
   }
+
+  const profit = await recomputeOrderProfit(ctx.companyId, id);
+  if ('error' in profit) return NextResponse.json({ error: profit.error }, { status: 400 });
 
   if (orderPayload.order_status && orderPayload.order_status !== currentOrder.order_status) {
     await supabaseAdmin.from('sale_order_status_logs').insert({

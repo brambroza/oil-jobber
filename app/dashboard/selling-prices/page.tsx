@@ -25,6 +25,7 @@ import {
 } from '@mui/material';
 import { PageScaffold } from '@/components/common/PageScaffold';
 import { computeUnitPrice } from '@/lib/services/order-pricing';
+import { useCurrentUser } from '@/components/layout/CurrentUserProvider';
 
 type PriceRound = {
   id: string;
@@ -124,6 +125,8 @@ const MAX_BROADCAST_PRODUCTS_PER_GROUP = 4;
 
 export default function SellingPricesPage() {
   const [companyId] = useState(process.env.NEXT_PUBLIC_DEFAULT_COMPANY_ID ?? '');
+  const me = useCurrentUser();
+  const isSalesRole = me?.role === 'SALES';
   const [rounds, setRounds] = useState<PriceRound[]>([]);
   const [paymentConditions, setPaymentConditions] = useState<PaymentCondition[]>([]);
   const [oilProducts, setOilProducts] = useState<OilProduct[]>([]);
@@ -678,6 +681,7 @@ export default function SellingPricesPage() {
       .map((c) => ({ lineCustomerId: c.id }));
     let success = 0;
     let fail = 0;
+    const failReasons = new Set<string>();
     for (const recipient of recipients) {
       const lc = lineCustomers.find((x) => x.id === recipient.lineCustomerId);
       const customerId = String(lc?.customer_id || '').trim();
@@ -704,9 +708,13 @@ export default function SellingPricesPage() {
       });
       const data = await res.json();
       if (res.ok && data?.ok !== false) success += 1;
-      else fail += 1;
+      else {
+        fail += 1;
+        const reason = data?.failures?.[0]?.error || data?.error;
+        if (reason) failReasons.add(String(reason));
+      }
     }
-    if (fail > 0) setSendResult({ ok: false, message: `ส่งสำเร็จ ${success} รายการ, ไม่สำเร็จ ${fail} รายการ เนื่องจากไม่อยู่ในกลุ่มผลิตภัณฑ์ที่เลือก` });
+    if (fail > 0) setSendResult({ ok: false, message: `ส่งสำเร็จ ${success} รายการ, ไม่สำเร็จ ${fail} รายการ${failReasons.size ? ` (${[...failReasons].join(', ')})` : ' เนื่องจากไม่อยู่ในกลุ่มผลิตภัณฑ์ที่เลือก'}` });
     else {
       setSendResult({ ok: true, message: `ส่งสำเร็จ ${success} ราย` });
       setOpenSendDialog(false);
@@ -1005,6 +1013,9 @@ export default function SellingPricesPage() {
               <Alert severity='warning'>
                 ราคาของแต่ละรายบวกค่ากลางปรับราคาและค่าธรรมเนียมเซลตามที่ตั้งในข้อมูลลูกค้า ผู้รับที่ไม่ได้ผูกกับลูกค้า (เช่น LINE Group) ได้ราคามาตรฐาน
               </Alert>
+              {isSalesRole ? (
+                <Alert severity='info'>แสดงเฉพาะ LINE ของลูกค้าที่คุณเป็นพนักงานขายประจำ</Alert>
+              ) : null}
               <Stack direction='row' spacing={1}>
                 <Button size='small' variant='outlined' onClick={selectAll}>เลือกทั้งหมด</Button>
                 <Button size='small' variant='outlined' onClick={clearAll}>ล้างการเลือก</Button>

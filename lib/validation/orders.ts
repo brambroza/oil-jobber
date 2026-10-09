@@ -2,8 +2,8 @@ import { z } from 'zod';
 import { dateYmd, optionalText, optionalUuid, uuid } from '@/lib/validation/common';
 
 export const ORDER_STATUSES = [
-  'DRAFT', 'SUBMITTED', 'ADMIN_REVIEW', 'CONFIRMED', 'REFINERY_BOOKED', 'WAITING_PAYMENT',
-  'PAID', 'PICKUP_READY', 'DELIVERING', 'COMPLETED', 'CANCELLED',
+  'DRAFT', 'SUBMITTED', 'ADMIN_REVIEW', 'CONFIRMED', 'PO_SENT', 'REFINERY_BOOKED', 'WAITING_PAYMENT',
+  'PAID', 'PICKUP_READY', 'DELIVERING', 'DOCS_SENT', 'DELIVERED', 'COMPLETED', 'CANCELLED',
 ] as const;
 
 export const RECEIVE_METHODS = ['DELIVER_BY_TRUCK', 'PICKUP_BY_TRUCK', 'PICKUP_BY_BARGE', 'ARRANGE_TRANSPORT'] as const;
@@ -56,3 +56,18 @@ export const orderPatchSchema = orderBodySchema.partial().extend({
 
 export type OrderBodyInput = z.infer<typeof orderBodySchema>;
 export type OrderPatchInput = z.infer<typeof orderPatchSchema>;
+
+/** ISO datetime, or '' → undefined (defaults to now on the server). */
+const optionalDateTime = z.preprocess(
+  (v) => (v === '' || v == null ? undefined : v),
+  z.string().datetime({ offset: true, message: 'รูปแบบวันเวลาไม่ถูกต้อง' }).optional(),
+);
+
+/** Payload for recording a delivery (บันทึกการส่งของ). */
+export const deliveryRecordSchema = z.object({
+  delivered_at: optionalDateTime,
+  delivery_receiver_name: optionalText(200),
+  delivery_record_note: optionalText(1000),
+});
+
+export type DeliveryRecordInput = z.infer<typeof deliveryRecordSchema>;

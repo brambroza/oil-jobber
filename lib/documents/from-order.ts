@@ -2,6 +2,7 @@ import { supabaseAdmin } from '@/lib/supabase/server';
 import { loadSalesUserNames, loadStaffSignatures } from '@/lib/services/order-items';
 import { round2, splitVat, VAT_MULTIPLIER } from '@/lib/services/order-pricing';
 import { receiveMethodThai } from '@/lib/documents/format';
+import { foldDeliveryFeeIntoItems } from '@/lib/documents/fold-delivery-fee';
 import type { OrderDocumentData, SellerInfo, DocumentItem, PaymentLine, ReceiptDocumentData } from '@/lib/documents/types';
 
 /** Seller block for documents, from the `companies` row. */
@@ -40,8 +41,8 @@ export async function loadOrderDocumentData(companyId: string, orderId: string):
 
   const [seller, salesNames, salesSignatures, paymentsRes, invoiceRes] = await Promise.all([
     loadSellerInfo(companyId),
-    loadSalesUserNames(companyId, [order.sales_user_id, order.approved_by]),
-    loadStaffSignatures(companyId, [order.sales_user_id, order.approved_by]),
+    loadSalesUserNames(companyId, [order.sales_user_id, order.approved_by, order.delivery_recorded_by]),
+    loadStaffSignatures(companyId, [order.sales_user_id, order.approved_by, order.delivery_recorded_by]),
     supabaseAdmin
       .from('payment_transactions')
       .select('id, paid_at, amount, payment_method, reference_no, note, receipt_id')
@@ -94,8 +95,15 @@ export async function loadOrderDocumentData(companyId: string, orderId: string):
   const discountIncl = Math.min(grossBefore, Math.max(0, Number(order.discount_amount || 0)));
   const netIncl = round2(grossBefore - discountIncl);
   const { subtotal, vat } = splitVat(netIncl);
-  const feeExVat = round2(feeIncl / VAT_MULTIPLIER);
   const discountExVat = round2(discountIncl / VAT_MULTIPLIER);
+
+  // เอกสารลูกค้าไม่แยกบรรทัดค่าขนส่ง: เฉลี่ยค่าขนส่งต่อลิตรเข้าราคาขายของทุกรายการแทน
+  const feePerLiterIncl = round2(
+    Number(order.delivery_fee_std_per_liter || 0)
+    + Number(order.delivery_fee_surcharge_per_liter || 0)
+    + Number(order.delivery_fee_adjust_per_liter || 0),
+  );
+  const printedItems = foldDeliveryFeeIntoItems(items, feeIncl, feePerLiterIncl);
 
   const payments: PaymentLine[] = (paymentsRes.data ?? []).map((p) => ({
     paid_at: p.paid_at,
@@ -138,24 +146,21 @@ export async function loadOrderDocumentData(companyId: string, orderId: string):
       tax_id: customer?.tax_id ?? null,
       phone: customer?.phone ?? null,
     },
-    items,
+    items: printedItems,
     totals: {
       total_liters: totalLiters,
-      goods_incl_vat: goodsIncl,
-      delivery_fee_incl_vat: feeIncl,
-      delivery_fee_per_liter: round2(
-        Number(order.delivery_fee_std_per_liter || 0)
-        + Number(order.delivery_fee_surcharge_per_liter || 0)
-        + Number(order.delivery_fee_adjust_per_liter || 0),
-      ),
+      // ค่าขนส่งถูกเฉลี่ยเข้าราคาต่อลิตรแล้ว จึงนับรวมใน goods และไม่แยกบรรทัดค่าขนส่งในเอกสาร
+      goods_incl_vat: grossBefore,
+      delivery_fee_incl_vat: 0,
+      delivery_fee_per_liter: 0,
       gross_before_discount: grossBefore,
       discount_incl_vat: discountIncl,
       discount_ex_vat: discountExVat,
       net_incl_vat: netIncl,
       subtotal_ex_vat: subtotal,
       vat,
-      goods_ex_vat: round2(goodsIncl / VAT_MULTIPLIER),
-      delivery_fee_ex_vat: feeExVat,
+      goods_ex_vat: round2(grossBefore / VAT_MULTIPLIER),
+      delivery_fee_ex_vat: 0,
     },
     remark: order.remark ?? null,
     discount_note: order.discount_note ?? null,
@@ -166,6 +171,16 @@ export async function loadOrderDocumentData(companyId: string, orderId: string):
       : null,
     invoice: invoiceRes.data
       ? { invoice_no: invoiceRes.data.invoice_no, issued_at: invoiceRes.data.issued_at, due_date: invoiceRes.data.due_date, status: invoiceRes.data.status }
+      : null,
+    delivery: order.delivered_at && order.delivery_record_no
+      ? {
+        record_no: order.delivery_record_no,
+        delivered_at: order.delivered_at,
+        receiver_name: order.delivery_receiver_name ?? null,
+        note: order.delivery_record_note ?? null,
+        recorded_by_name: order.delivery_recorded_by ? salesNames.get(order.delivery_recorded_by) ?? null : null,
+        recorded_by_signature: order.delivery_recorded_by ? salesSignatures.get(order.delivery_recorded_by) ?? null : null,
+      }
       : null,
     payments,
     paid_amount: paidAmount,

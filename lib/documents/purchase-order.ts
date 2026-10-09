@@ -58,9 +58,9 @@ export function buildPurchaseOrderPdf(data: OrderDocumentData): TDocumentDefinit
         body: [[{
           stack: [
             { text: [{ text: 'วิธีรับสินค้า: ', bold: true }, data.receive_method_label, data.delivery_location ? `   สถานที่ส่ง: ${data.delivery_location}` : ''] },
+            data.remark ? { text: [{ text: 'หมายเหตุ: ', bold: true }, data.remark] } : '',
             data.vehicle ? { text: [{ text: 'รถรับสินค้า: ', bold: true }, `${data.vehicle.license_plate || '-'}${data.vehicle.driver_name ? ` คนขับ ${data.vehicle.driver_name}` : ''}${data.vehicle.driver_phone ? ` โทร ${data.vehicle.driver_phone}` : ''}`] } : '',
             data.customer_po_no ? { text: [{ text: 'อ้างอิง PO ลูกค้า: ', bold: true }, data.customer_po_no] } : '',
-            data.remark ? { text: [{ text: 'หมายเหตุ: ', bold: true }, data.remark] } : '',
           ],
           margin: [8, 6, 8, 6],
           fillColor: '#fafafe',
