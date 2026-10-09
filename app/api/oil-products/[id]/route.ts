@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
+import { requireStaff } from '@/lib/auth/api-guard';
 import { supabaseAdmin } from '@/lib/supabase/server';
-import { resolveCompanyId } from '@/lib/supabase/company';
 
 function normalizeCode(code: string): string {
   return code.trim().toUpperCase().replace(/\s+/g, '_');
@@ -17,9 +17,11 @@ function isUuid(value: string): boolean {
 }
 
 export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
+  const guard = await requireStaff('settings');
+  if (guard.response) return guard.response;
   const { id } = await params;
   const body = await req.json();
-  const companyId = resolveCompanyId(body.company_id);
+  const companyId = guard.ctx.companyId;
   const code = normalizeCode(String(body.code ?? ''));
   const name = String(body.name ?? '').trim();
   const isActive = Boolean(body.is_active ?? true);
@@ -55,6 +57,8 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
 }
 
 export async function DELETE(_: NextRequest, { params }: { params: Promise<{ id: string }> }) {
+  const guard = await requireStaff('settings');
+  if (guard.response) return guard.response;
   const { id } = await params;
   const { error } = await supabaseAdmin
     .from('oil_products')

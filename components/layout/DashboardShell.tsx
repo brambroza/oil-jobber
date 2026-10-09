@@ -26,6 +26,7 @@ import {
   ChevronRight,
   DashboardOutlined,
   LocalShippingOutlined,
+  DrawOutlined,
   LogoutOutlined,
   Menu as MenuIcon,
   NotificationsNoneOutlined,
@@ -38,38 +39,42 @@ import {
   StoreOutlined,
   TagOutlined,
   TextsmsOutlined,
+  AssessmentOutlined,
 } from '@mui/icons-material';
 import { getSupabaseClient } from '@/lib/supabase/client';
+import { canAccess, type AppModule } from '@/lib/auth/permissions';
+import { CurrentUserProvider, type CurrentUser } from '@/components/layout/CurrentUserProvider';
+import MySignatureDialog from '@/components/common/MySignatureDialog';
 
-type MenuItem = { label: string; href: string; icon: ReactNode; badge?: string };
+type MenuItem = { label: string; href: string; icon: ReactNode; module: AppModule };
 type MenuGroup = { title: string; items: MenuItem[] };
 
-type MeProfile = { full_name: string | null; avatar_url: string | null } | null;
 type OrderNotification = { id: string; created_at: string; order_status: string; customer_name: string };
 
 const menuGroups: MenuGroup[] = [
   {
     title: 'หลัก',
     items: [
-      { label: 'แดชบอร์ด', href: '/dashboard', icon: <DashboardOutlined fontSize='small' /> },
-      { label: 'ราคาน้ำมัน อ่านจากภาพ', href: '/dashboard/prices/ocr-upload', icon: <ScannerOutlined fontSize='small' />, badge: '2' },
-      { label: 'ข้อมูลน้ำมัน', href: '/dashboard/oil-products', icon: <TagOutlined fontSize='small' /> },
-      { label: 'ราคาน้ำมัน', href: '/dashboard/prices', icon: <TagOutlined fontSize='small' /> },
+      { label: 'แดชบอร์ด', href: '/dashboard', icon: <DashboardOutlined fontSize='small' />, module: 'dashboard' },
+      { label: 'ราคาน้ำมัน อ่านจากภาพ', href: '/dashboard/prices/ocr-upload', icon: <ScannerOutlined fontSize='small' />, module: 'ocr' },
+      { label: 'ข้อมูลน้ำมัน', href: '/dashboard/oil-products', icon: <TagOutlined fontSize='small' />, module: 'settings' },
+      { label: 'ราคาน้ำมัน', href: '/dashboard/prices', icon: <TagOutlined fontSize='small' />, module: 'prices' },
     /*   { label: 'แจ้งราคา LINE', href: '/dashboard/line/broadcast-price', icon: <CampaignOutlined fontSize='small' /> }, */
-      { label: 'แสดงราคาขาย', href: '/dashboard/selling-prices', icon: <PriceCheckOutlined fontSize='small' /> },
+      { label: 'แสดงราคาขาย', href: '/dashboard/selling-prices', icon: <PriceCheckOutlined fontSize='small' />, module: 'prices' },
 
     ],
   },
   {
     title: 'ปฏิบัติการ',
     items: [
-      { label: 'ใบสั่งซื้อ', href: '/dashboard/orders', icon: <ReceiptLongOutlined fontSize='small' />, badge: '7' },
-      { label: 'บัญชี', href: '/dashboard/accounting', icon: <RequestQuoteOutlined fontSize='small' /> },
+      { label: 'ใบสั่งซื้อ', href: '/dashboard/orders', icon: <ReceiptLongOutlined fontSize='small' />, module: 'orders' },
+      { label: 'บัญชี', href: '/dashboard/accounting', icon: <RequestQuoteOutlined fontSize='small' />, module: 'accounting' },
 
-      { label: 'ลูกค้า', href: '/dashboard/customers', icon: <PeopleOutline fontSize='small' /> },
-      { label: 'รถขนส่ง', href: '/dashboard/customer-vehicles', icon: <LocalShippingOutlined fontSize='small' /> },
-      { label: 'โรงกลั่น', href: '/dashboard/refineries', icon: <StoreOutlined fontSize='small' /> },
-      { label: 'คลังน้ำมัน', href: '/dashboard/depots', icon: <StoreOutlined fontSize='small' /> },
+      { label: 'ลูกค้า', href: '/dashboard/customers', icon: <PeopleOutline fontSize='small' />, module: 'customers' },
+      { label: 'รายงานการขาย', href: '/dashboard/reports', icon: <AssessmentOutlined fontSize='small' />, module: 'reports' },
+      { label: 'รถขนส่ง', href: '/dashboard/customer-vehicles', icon: <LocalShippingOutlined fontSize='small' />, module: 'vehicles' },
+      { label: 'โรงกลั่น', href: '/dashboard/refineries', icon: <StoreOutlined fontSize='small' />, module: 'refineries' },
+      { label: 'คลังน้ำมัน', href: '/dashboard/depots', icon: <StoreOutlined fontSize='small' />, module: 'depots' },
     ],
   },
 
@@ -77,16 +82,17 @@ const menuGroups: MenuGroup[] = [
     title: 'LINE',
     items: [
       /*     { label: 'ลูกค้า LINE', href: '/dashboard/line/customers', icon: <TextsmsOutlined fontSize='small' /> }, */
-      { label: 'ส่งข่าวสาร LINE', href: '/dashboard/line/news', icon: <CampaignOutlined fontSize='small' /> },
-      { label: 'แชท LINE', href: '/dashboard/line/chat', icon: <TextsmsOutlined fontSize='small' /> },
+      { label: 'ส่งข่าวสาร LINE', href: '/dashboard/line/news', icon: <CampaignOutlined fontSize='small' />, module: 'line' },
+      { label: 'แชท LINE', href: '/dashboard/line/chat', icon: <TextsmsOutlined fontSize='small' />, module: 'line' },
     ],
   },
   {
     title: 'ระบบ',
     items: [
-      { label: 'กำหนดราคาขาย', href: '/dashboard/settings/selling-prices', icon: <SettingsOutlined fontSize='small' /> },
+      { label: 'กำหนดราคาขาย', href: '/dashboard/settings/selling-prices', icon: <SettingsOutlined fontSize='small' />, module: 'settings' },
+      { label: 'ข้อมูลบริษัท', href: '/dashboard/settings/company', icon: <SettingsOutlined fontSize='small' />, module: 'settings' },
       /*    { label: 'ตั้งค่ากฎราคา', href: '/dashboard/settings/price-rules', icon: <SettingsOutlined fontSize='small' /> }, */
-      { label: 'โปรไฟล์ผู้ใช้', href: '/dashboard/users', icon: <PeopleOutline fontSize='small' /> },
+      { label: 'โปรไฟล์ผู้ใช้', href: '/dashboard/users', icon: <PeopleOutline fontSize='small' />, module: 'users' },
     ],
   },
 ];
@@ -94,43 +100,28 @@ const menuGroups: MenuGroup[] = [
 const drawerWidth = 240;
 const topbarHeight = 56;
 
-export default function DashboardShell({ children }: { children: ReactNode }) {
+export default function DashboardShell({ children, currentUser }: { children: ReactNode; currentUser: CurrentUser }) {
   const pathname = usePathname();
-  const companyId = process.env.NEXT_PUBLIC_DEFAULT_COMPANY_ID ?? '';
+  const companyId = currentUser.companyId;
   const [mobileOpen, setMobileOpen] = useState(false);
-  const [userLabel, setUserLabel] = useState('ผู้ใช้');
-  const [avatarUrl, setAvatarUrl] = useState<string | null>(null);
+  const userLabel = currentUser.fullName || currentUser.email || 'ผู้ใช้';
+  const avatarUrl = currentUser.avatarUrl;
+  const role = currentUser.role;
+  const visibleGroups = useMemo(
+    () => menuGroups
+      .map((group) => ({ ...group, items: group.items.filter((item) => canAccess(role, item.module)) }))
+      .filter((group) => group.items.length > 0),
+    [role],
+  );
   const [anchorEl, setAnchorEl] = useState<null | HTMLElement>(null);
+  const [signatureOpen, setSignatureOpen] = useState(false);
   const [notifAnchorEl, setNotifAnchorEl] = useState<null | HTMLElement>(null);
   const [unreadCount, setUnreadCount] = useState(0);
+  const [pendingOrders, setPendingOrders] = useState(0);
   const [notifications, setNotifications] = useState<OrderNotification[]>([]);
+  /** Per-user key so staff sharing one browser keep separate "last seen" markers. */
+  const lastSeenKey = companyId ? `orders_notif_last_seen_${companyId}_${currentUser.userId}` : '';
 
-  useEffect(() => {
-    let mounted = true;
-
-    const loadUser = async () => {
-      const supabaseClient = getSupabaseClient();
-      const { data } = await supabaseClient.auth.getUser();
-      const user = data.user;
-      if (!mounted || !user) return;
-
-      const fromMeta = (user.user_metadata?.full_name as string | undefined) || user.email || 'ผู้ใช้';
-      setUserLabel(fromMeta);
-
-      const profileRes = await fetch(`/api/users-profile/me?user_id=${user.id}`);
-      if (!profileRes.ok) return;
-      const profile = (await profileRes.json()) as MeProfile;
-
-      if (!mounted || !profile) return;
-      if (profile.full_name) setUserLabel(profile.full_name);
-      if (profile.avatar_url) setAvatarUrl(profile.avatar_url);
-    };
-
-    void loadUser();
-    return () => {
-      mounted = false;
-    };
-  }, []);
 
   const avatarText = useMemo(() => {
     const trimmed = userLabel.trim();
@@ -141,13 +132,14 @@ export default function DashboardShell({ children }: { children: ReactNode }) {
   }, [userLabel]);
 
   const currentPage = useMemo(() => {
-    for (const g of menuGroups) {
+    let best: { label: string; href: string } | null = null;
+    for (const g of visibleGroups) {
       for (const item of g.items) {
-        if (pathname === item.href || pathname.startsWith(item.href + '/')) return item.label;
+        if ((pathname === item.href || pathname.startsWith(item.href + '/')) && (!best || item.href.length > best.href.length)) best = item;
       }
     }
-    return 'แดชบอร์ด';
-  }, [pathname]);
+    return best?.label ?? 'แดชบอร์ด';
+  }, [pathname, visibleGroups]);
 
   const onLogout = async () => {
     const supabaseClient = getSupabaseClient();
@@ -160,31 +152,28 @@ export default function DashboardShell({ children }: { children: ReactNode }) {
   const openNotifMenu = async (event: React.MouseEvent<HTMLElement>) => {
     setNotifAnchorEl(event.currentTarget);
     setUnreadCount(0);
-    if (companyId) {
-      const key = `orders_notif_last_seen_${companyId}`;
-      localStorage.setItem(key, new Date().toISOString());
-    }
+    if (lastSeenKey) localStorage.setItem(lastSeenKey, new Date().toISOString());
   };
   const closeNotifMenu = () => setNotifAnchorEl(null);
 
   useEffect(() => {
-    if (!companyId) return;
-    const key = `orders_notif_last_seen_${companyId}`;
+    if (!lastSeenKey) return;
     const fetchNotifs = async () => {
-      const since = localStorage.getItem(key) || '';
-      const qs = since ? `&since=${encodeURIComponent(since)}` : '';
-      const res = await fetch(`/api/orders/notifications?company_id=${companyId}${qs}`);
+      const since = localStorage.getItem(lastSeenKey) || '';
+      const qs = since ? `?since=${encodeURIComponent(since)}` : '';
+      const res = await fetch(`/api/orders/notifications${qs}`);
       if (!res.ok) return;
       const data = await res.json();
       const items = (data.items || []) as OrderNotification[];
       setNotifications(items);
       setUnreadCount(Number(data.unread_count || 0));
+      setPendingOrders(Number(data.pending_count || 0));
     };
 
     void fetchNotifs();
     const timer = setInterval(() => void fetchNotifs(), 15000);
     return () => clearInterval(timer);
-  }, [companyId]);
+  }, [lastSeenKey]);
 
   const sidebar = (
     <Box sx={{ height: '100%', bgcolor: '#ffffff' }}>
@@ -197,7 +186,7 @@ export default function DashboardShell({ children }: { children: ReactNode }) {
       </Box>
       <Divider sx={{ borderColor: '#eef2f7' }} />
       <List dense sx={{ py: 1 }}>
-        {menuGroups.map((group) => (
+        {visibleGroups.map((group) => (
           <Box key={group.title} sx={{ mb: 0.5 }}>
             <Typography sx={{ px: 2, py: 0.7, fontSize: 10, letterSpacing: '.08em', color: 'text.disabled' }}>{group.title}</Typography>
             {group.items.map((item) => {
@@ -223,9 +212,9 @@ export default function DashboardShell({ children }: { children: ReactNode }) {
                     primary={item.label}
                     primaryTypographyProps={{ fontSize: 13, fontWeight: selected ? 600 : 400, noWrap: true }}
                   />
-                  {item.badge ? (
-                    <Box sx={{ ml: 1, px: 0.8, py: 0.2, borderRadius: 4, bgcolor: item.label.includes('OCR') ? '#fff7ed' : '#fee2e2', color: item.label.includes('OCR') ? '#b45309' : '#991b1b', fontSize: 10, fontWeight: 600 }}>
-                      {item.badge}
+                  {item.module === 'orders' && pendingOrders > 0 ? (
+                    <Box sx={{ ml: 1, px: 0.8, py: 0.2, borderRadius: 4, bgcolor: '#fee2e2', color: '#991b1b', fontSize: 10, fontWeight: 600 }}>
+                      {pendingOrders > 99 ? '99+' : pendingOrders}
                     </Box>
                   ) : null}
                 </ListItemButton>
@@ -272,16 +261,18 @@ export default function DashboardShell({ children }: { children: ReactNode }) {
             <Typography sx={{ fontSize: 12, fontWeight: 600 }}>{currentPage}</Typography>
           </Stack>
           <Box sx={{ ml: 'auto', display: 'flex', gap: 1, alignItems: 'center' }}>
-            <Button
-              size='small'
-              variant='outlined'
-              startIcon={<ScannerOutlined sx={{ fontSize: 14 }} />}
-              sx={{ fontSize: 12, borderRadius: 1.5, textTransform: 'none' }}
-              component={Link}
-              href='/dashboard/prices/ocr-upload'
-            >
-              อัปโหลด OCR
-            </Button>
+            {canAccess(role, 'ocr') ? (
+              <Button
+                size='small'
+                variant='outlined'
+                startIcon={<ScannerOutlined sx={{ fontSize: 14 }} />}
+                sx={{ fontSize: 12, borderRadius: 1.5, textTransform: 'none' }}
+                component={Link}
+                href='/dashboard/prices/ocr-upload'
+              >
+                อัปโหลด OCR
+              </Button>
+            ) : null}
             {/*    <Button
               size='small'
               variant='contained'
@@ -352,13 +343,22 @@ export default function DashboardShell({ children }: { children: ReactNode }) {
                 <Typography variant='body2' sx={{ fontWeight: 600 }} noWrap>{userLabel}</Typography>
               </Box>
               <Divider />
+              {canAccess(role, 'users') ? (
+                <MenuItem
+                  component={Link}
+                  href='/dashboard/users'
+                  onClick={closeProfileMenu}
+                  sx={{ fontSize: 13 }}
+                >
+                  โปรไฟล์
+                </MenuItem>
+              ) : null}
               <MenuItem
-                component={Link}
-                href='/dashboard/users'
-                onClick={closeProfileMenu}
+                onClick={() => { closeProfileMenu(); setSignatureOpen(true); }}
                 sx={{ fontSize: 13 }}
               >
-                โปรไฟล์
+                <DrawOutlined sx={{ fontSize: 16, mr: 1 }} />
+                ลายเซ็นของฉัน
               </MenuItem>
               <MenuItem
                 onClick={async () => {
@@ -410,7 +410,8 @@ export default function DashboardShell({ children }: { children: ReactNode }) {
           pl: { md: 'var(--dashboard-drawer-width)' },
         }}
       >
-        <Box sx={{ p: { xs: 1.5, md: 2.5 }, maxWidth: '100%', overflowX: 'hidden' }}>{children}</Box>
+        <Box sx={{ p: { xs: 1.5, md: 2.5 }, maxWidth: '100%', overflowX: 'hidden' }}><CurrentUserProvider value={currentUser}>{children}      <MySignatureDialog open={signatureOpen} onClose={() => setSignatureOpen(false)} />
+    </CurrentUserProvider></Box>
       </Box>
     </Box>
   );

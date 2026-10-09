@@ -1,7 +1,10 @@
 import { NextRequest, NextResponse } from 'next/server';
+import { requireStaff } from '@/lib/auth/api-guard';
 import { supabaseAdmin } from '@/lib/supabase/server';
 
 export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
+  const guard = await requireStaff('refineries');
+  if (guard.response) return guard.response;
   const { id } = await params;
   const body = await req.json();
 
@@ -22,6 +25,8 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
 }
 
 export async function DELETE(_: NextRequest, { params }: { params: Promise<{ id: string }> }) {
+  const guard = await requireStaff('refineries');
+  if (guard.response) return guard.response;
   const { id } = await params;
   const { error } = await supabaseAdmin
     .from('refineries')

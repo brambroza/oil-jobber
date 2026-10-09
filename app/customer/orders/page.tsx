@@ -41,6 +41,7 @@ import {
 } from '@mui/material';
 import Link from 'next/link';
 import CustomerShell from '@/components/layout/CustomerShell';
+import { computeDeliveryFeeAmount, computeUnitPrice } from '@/lib/services/order-pricing';
 
 type OrderRow = {
   id: string;
@@ -59,6 +60,8 @@ type OrderRow = {
 type PriceHome = {
   customer: {
     credit_limit: number;
+    price_adjustment_per_liter?: number;
+    sales_fee_per_liter?: number;
   };
   credit: {
     used_credit: number;
@@ -66,6 +69,8 @@ type PriceHome = {
   access?: {
     depot_transport_fees?: Record<string, number>;
   } | null;
+  /** ค่าขนส่งเพิ่มส่วนกลาง บาท/ลิตร (บวกเมื่อจัดส่ง) */
+  delivery_fee_surcharge_per_liter?: number;
   rounds: Array<{ id: string; refinery_id: string | null; refineries?: { name?: string } | null }>;
   allowedPaymentConditions?: Array<{
     id: string;
@@ -230,7 +235,10 @@ export default function CustomerOrdersPage() {
   const [vehicles, setVehicles] = useState<CustomerVehicle[]>([]);
   const [paymentOptions, setPaymentOptions] = useState<PaymentOption[]>([]);
   const [depotTransportFees, setDepotTransportFees] = useState<Record<string, number>>({});
+  /** ค่าขนส่งเพิ่มส่วนกลางของบริษัท (บาท/ลิตร) บวกทับค่าขนส่งของคลังเมื่อจัดส่ง */
+  const [deliveryFeeSurcharge, setDeliveryFeeSurcharge] = useState(0);
   const [creditLimit, setCreditLimit] = useState(0);
+  const [priceAdjust, setPriceAdjust] = useState(0);
   const [usedCredit, setUsedCredit] = useState(0);
   const [editingOriginalAmount, setEditingOriginalAmount] = useState(0);
   const [depotChoicesByProduct, setDepotChoicesByProduct] = useState<Record<string, DepotChoice[]>>({});
@@ -271,10 +279,23 @@ export default function CustomerOrdersPage() {
 
   const selectedCount = useMemo(() => form.items.filter((x) => x.selected && x.liters > 0).length, [form.items]);
   const totalLiters = useMemo(() => form.items.filter((x) => x.selected).reduce((s, x) => s + Number(x.liters || 0), 0), [form.items]);
-  const totalAmount = useMemo(
+  const goodsAmount = useMemo(
     () => form.items.filter((x) => x.selected).reduce((s, x) => s + Number(x.liters || 0) * Number(x.unit_price || 0), 0),
     [form.items],
   );
+  const deliveryFeeAmount = useMemo(() => {
+    if (form.receive_method === 'PICKUP_BY_TRUCK') return 0;
+    return computeDeliveryFeeAmount(Number(depotTransportFees[form.selected_depot_id] || 0), 0, totalLiters, deliveryFeeSurcharge);
+  }, [deliveryFeeSurcharge, depotTransportFees, form.receive_method, form.selected_depot_id, totalLiters]);
+  const totalAmount = useMemo(() => goodsAmount + deliveryFeeAmount, [goodsAmount, deliveryFeeAmount]);
+  /** ค่าขนส่งต่อลิตรที่ "แสดง" (คลัง + ส่วนกลาง) รวมในราคาต่อลิตรให้ลูกค้าเห็นแบบเดิม (ฐานข้อมูลเก็บแยก) */
+  const displayFeePerLiter = useMemo(
+    () => (form.receive_method === 'PICKUP_BY_TRUCK'
+      ? 0
+      : Number(depotTransportFees[form.selected_depot_id] || 0) + Number(deliveryFeeSurcharge || 0)),
+    [deliveryFeeSurcharge, depotTransportFees, form.receive_method, form.selected_depot_id],
+  );
+  const displayUnitPrice = (unitPrice: number) => Number(unitPrice || 0) + displayFeePerLiter;
   const creditAvailableForCurrentOrder = useMemo(
     () => Math.max(0, Number(creditLimit || 0) - Number(usedCredit || 0) + Number(editingOriginalAmount || 0)),
     [creditLimit, editingOriginalAmount, usedCredit],
@@ -287,9 +308,10 @@ export default function CustomerOrdersPage() {
     if (!form.selected_depot_id) return null;
     return depotOptions.find((d) => d.depot_id === form.selected_depot_id) || null;
   }, [depotOptions, form.selected_depot_id]);
+  /** ค่าขนส่งต่อลิตรรวม (คลัง + ส่วนกลาง) สำหรับข้อความแจ้งลูกค้า */
   const selectedDepotTransportFee = useMemo(
-    () => Number(depotTransportFees[form.selected_depot_id] || 0),
-    [depotTransportFees, form.selected_depot_id],
+    () => Number(depotTransportFees[form.selected_depot_id] || 0) + Number(deliveryFeeSurcharge || 0),
+    [deliveryFeeSurcharge, depotTransportFees, form.selected_depot_id],
   );
   const visibleItemEntries = useMemo(() => {
     if (!form.selected_depot_id) return [] as Array<{ idx: number; item: FormItem }>;
@@ -309,20 +331,19 @@ export default function CustomerOrdersPage() {
     paymentConditionId: string,
     receiveMethod: string,
   ): FormItem[] => {
-    const depotTransportFee = receiveMethod === 'PICKUP_BY_TRUCK' ? 0 : Number(depotTransportFees[selectedDepotId] || 0);
-    const extra = paymentExtraById(paymentOptions, paymentConditionId) + depotTransportFee;
+    void receiveMethod;
+    const extra = paymentExtraById(paymentOptions, paymentConditionId);
     return items.map((it) => {
       const depotOpt = (depotChoicesByProduct[it.key] || []).find((d) => (d.depot_id || '') === selectedDepotId);
       const base = Number(depotOpt?.unit_price || 0);
-      const baseWithVat = base > 0 ? base * 1.07 : 0;
-      const nextUnitPrice = baseWithVat > 0 ? baseWithVat + extra : 0;
-
+      const nextUnitPrice = base > 0 ? computeUnitPrice(base, extra, priceAdjust) : 0;
 
       return {
         ...it,
         refinery_id: depotOpt?.refinery_id ?? it.refinery_id,
         depot_id: selectedDepotId || '',
-        unit_price: Number(nextUnitPrice.toFixed(2)),
+        base_cost_price: base,
+        unit_price: nextUnitPrice,
       };
     });
   };
@@ -375,8 +396,10 @@ export default function CustomerOrdersPage() {
     }
 
     setCreditLimit(Number(data.customer?.credit_limit || 0));
+    setPriceAdjust(Number(data.customer?.price_adjustment_per_liter || 0) + Number(data.customer?.sales_fee_per_liter || 0));
     setUsedCredit(Number(data.credit?.used_credit || 0));
     setDepotTransportFees(data.access?.depot_transport_fees || {});
+    setDeliveryFeeSurcharge(Number(data.delivery_fee_surcharge_per_liter || 0));
 
     const roundsById = new Map<string, { refinery_id: string | null; refinery_name: string }>(
       (data.rounds || []).map((r: any) => [r.id, { refinery_id: r.refinery_id ?? null, refinery_name: r.refineries?.name || '-' }]),
@@ -541,7 +564,8 @@ export default function CustomerOrdersPage() {
     const selectedDepotId = String(detail.sale_order_items?.find((x: any) => !x.is_deleted && x.depot_id)?.depot_id || '');
     const originalAmount = (detail.sale_order_items || [])
       .filter((x: any) => !x.is_deleted)
-      .reduce((sum: number, x: any) => sum + Number(x.amount ?? Number(x.liters || 0) * Number(x.unit_price || 0)), 0);
+      .reduce((sum: number, x: any) => sum + Number(x.amount ?? Number(x.liters || 0) * Number(x.unit_price || 0)), 0)
+      + Number(detail.delivery_fee_amount || 0);
     setEditingOriginalAmount(originalAmount);
     setForm({
       id: detail.id,
@@ -613,6 +637,7 @@ export default function CustomerOrdersPage() {
           product_name: x.product_name,
           liters: Number(x.liters),
           unit_price: Number(x.unit_price),
+          base_cost_price: Number((x as any).base_cost_price || 0) || null,
         })),
     };
 
@@ -1128,6 +1153,11 @@ export default function CustomerOrdersPage() {
                 ราคาต่อหน่วยรวมค่าขนส่งเพิ่ม {money(selectedDepotTransportFee)} บาท/ลิตร สำหรับคลังนี้
               </Alert>
             ) : null}
+            {priceAdjust < 0 ? (
+              <Alert severity='success' sx={{ mt: 1 }}>
+                ราคาต่อลิตรของคุณลดลง {money(Math.abs(priceAdjust))} บาท/ลิตร จากราคามาตรฐาน
+              </Alert>
+            ) : null}
           </Paper>
 
           <Paper sx={{ border: '1px solid #d7e0ea' }}>
@@ -1164,8 +1194,8 @@ export default function CustomerOrdersPage() {
                       </TableCell>
                       <TableCell>{it.product_code}</TableCell>
                       <TableCell>{it.product_name}</TableCell>
-                      <TableCell>{money(Number(it.unit_price || 0))}</TableCell>
-                      <TableCell>{money(Number(it.liters || 0) * Number(it.unit_price || 0))}</TableCell>
+                      <TableCell>{money(displayUnitPrice(it.unit_price))}</TableCell>
+                      <TableCell>{money(Number(it.liters || 0) * displayUnitPrice(it.unit_price))}</TableCell>
                       <TableCell>
                         <TextField
                           size='small'
@@ -1203,11 +1233,11 @@ export default function CustomerOrdersPage() {
                       <Typography sx={{ fontSize: 12.5, color: '#475569' }}>{it.product_name}</Typography>
                       <Stack direction='row' justifyContent='space-between' spacing={1}>
                         <Typography sx={{ fontSize: 12, color: '#64748b' }}>ราคาต่อลิตร</Typography>
-                        <Typography sx={{ fontSize: 12.5, fontWeight: 700 }}>{money(Number(it.unit_price || 0))}</Typography>
+                        <Typography sx={{ fontSize: 12.5, fontWeight: 700 }}>{money(displayUnitPrice(it.unit_price))}</Typography>
                       </Stack>
                       <Stack direction='row' justifyContent='space-between' spacing={1}>
                         <Typography sx={{ fontSize: 12, color: '#64748b' }}>จำนวนเงิน</Typography>
-                        <Typography sx={{ fontSize: 12.5, fontWeight: 700 }}>{money(Number(it.liters || 0) * Number(it.unit_price || 0))}</Typography>
+                        <Typography sx={{ fontSize: 12.5, fontWeight: 700 }}>{money(Number(it.liters || 0) * displayUnitPrice(it.unit_price))}</Typography>
                       </Stack>
                       <TextField
                         size='small'

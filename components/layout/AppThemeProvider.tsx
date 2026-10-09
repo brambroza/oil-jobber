@@ -80,6 +80,11 @@ const theme = createTheme({
     },
     MuiDrawer: {
       styleOverrides: {
+        // Slide-in (temporary) drawers must sit above the dashboard AppBar,
+        // which is raised to `zIndex.drawer + 1` to cover the permanent sidebar.
+        root: ({ ownerState, theme }) => (
+          ownerState.variant === 'temporary' ? { zIndex: theme.zIndex.modal } : {}
+        ),
         paper: {
           borderLeft: '1px solid #e5e7eb',
         },

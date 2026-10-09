@@ -1,12 +1,14 @@
 import { NextRequest, NextResponse } from 'next/server';
+import { requireStaff } from '@/lib/auth/api-guard';
 import { supabaseAdmin } from '@/lib/supabase/server';
-import { resolveCompanyId } from '@/lib/supabase/company';
 import { pushLineMessage } from '@/lib/services/line';
 
 export async function POST(req: NextRequest) {
+  const guard = await requireStaff('line');
+  if (guard.response) return guard.response;
   try {
     const body = await req.json();
-    const companyId = resolveCompanyId(body.company_id);
+    const companyId = guard.ctx.companyId;
     const lineCustomerId = String(body.line_customer_id ?? '').trim();
     const text = String(body.text ?? '').trim();
 

@@ -1,13 +1,15 @@
 import { NextRequest, NextResponse } from 'next/server';
+import { requireStaff } from '@/lib/auth/api-guard';
 import { supabaseAdmin } from '@/lib/supabase/server';
-import { resolveCompanyId } from '@/lib/supabase/company';
 
 function isUuid(value: string): boolean {
   return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(value);
 }
 
 export async function GET(req: NextRequest) {
-  const companyId = resolveCompanyId(req.nextUrl.searchParams.get('company_id'));
+  const guard = await requireStaff();
+  if (guard.response) return guard.response;
+  const companyId = guard.ctx.companyId;
   if (!companyId) return NextResponse.json({ error: 'กรุณาตั้งค่า company_id หรือ DEFAULT_COMPANY_ID' }, { status: 400 });
   if (!isUuid(companyId)) return NextResponse.json({ error: 'company_id ต้องเป็น UUID เท่านั้น' }, { status: 422 });
 
@@ -23,8 +25,10 @@ export async function GET(req: NextRequest) {
 }
 
 export async function POST(req: NextRequest) {
+  const guard = await requireStaff('refineries');
+  if (guard.response) return guard.response;
   const body = await req.json();
-  const companyId = resolveCompanyId(body.company_id);
+  const companyId = guard.ctx.companyId;
   const name = String(body.name ?? '').trim();
   const contactInfo = String(body.contact_info ?? '').trim() || null;
   const imageUrl = String(body.image_url ?? '').trim() || null;

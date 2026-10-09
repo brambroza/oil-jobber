@@ -1,7 +1,10 @@
 import { NextRequest, NextResponse } from 'next/server';
+import { requireStaff } from '@/lib/auth/api-guard';
 import { pushLineMessage } from '@/lib/services/line';
 
 export async function POST(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
+  const guard = await requireStaff('orders');
+  if (guard.response) return guard.response;
   const { id } = await params;
   const { lineUserId, bookingNo } = await req.json();
   await pushLineMessage(lineUserId, `ยืนยันคำสั่งซื้อ #${id} เลขจองโรงกลั่น: ${bookingNo}`);

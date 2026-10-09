@@ -1,9 +1,11 @@
 import { NextRequest, NextResponse } from 'next/server';
+import { requireStaff } from '@/lib/auth/api-guard';
 import { supabaseAdmin } from '@/lib/supabase/server';
-import { resolveCompanyId } from '@/lib/supabase/company';
 
 export async function GET(req: NextRequest) {
-  const companyId = resolveCompanyId(req.nextUrl.searchParams.get('company_id'));
+  const guard = await requireStaff('line');
+  if (guard.response) return guard.response;
+  const companyId = guard.ctx.companyId;
   const lineCustomerId = String(req.nextUrl.searchParams.get('line_customer_id') ?? '').trim();
   const limit = Number(req.nextUrl.searchParams.get('limit') ?? 200);
 

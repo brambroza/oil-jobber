@@ -1,12 +1,15 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { resolveCompanyId } from '@/lib/supabase/company';
+import { requireStaff } from '@/lib/auth/api-guard';
 import { supabaseAdmin } from '@/lib/supabase/server';
+import { loadDeliveryFeeSurcharge } from '@/lib/services/order-items';
+import { canAccessCustomer, customerForbidden } from '@/lib/services/customer-scope';
 
 type CustomerAccess = {
   allowed_refinery_ids?: string[] | null;
   allowed_depot_ids?: string[] | null;
   allowed_oil_product_ids?: string[] | null;
   allowed_payment_condition_ids?: string[] | null;
+  depot_transport_fees?: Record<string, unknown> | null;
 };
 
 function isUuid(value: string): boolean {
@@ -21,25 +24,30 @@ function normalizeTime(value: string | null | undefined, fallback: '00:00:00' | 
   return `${match[1]}:${match[2]}:${match[3] || '00'}`;
 }
 
+/**
+ * Price options for a customer: allowed refineries/depots/products with the
+ * current base cost, plus the customer's price adjustment and transport fees.
+ */
 export async function GET(req: NextRequest) {
-  const companyId = resolveCompanyId(req.nextUrl.searchParams.get('company_id'));
+  const guard = await requireStaff('orders');
+  if (guard.response) return guard.response;
+  const companyId = guard.ctx.companyId;
   const customerId = String(req.nextUrl.searchParams.get('customer_id') || '').trim();
 
-  if (!companyId) return NextResponse.json({ error: 'กรุณาระบุ company_id' }, { status: 422 });
-  if (!isUuid(companyId)) return NextResponse.json({ error: 'company_id ต้องเป็น UUID เท่านั้น' }, { status: 422 });
   if (!isUuid(customerId)) return NextResponse.json({ error: 'customer_id ต้องเป็น UUID เท่านั้น' }, { status: 422 });
+  if (!(await canAccessCustomer(guard.ctx, customerId))) return customerForbidden();
 
-  const [customerRes, accessRes, roundsRes, productsRes] = await Promise.all([
+  const [customerRes, accessRes, roundsRes, productsRes, surchargeRes] = await Promise.all([
     supabaseAdmin
       .from('customers')
-      .select('id')
+      .select('id, price_adjustment_per_liter, sales_fee_per_liter')
       .eq('id', customerId)
       .eq('company_id', companyId)
       .eq('is_deleted', false)
       .maybeSingle(),
     supabaseAdmin
       .from('customer_portal_access')
-      .select('allowed_refinery_ids, allowed_depot_ids, allowed_oil_product_ids, allowed_payment_condition_ids')
+      .select('allowed_refinery_ids, allowed_depot_ids, allowed_oil_product_ids, allowed_payment_condition_ids, depot_transport_fees')
       .eq('customer_id', customerId)
       .eq('company_id', companyId)
       .maybeSingle(),
@@ -56,6 +64,7 @@ export async function GET(req: NextRequest) {
       .select('id, code')
       .eq('company_id', companyId)
       .eq('is_deleted', false),
+    loadDeliveryFeeSurcharge(companyId),
   ]);
 
   if (customerRes.error) return NextResponse.json({ error: customerRes.error.message }, { status: 400 });
@@ -63,13 +72,26 @@ export async function GET(req: NextRequest) {
   if (accessRes.error) return NextResponse.json({ error: accessRes.error.message }, { status: 400 });
   if (roundsRes.error) return NextResponse.json({ error: roundsRes.error.message }, { status: 400 });
   if (productsRes.error) return NextResponse.json({ error: productsRes.error.message }, { status: 400 });
+  if ('error' in surchargeRes) return NextResponse.json({ error: surchargeRes.error }, { status: 400 });
+  const deliveryFeeSurcharge = surchargeRes.surcharge;
 
   const access = (accessRes.data ?? {
     allowed_refinery_ids: [],
     allowed_depot_ids: [],
     allowed_oil_product_ids: [],
     allowed_payment_condition_ids: [],
+    depot_transport_fees: {},
   }) as CustomerAccess;
+  const customerInfo = {
+    id: customerRes.data.id,
+    price_adjustment_per_liter: Number(customerRes.data.price_adjustment_per_liter || 0),
+    sales_fee_per_liter: Number(customerRes.data.sales_fee_per_liter || 0),
+  };
+  const deliveryFeeByDepot: Record<string, number> = {};
+  for (const [depotId, value] of Object.entries(access.depot_transport_fees ?? {})) {
+    const fee = Number(value || 0);
+    if (Number.isFinite(fee) && fee > 0) deliveryFeeByDepot[depotId] = fee;
+  }
   const allowedRefineryIds = access.allowed_refinery_ids ?? [];
   const allowedDepotIds = access.allowed_depot_ids ?? [];
   const allowedProductIds = access.allowed_oil_product_ids ?? [];
@@ -105,7 +127,15 @@ export async function GET(req: NextRequest) {
 
   const currentRounds = [...latestRoundByRefinery.values()];
   const roundIds = currentRounds.map((round) => String(round.id));
-  if (!roundIds.length) return NextResponse.json({ access, price_options: [] });
+  if (!roundIds.length) {
+    return NextResponse.json({
+      access,
+      customer: customerInfo,
+      delivery_fee_per_liter_by_depot: deliveryFeeByDepot,
+      delivery_fee_surcharge_per_liter: deliveryFeeSurcharge,
+      price_options: [],
+    });
+  }
 
   const { data: priceItems, error: priceItemsError } = await supabaseAdmin
     .from('oil_price_items')
@@ -139,5 +169,11 @@ export async function GET(req: NextRequest) {
     }];
   });
 
-  return NextResponse.json({ access, price_options: priceOptions });
+  return NextResponse.json({
+    access,
+    customer: customerInfo,
+    delivery_fee_per_liter_by_depot: deliveryFeeByDepot,
+    delivery_fee_surcharge_per_liter: deliveryFeeSurcharge,
+    price_options: priceOptions,
+  });
 }

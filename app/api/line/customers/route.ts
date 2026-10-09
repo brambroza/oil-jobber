@@ -1,9 +1,11 @@
 import { NextRequest, NextResponse } from 'next/server';
+import { requireStaff } from '@/lib/auth/api-guard';
 import { supabaseAdmin } from '@/lib/supabase/server';
-import { resolveCompanyId } from '@/lib/supabase/company';
 
 export async function GET(req: NextRequest) {
-  const companyId = resolveCompanyId(req.nextUrl.searchParams.get('company_id'));
+  const guard = await requireStaff();
+  if (guard.response) return guard.response;
+  const companyId = guard.ctx.companyId;
   if (!companyId) return NextResponse.json({ error: 'กรุณาตั้งค่า company_id หรือ DEFAULT_COMPANY_ID' }, { status: 400 });
 
   const selectFields = 'id, customer_id, line_user_id, group_id, conversation_key, display_name, profile_image_url, created_at, updated_at';

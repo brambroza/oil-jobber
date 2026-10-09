@@ -1,10 +1,12 @@
 import { NextRequest, NextResponse } from 'next/server';
+import { requireStaff } from '@/lib/auth/api-guard';
 import { supabaseAdmin } from '@/lib/supabase/server';
-import { resolveCompanyId } from '@/lib/supabase/company';
 
 export async function GET(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
+  const guard = await requireStaff();
+  if (guard.response) return guard.response;
   const { id } = await params;
-  const companyId = resolveCompanyId(req.nextUrl.searchParams.get('company_id'));
+  const companyId = guard.ctx.companyId;
   if (!companyId) return NextResponse.json({ error: 'กรุณาตั้งค่า company_id หรือ DEFAULT_COMPANY_ID' }, { status: 400 });
 
   const { data: base, error: baseErr } = await supabaseAdmin
@@ -31,9 +33,11 @@ export async function GET(req: NextRequest, { params }: { params: Promise<{ id: 
 }
 
 export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
+  const guard = await requireStaff('ocr');
+  if (guard.response) return guard.response;
   const { id } = await params;
   const body = await req.json();
-  const companyId = resolveCompanyId(body.company_id);
+  const companyId = guard.ctx.companyId;
   if (!companyId) return NextResponse.json({ error: 'กรุณาตั้งค่า company_id หรือ DEFAULT_COMPANY_ID' }, { status: 422 });
 
   const { effective_date, effective_time, expires_date, expires_time, refinery_id, rows: rawRows, remark } = body;
@@ -104,8 +108,10 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
 }
 
 export async function DELETE(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
+  const guard = await requireStaff('ocr');
+  if (guard.response) return guard.response;
   const { id } = await params;
-  const companyId = resolveCompanyId(req.nextUrl.searchParams.get('company_id'));
+  const companyId = guard.ctx.companyId;
   if (!companyId) return NextResponse.json({ error: 'กรุณาตั้งค่า company_id หรือ DEFAULT_COMPANY_ID' }, { status: 400 });
 
   const { error: baseErr } = await supabaseAdmin

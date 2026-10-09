@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
+import { requireStaff } from '@/lib/auth/api-guard';
 import { supabaseAdmin } from '@/lib/supabase/server';
-import { resolveCompanyId } from '@/lib/supabase/company';
+import { canAccessCustomer, customerForbidden } from '@/lib/services/customer-scope';
 
 function toUuidList(input: unknown): string[] {
   if (!Array.isArray(input)) return [];
@@ -21,10 +22,13 @@ function toTransportFeeMap(input: unknown): Record<string, number> {
 }
 
 export async function GET(req: NextRequest, { params }: { params: Promise<{ customerId: string }> }) {
+  const guard = await requireStaff('customers');
+  if (guard.response) return guard.response;
   const { customerId } = await params;
-  const companyId = resolveCompanyId(req.nextUrl.searchParams.get('company_id'));
+  const companyId = guard.ctx.companyId;
 
   if (!companyId) return NextResponse.json({ error: 'กรุณาระบุ company_id' }, { status: 422 });
+  if (!(await canAccessCustomer(guard.ctx, customerId))) return customerForbidden();
 
   const [accessRes, userRes] = await Promise.all([
     supabaseAdmin
@@ -56,11 +60,14 @@ export async function GET(req: NextRequest, { params }: { params: Promise<{ cust
 }
 
 export async function PATCH(req: NextRequest, { params }: { params: Promise<{ customerId: string }> }) {
+  const guard = await requireStaff('customers');
+  if (guard.response) return guard.response;
   const { customerId } = await params;
   const body = await req.json();
-  const companyId = resolveCompanyId(body.company_id);
+  const companyId = guard.ctx.companyId;
 
   if (!companyId) return NextResponse.json({ error: 'กรุณาระบุ company_id' }, { status: 422 });
+  if (!(await canAccessCustomer(guard.ctx, customerId))) return customerForbidden();
 
   const payload = {
     customer_id: customerId,

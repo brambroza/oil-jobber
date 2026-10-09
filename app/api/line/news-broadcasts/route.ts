@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
+import { requireStaff } from '@/lib/auth/api-guard';
 import { supabaseAdmin } from '@/lib/supabase/server';
-import { resolveCompanyId } from '@/lib/supabase/company';
 import { buildLineNewsFlex, sendLineNewsBroadcast } from '@/lib/services/line-news';
 
 function toRecipientRows(companyId: string, newsId: string, recipientIds: string[]) {
@@ -12,7 +12,9 @@ function toRecipientRows(companyId: string, newsId: string, recipientIds: string
 }
 
 export async function GET(req: NextRequest) {
-  const companyId = resolveCompanyId(req.nextUrl.searchParams.get('company_id'));
+  const guard = await requireStaff('line');
+  if (guard.response) return guard.response;
+  const companyId = guard.ctx.companyId;
   if (!companyId) return NextResponse.json({ error: 'กรุณาตั้งค่า company_id หรือ DEFAULT_COMPANY_ID' }, { status: 400 });
 
   const { data: broadcasts, error } = await supabaseAdmin
@@ -59,8 +61,10 @@ export async function GET(req: NextRequest) {
 }
 
 export async function POST(req: NextRequest) {
+  const guard = await requireStaff('line');
+  if (guard.response) return guard.response;
   const body = await req.json();
-  const companyId = resolveCompanyId(body.company_id);
+  const companyId = guard.ctx.companyId;
   if (!companyId) return NextResponse.json({ error: 'กรุณาตั้งค่า company_id หรือ DEFAULT_COMPANY_ID' }, { status: 400 });
 
   const seq = Number(body.seq || 0);

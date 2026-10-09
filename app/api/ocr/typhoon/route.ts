@@ -1,7 +1,10 @@
 import { NextRequest, NextResponse } from 'next/server';
+import { requireStaff } from '@/lib/auth/api-guard';
 import { callTyphoonOCR } from '@/lib/services/typhoon-ocr';
 
 export async function POST(req: NextRequest) {
+  const guard = await requireStaff('ocr');
+  if (guard.response) return guard.response;
   try {
     const { base64Image } = await req.json();
     if (!base64Image || typeof base64Image !== 'string') {

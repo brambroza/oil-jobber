@@ -1,8 +1,10 @@
 import { NextRequest, NextResponse } from 'next/server';
+import { requireStaff } from '@/lib/auth/api-guard';
 import { supabaseAdmin } from '@/lib/supabase/server';
-import { resolveCompanyId } from '@/lib/supabase/company';
 
 export async function POST(req: NextRequest) {
+  const guard = await requireStaff('ocr');
+  if (guard.response) return guard.response;
   const body = await req.json();
 
   // backward compatible mode
@@ -17,7 +19,7 @@ export async function POST(req: NextRequest) {
     return NextResponse.json(data);
   }
 
-  const companyId = resolveCompanyId(body.company_id);
+  const companyId = guard.ctx.companyId;
   const refineryId = String(body.refinery_id ?? '').trim();
   const effectiveDate = String(body.effective_date ?? '').trim(); // dd/MM/yyyy
   const effectiveTime = String(body.effective_time ?? '').trim(); // HH:mm

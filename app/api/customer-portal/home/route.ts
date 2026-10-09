@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server';
 import { createSupabaseServerClient } from '@/lib/supabase/server-client';
 import { supabaseAdmin } from '@/lib/supabase/server';
+import { loadDeliveryFeeSurcharge } from '@/lib/services/order-items';
 
 type AccessRow = {
   customer_id: string;
@@ -35,10 +36,10 @@ export async function GET() {
 
   const { customer_id: customerId, company_id: companyId } = portalUser;
 
-  const [customerRes, accessRes, creditRes] = await Promise.all([
+  const [customerRes, accessRes, creditRes, surchargeRes] = await Promise.all([
     supabaseAdmin
       .from('customers')
-      .select('id, company_name, credit_limit, status')
+      .select('id, company_name, credit_limit, status, price_adjustment_per_liter, sales_fee_per_liter')
       .eq('id', customerId)
       .eq('company_id', companyId)
       .eq('is_deleted', false)
@@ -50,11 +51,13 @@ export async function GET() {
       .eq('company_id', companyId)
       .maybeSingle(),
     supabaseAdmin.rpc('get_customer_credit_status', { p_customer: customerId }),
+    loadDeliveryFeeSurcharge(companyId),
   ]);
 
   if (customerRes.error) return NextResponse.json({ error: customerRes.error.message }, { status: 400 });
   if (accessRes.error) return NextResponse.json({ error: accessRes.error.message }, { status: 400 });
   if (creditRes.error) return NextResponse.json({ error: creditRes.error.message }, { status: 400 });
+  if ('error' in surchargeRes) return NextResponse.json({ error: surchargeRes.error }, { status: 400 });
 
   const access = (accessRes.data ?? {
     allowed_refinery_ids: [],
@@ -187,6 +190,8 @@ export async function GET() {
     },
     credit: (creditRes.data ?? [])[0] ?? null,
     access,
+    /** ค่าขนส่งเพิ่มส่วนกลาง บาท/ลิตร — LIFF บวกรวมเข้าราคาต่อลิตรที่แสดงเมื่อจัดส่ง */
+    delivery_fee_surcharge_per_liter: surchargeRes.surcharge,
     rounds: [...latestByRefinery.values()],
     items,
     allowedPaymentConditions,

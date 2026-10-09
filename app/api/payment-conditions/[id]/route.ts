@@ -1,7 +1,10 @@
 import { NextRequest, NextResponse } from 'next/server';
+import { requireStaff } from '@/lib/auth/api-guard';
 import { supabaseAdmin } from '@/lib/supabase/server';
 
 export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
+  const guard = await requireStaff('settings');
+  if (guard.response) return guard.response;
   const { id } = await params;
   const body = await req.json();
   const payload = {
@@ -17,6 +20,8 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
 }
 
 export async function DELETE(_: NextRequest, { params }: { params: Promise<{ id: string }> }) {
+  const guard = await requireStaff('settings');
+  if (guard.response) return guard.response;
   const { id } = await params;
   const { error } = await supabaseAdmin.from('payment_conditions').update({ is_deleted: true }).eq('id', id);
   if (error) return NextResponse.json({ error: error.message }, { status: 400 });

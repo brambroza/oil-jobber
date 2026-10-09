@@ -1,7 +1,19 @@
 import { NextRequest, NextResponse } from 'next/server';
+import { requireStaff } from '@/lib/auth/api-guard';
 import { supabaseAdmin } from '@/lib/supabase/server';
+import { canAccessCustomer, customerForbidden, isScopedRole } from '@/lib/services/customer-scope';
+import type { StaffContext } from '@/lib/auth/api-guard';
+
+/** SALES may only touch vehicles of their own customers. */
+async function canAccessVehicle(ctx: StaffContext, vehicleId: string): Promise<boolean> {
+  if (!isScopedRole(ctx.role)) return true;
+  const { data } = await supabaseAdmin.from('customer_vehicles').select('customer_id').eq('id', vehicleId).eq('company_id', ctx.companyId).maybeSingle();
+  return canAccessCustomer(ctx, data?.customer_id ?? null);
+}
 
 export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
+  const guard = await requireStaff('customers');
+  if (guard.response) return guard.response;
   const { id } = await params;
   const body = await req.json();
 
@@ -15,11 +27,14 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
 
   if (!payload.customer_id) return NextResponse.json({ error: 'กรุณาเลือกลูกค้า' }, { status: 422 });
   if (!payload.license_plate) return NextResponse.json({ error: 'กรุณาระบุทะเบียนรถ' }, { status: 422 });
+  if (!(await canAccessVehicle(guard.ctx, id))) return customerForbidden();
+  if (!(await canAccessCustomer(guard.ctx, payload.customer_id))) return customerForbidden();
 
   const { data, error } = await supabaseAdmin
     .from('customer_vehicles')
     .update(payload)
     .eq('id', id)
+    .eq('company_id', guard.ctx.companyId)
     .select('id, company_id, customer_id, license_plate, driver_name, driver_phone, pickup_license_number, created_at, updated_at, customers(company_name)')
     .single();
 
@@ -28,8 +43,11 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
 }
 
 export async function DELETE(_: NextRequest, { params }: { params: Promise<{ id: string }> }) {
+  const guard = await requireStaff('customers');
+  if (guard.response) return guard.response;
   const { id } = await params;
-  const { error } = await supabaseAdmin.from('customer_vehicles').update({ is_deleted: true }).eq('id', id);
+  if (!(await canAccessVehicle(guard.ctx, id))) return customerForbidden();
+  const { error } = await supabaseAdmin.from('customer_vehicles').update({ is_deleted: true }).eq('id', id).eq('company_id', guard.ctx.companyId);
   if (error) return NextResponse.json({ error: error.message }, { status: 400 });
   return NextResponse.json({ ok: true });
 }

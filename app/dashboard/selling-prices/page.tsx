@@ -518,6 +518,7 @@ export default function SellingPricesPage() {
             align: 'center',
             wrap: true,
             flex: 3,
+            scaling: true, 
           })),
         ],
       };

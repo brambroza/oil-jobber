@@ -1,19 +1,21 @@
 import { NextRequest, NextResponse } from 'next/server';
+import { requireStaff } from '@/lib/auth/api-guard';
 import { createSupabaseServerClient } from '@/lib/supabase/server-client';
 import { supabaseAdmin } from '@/lib/supabase/server';
-import { resolveCompanyId } from '@/lib/supabase/company';
 
 function sanitizeFileName(name: string) {
   return name.replace(/[^a-zA-Z0-9._-]/g, '_');
 }
 
 export async function POST(req: NextRequest) {
+  const guard = await requireStaff('line');
+  if (guard.response) return guard.response;
   const supabase = await createSupabaseServerClient();
   const { data: authData, error: authError } = await supabase.auth.getUser();
   if (authError || !authData.user) return NextResponse.json({ error: 'กรุณาเข้าสู่ระบบก่อนอัปโหลดรูปภาพ' }, { status: 401 });
 
   const form = await req.formData();
-  const companyId = resolveCompanyId(String(form.get('company_id') || ''));
+  const companyId = guard.ctx.companyId;
   const file = form.get('file');
   if (!companyId) return NextResponse.json({ error: 'ไม่พบ company_id' }, { status: 422 });
   if (!(file instanceof File) || !file.type.startsWith('image/')) return NextResponse.json({ error: 'กรุณาเลือกไฟล์ภาพ' }, { status: 422 });

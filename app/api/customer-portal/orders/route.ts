@@ -1,6 +1,8 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { createSupabaseServerClient } from '@/lib/supabase/server-client';
 import { supabaseAdmin } from '@/lib/supabase/server';
+import { enrichOrderItems, loadPricingContext, resolveDeliveryFeeStd, resolveDeliveryFeeSurcharge } from '@/lib/services/order-items';
+import { computeDeliveryFeeAmount } from '@/lib/services/order-pricing';
 
 async function resolvePortalContext() {
   const supabase = await createSupabaseServerClient();
@@ -112,7 +114,7 @@ export async function GET() {
 
   const { data, error } = await supabaseAdmin
     .from('sale_orders')
-    .select('id, order_no, order_status, delivery_location, due_date, refinery_booking_number, delivery_order_no, delivery_order_file_url, requested_delivery_date, customer_po_no, receive_method, customer_vehicle_id, vehicle_license_plate, vehicle_driver_name, vehicle_driver_phone, vehicle_pickup_license_number, created_at, sale_order_items(liters, amount)')
+    .select('id, order_no, order_status, delivery_location, due_date, refinery_booking_number, delivery_order_no, delivery_order_file_url, requested_delivery_date, customer_po_no, receive_method, customer_vehicle_id, vehicle_license_plate, vehicle_driver_name, vehicle_driver_phone, vehicle_pickup_license_number, delivery_fee_std_per_liter, delivery_fee_adjust_per_liter, delivery_fee_amount, discount_amount, remark, created_at, sale_order_items(liters, amount)')
     .eq('company_id', ctx.companyId)
     .eq('customer_id', ctx.customerId)
     .eq('is_deleted', false)
@@ -120,12 +122,19 @@ export async function GET() {
 
   if (error) return NextResponse.json({ error: error.message }, { status: 400 });
 
-  const rows = (data ?? []).map((r: any) => ({
-    ...r,
-    total_liters: (r.sale_order_items ?? []).reduce((s: number, x: any) => s + Number(x.liters || 0), 0),
-    total_amount: (r.sale_order_items ?? []).reduce((s: number, x: any) => s + Number(x.amount || 0), 0),
-    sale_order_items: undefined,
-  }));
+  const rows = (data ?? []).map((r: any) => {
+    const goodsAmount = (r.sale_order_items ?? []).reduce((s: number, x: any) => s + Number(x.amount || 0), 0);
+    const deliveryFee = Number(r.delivery_fee_amount || 0);
+    return {
+      ...r,
+      total_liters: (r.sale_order_items ?? []).reduce((s: number, x: any) => s + Number(x.liters || 0), 0),
+      goods_amount: goodsAmount,
+      delivery_fee_amount: deliveryFee,
+      discount_amount: Number(r.discount_amount || 0),
+      total_amount: Math.max(0, goodsAmount + deliveryFee - Number(r.discount_amount || 0)),
+      sale_order_items: undefined,
+    };
+  });
 
   return NextResponse.json(rows);
 }
@@ -151,22 +160,40 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: 'ไม่พบเงื่อนไขการชำระเงินที่เลือก' }, { status: 422 });
     }
   }
-  const payload = items
+  const rawItems = items
     .filter((x: any) => Number(x.liters || 0) > 0)
     .map((x: any) => ({
-      company_id: ctx.companyId,
       refinery_id: x.refinery_id || null,
       depot_id: x.depot_id || null,
       product_code: String(x.product_code ?? '').trim(),
       product_name: String(x.product_name ?? '').trim(),
       liters: Number(x.liters || 0),
       unit_price: Number(x.unit_price || 0),
+      base_cost_price: x.base_cost_price == null ? null : Number(x.base_cost_price),
     }));
 
-  if (!payload.length) return NextResponse.json({ error: 'กรุณากรอกปริมาณสินค้าอย่างน้อย 1 รายการ' }, { status: 422 });
-  const orderAmount = payload.reduce((sum: number, x: any) => sum + Number(x.liters || 0) * Number(x.unit_price || 0), 0);
+  if (!rawItems.length) return NextResponse.json({ error: 'กรุณากรอกปริมาณสินค้าอย่างน้อย 1 รายการ' }, { status: 422 });
+
+  const pricing = await loadPricingContext(ctx.companyId, ctx.customerId, paymentConditionId);
+  if ('error' in pricing) return NextResponse.json({ error: pricing.error }, { status: 422 });
+  const enriched = enrichOrderItems(rawItems, pricing.ctx);
+  if ('error' in enriched) return NextResponse.json({ error: enriched.error }, { status: 422 });
+  const payload = enriched.items.map((item) => ({ company_id: ctx.companyId, ...item }));
+
+  const receiveMethod = String(body.receive_method || 'DELIVER_BY_TRUCK');
+  const deliveryFeeStd = resolveDeliveryFeeStd(pricing.ctx, receiveMethod, payload);
+  const deliveryFeeSurcharge = resolveDeliveryFeeSurcharge(pricing.ctx, receiveMethod);
+  const totalLiters = payload.reduce((sum, x) => sum + Number(x.liters || 0), 0);
+  const goodsAmount = payload.reduce((sum, x) => sum + Number(x.liters || 0) * Number(x.unit_price || 0), 0);
+  const orderAmount = goodsAmount + computeDeliveryFeeAmount(deliveryFeeStd, 0, totalLiters, deliveryFeeSurcharge);
   const creditCheck = await validateCreditLimit(ctx, orderAmount);
   if ('error' in creditCheck) return NextResponse.json({ error: creditCheck.error }, { status: creditCheck.status });
+
+  const { data: customerRow } = await supabaseAdmin
+    .from('customers')
+    .select('sales_user_id')
+    .eq('id', ctx.customerId)
+    .maybeSingle();
 
   const vehicleId = isPickupByTruck ? await ensureVehicleFromPayload(ctx, body) : null;
   const vehicleLicensePlate = isPickupByTruck ? String(body.vehicle_license_plate ?? '').trim() || null : null;
@@ -195,6 +222,10 @@ export async function POST(req: NextRequest) {
       vehicle_driver_phone: vehicleDriverPhone,
       vehicle_pickup_license_number: vehiclePickupLicense,
       due_date: body.due_date || null,
+      delivery_fee_std_per_liter: deliveryFeeStd,
+      delivery_fee_surcharge_per_liter: deliveryFeeSurcharge,
+      delivery_fee_adjust_per_liter: 0,
+      sales_user_id: customerRow?.sales_user_id ?? null,
     })
     .select('*')
     .single();

@@ -1,8 +1,11 @@
 import { NextRequest, NextResponse } from 'next/server';
+import { requireStaff } from '@/lib/auth/api-guard';
 import { supabaseAdmin } from '@/lib/supabase/server';
 import { pushLineMessage, pushLinePayload, type LinePushContext } from '@/lib/services/line';
 
 export async function POST(req: NextRequest) {
+  const guard = await requireStaff('line');
+  if (guard.response) return guard.response;
   const { company_id, title, message, messages, recipients } = await req.json();
   const { data: b, error } = await supabaseAdmin.from('line_broadcasts').insert({ company_id, title, message, status: 'SENT' }).select('*').single();
   if (error) return NextResponse.json({ error: error.message }, { status: 400 });

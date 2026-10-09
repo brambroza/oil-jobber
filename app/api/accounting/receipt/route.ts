@@ -1,3 +1,33 @@
-import { NextRequest, NextResponse } from 'next/server';
+import { NextResponse } from 'next/server';
+import { requireStaff } from '@/lib/auth/api-guard';
 import { supabaseAdmin } from '@/lib/supabase/server';
-export async function POST(req: NextRequest) { const b = await req.json(); const { data, error } = await supabaseAdmin.from('receipts').insert(b).select('*').single(); if (error) return NextResponse.json({ error: error.message }, { status: 400 }); return NextResponse.json(data); }
+import { filterByCustomerScope, loadCustomerScope } from '@/lib/services/customer-scope';
+
+/** Lists receipts (created only by the payment RPC). */
+export async function GET() {
+  const guard = await requireStaff('accounting');
+  if (guard.response) return guard.response;
+  const scope = await loadCustomerScope(guard.ctx);
+  if (scope && 'error' in scope) return NextResponse.json({ error: scope.error }, { status: 400 });
+
+  const { data, error } = await supabaseAdmin
+    .from('receipts')
+    .select('id, sale_order_id, receipt_no, issued_at, amount, payment_method, reference_no, customer_id, customer_name, created_at')
+    .eq('company_id', guard.ctx.companyId)
+    .eq('is_deleted', false)
+    .order('created_at', { ascending: false });
+  if (error) return NextResponse.json({ error: error.message }, { status: 400 });
+
+  const orderIds = Array.from(new Set((data ?? []).map((r) => r.sale_order_id)));
+  const orderNo = new Map<string, string | null>();
+  const orderCustomer = new Map<string, string | null>();
+  if (orderIds.length) {
+    const { data: orders } = await supabaseAdmin.from('sale_orders').select('id, order_no, customer_id').in('id', orderIds);
+    for (const o of orders ?? []) {
+      orderNo.set(o.id, o.order_no);
+      orderCustomer.set(o.id, o.customer_id);
+    }
+  }
+  const visible = filterByCustomerScope(data ?? [], scope, (r) => orderCustomer.get(r.sale_order_id));
+  return NextResponse.json(visible.map((r) => ({ ...r, order_no: orderNo.get(r.sale_order_id) ?? null })));
+}

@@ -1,6 +1,8 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { createSupabaseServerClient } from '@/lib/supabase/server-client';
 import { supabaseAdmin } from '@/lib/supabase/server';
+import { enrichOrderItems, loadPricingContext, resolveDeliveryFeeStd, resolveDeliveryFeeSurcharge } from '@/lib/services/order-items';
+import { computeDeliveryFeeAmount, isPickupMethod } from '@/lib/services/order-pricing';
 
 async function resolvePortalContext() {
   const supabase = await createSupabaseServerClient();
@@ -152,7 +154,7 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
 
   const { data: current, error: checkErr } = await supabaseAdmin
     .from('sale_orders')
-    .select('id, order_status, sale_order_items(liters, unit_price, amount, is_deleted)')
+    .select('id, order_status, receive_method, delivery_fee_amount, delivery_fee_surcharge_per_liter, sale_order_items(liters, unit_price, amount, is_deleted)')
     .eq('id', id)
     .eq('company_id', ctx.companyId)
     .eq('customer_id', ctx.customerId)
@@ -164,17 +166,44 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
     return NextResponse.json({ error: 'สถานะปัจจุบันไม่อนุญาตให้ลูกค้าแก้ไข' }, { status: 409 });
   }
 
+  const receiveMethod = String(body.receive_method || 'DELIVER_BY_TRUCK');
+  const pricing = await loadPricingContext(ctx.companyId, ctx.customerId, paymentConditionId);
+  if ('error' in pricing) return NextResponse.json({ error: pricing.error }, { status: 422 });
+
+  // ค่าขนส่งเพิ่มส่วนกลาง: 0 เมื่อรับเอง; คง snapshot เดิมไว้ เว้นแต่บิลเปลี่ยนจากรับเองเป็นจัดส่ง
+  const storedSurcharge = (current as any).delivery_fee_surcharge_per_liter;
+  const deliveryFeeSurcharge = isPickupMethod(receiveMethod)
+    ? 0
+    : isPickupMethod(current.receive_method) || storedSurcharge == null
+      ? resolveDeliveryFeeSurcharge(pricing.ctx, receiveMethod)
+      : Number(storedSurcharge || 0);
+
+  let nextItems: Array<Record<string, unknown> & { depot_id: string | null; liters: number; unit_price: number }> | null = null;
+  let deliveryFeeStd: number | null = null;
   if (Array.isArray(body.items)) {
-    const nextPayload = body.items
+    const rawItems = body.items
       .filter((x: any) => Number(x.liters || 0) > 0)
       .map((x: any) => ({
+        refinery_id: x.refinery_id || null,
+        depot_id: x.depot_id || null,
+        product_code: String(x.product_code ?? '').trim(),
+        product_name: String(x.product_name ?? '').trim(),
         liters: Number(x.liters || 0),
         unit_price: Number(x.unit_price || 0),
+        base_cost_price: x.base_cost_price == null ? null : Number(x.base_cost_price),
       }));
-    const nextAmount = nextPayload.reduce((sum: number, x: any) => sum + Number(x.liters || 0) * Number(x.unit_price || 0), 0);
+    const enriched = enrichOrderItems(rawItems, pricing.ctx);
+    if ('error' in enriched) return NextResponse.json({ error: enriched.error }, { status: 422 });
+    nextItems = enriched.items;
+    deliveryFeeStd = resolveDeliveryFeeStd(pricing.ctx, receiveMethod, nextItems);
+
+    const nextLiters = nextItems.reduce((sum, x) => sum + Number(x.liters || 0), 0);
+    const nextAmount = nextItems.reduce((sum, x) => sum + Number(x.liters || 0) * Number(x.unit_price || 0), 0)
+      + computeDeliveryFeeAmount(deliveryFeeStd, 0, nextLiters, deliveryFeeSurcharge);
     const currentAmount = (current.sale_order_items || [])
       .filter((x: any) => !x.is_deleted)
-      .reduce((sum: number, x: any) => sum + Number(x.amount ?? Number(x.liters || 0) * Number(x.unit_price || 0)), 0);
+      .reduce((sum: number, x: any) => sum + Number(x.amount ?? Number(x.liters || 0) * Number(x.unit_price || 0)), 0)
+      + Number(current.delivery_fee_amount || 0);
     const creditCheck = await validateCreditLimit(ctx, nextAmount, currentAmount);
     if ('error' in creditCheck) return NextResponse.json({ error: creditCheck.error }, { status: creditCheck.status });
   }
@@ -195,6 +224,10 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
       vehicle_pickup_license_number: isPickupByTruck ? String(body.vehicle_pickup_license_number ?? '').trim() || null : null,
       due_date: body.due_date || null,
       order_status: body.order_status || current.order_status,
+      delivery_fee_surcharge_per_liter: deliveryFeeSurcharge,
+      ...(deliveryFeeStd != null || receiveMethod === 'PICKUP_BY_TRUCK'
+        ? { delivery_fee_std_per_liter: receiveMethod === 'PICKUP_BY_TRUCK' ? 0 : deliveryFeeStd }
+        : {}),
     })
     .eq('id', id)
     .eq('company_id', ctx.companyId)
@@ -202,7 +235,7 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
 
   if (orderErr) return NextResponse.json({ error: orderErr.message }, { status: 400 });
 
-  if (Array.isArray(body.items)) {
+  if (nextItems) {
     const { error: softErr } = await supabaseAdmin
       .from('sale_order_items')
       .update({ is_deleted: true })
@@ -211,19 +244,7 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
       .eq('is_deleted', false);
     if (softErr) return NextResponse.json({ error: softErr.message }, { status: 400 });
 
-    const payload = body.items
-      .filter((x: any) => Number(x.liters || 0) > 0)
-      .map((x: any) => ({
-        company_id: ctx.companyId,
-        sale_order_id: id,
-        refinery_id: x.refinery_id || null,
-        depot_id: x.depot_id || null,
-        product_code: String(x.product_code ?? '').trim(),
-        product_name: String(x.product_name ?? '').trim(),
-        liters: Number(x.liters || 0),
-        unit_price: Number(x.unit_price || 0),
-      }));
-
+    const payload = nextItems.map((x) => ({ company_id: ctx.companyId, sale_order_id: id, ...x }));
     if (payload.length) {
       const { error: itemErr } = await supabaseAdmin.from('sale_order_items').insert(payload);
       if (itemErr) return NextResponse.json({ error: itemErr.message }, { status: 400 });

@@ -1,9 +1,44 @@
 import { NextRequest, NextResponse } from 'next/server';
+import { requireStaff } from '@/lib/auth/api-guard';
 import { supabaseAdmin } from '@/lib/supabase/server';
-import { resolveCompanyId } from '@/lib/supabase/company';
+
+/** Max ids per `.in()` filter to keep PostgREST GET URLs within length limits. */
+const ID_CHUNK_SIZE = 200;
+
+/**
+ * Counts non-deleted oil_price_items per oil_base_price_id in a few bulk
+ * queries instead of one count query per price round (N+1).
+ *
+ * @param companyId - tenant scope
+ * @param basePriceIds - price round ids to count items for
+ * @returns map of oil_base_price_id to item count, or an error message
+ */
+async function countItemsByBasePrice(
+  companyId: string,
+  basePriceIds: string[],
+): Promise<{ counts: Map<string, number>; error?: string }> {
+  const counts = new Map<string, number>();
+  for (let i = 0; i < basePriceIds.length; i += ID_CHUNK_SIZE) {
+    const chunk = basePriceIds.slice(i, i + ID_CHUNK_SIZE);
+    const { data, error } = await supabaseAdmin
+      .from('oil_price_items')
+      .select('oil_base_price_id')
+      .eq('company_id', companyId)
+      .eq('is_deleted', false)
+      .in('oil_base_price_id', chunk);
+    if (error) return { counts, error: error.message };
+    for (const item of data ?? []) {
+      const key = String(item.oil_base_price_id);
+      counts.set(key, (counts.get(key) ?? 0) + 1);
+    }
+  }
+  return { counts };
+}
 
 export async function GET(req: NextRequest) {
-  const companyId = resolveCompanyId(req.nextUrl.searchParams.get('company_id'));
+  const guard = await requireStaff();
+  if (guard.response) return guard.response;
+  const companyId = guard.ctx.companyId;
   if (!companyId) return NextResponse.json({ error: 'กรุณาตั้งค่า company_id หรือ DEFAULT_COMPANY_ID' }, { status: 400 });
 
   const { data, error } = await supabaseAdmin
@@ -17,27 +52,17 @@ export async function GET(req: NextRequest) {
   if (error) return NextResponse.json({ error: error.message }, { status: 400 });
 
   const rows = data ?? [];
-  const counts = await Promise.all(
-    rows.map(async (row) => {
-      const { count, error: countError } = await supabaseAdmin
-        .from('oil_price_items')
-        .select('id', { count: 'exact', head: true })
-        .eq('company_id', companyId)
-        .eq('oil_base_price_id', row.id)
-        .eq('is_deleted', false);
-      return { id: row.id, count: count ?? 0, error: countError };
-    }),
+  const { counts, error: countError } = await countItemsByBasePrice(
+    companyId,
+    rows.map((row) => String(row.id)),
   );
-  const countError = counts.find((result) => result.error)?.error;
-  if (countError) return NextResponse.json({ error: countError.message }, { status: 400 });
-  const countMap = Object.fromEntries(counts.map((result) => [result.id, result.count]));
-
+  if (countError) return NextResponse.json({ error: countError }, { status: 400 });
 
   return NextResponse.json(
     rows.map((r: any) => ({
       ...r,
       refinery_name: r.refineries?.name ?? '-',
-      item_count: countMap[r.id] ?? 0,
+      item_count: counts.get(String(r.id)) ?? 0,
     })),
   );
 }

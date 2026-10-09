@@ -1,7 +1,10 @@
 'use client';
 
 import { useEffect, useMemo, useState, type ReactNode } from 'react';
-import { Add, Delete, Edit } from '@mui/icons-material';
+import { Add, Delete, Edit, HistoryOutlined } from '@mui/icons-material';
+import Link from 'next/link';
+import { useCurrentUser } from '@/components/layout/CurrentUserProvider';
+import { canEditCustomerCredit } from '@/lib/auth/permissions';
 import {
   Alert,
   Avatar,
@@ -50,6 +53,8 @@ type LineCustomer = {
 
 type CustomerWithPayment = Customer & {
   payment_conditions?: { name?: string; code?: string } | null;
+  sales_user_id?: string | null;
+  sales_user_name?: string | null;
 };
 type OutstandingRow = { customer_id: string; outstanding_amount: number };
 
@@ -69,8 +74,12 @@ type CustomerForm = {
   address: string;
   phone: string;
   credit_limit: number;
+  price_adjustment_per_liter: number;
+  sales_fee_per_liter: number;
+  sales_user_id: string;
   status: string;
 };
+type StaffUser = { id: string; full_name: string; role: string };
 
 const emptyForm: CustomerForm = {
   company_name: '',
@@ -78,6 +87,9 @@ const emptyForm: CustomerForm = {
   address: '',
   phone: '',
   credit_limit: 0,
+  price_adjustment_per_liter: 0,
+  sales_fee_per_liter: 0,
+  sales_user_id: '',
   status: 'ACTIVE',
 };
 
@@ -179,6 +191,11 @@ export default function CustomersPage() {
   const [portalPassword, setPortalPassword] = useState('');
   const [lineCustomers, setLineCustomers] = useState<LineCustomer[]>([]);
   const [outstandingRows, setOutstandingRows] = useState<OutstandingRow[]>([]);
+  const [staffUsers, setStaffUsers] = useState<StaffUser[]>([]);
+  const me = useCurrentUser();
+  const isSalesRole = me?.role === 'SALES';
+  /** SALES และ SALES_MANAGER แก้วงเงินเครดิต/ค่ากลางปรับราคาไม่ได้ (ผู้ดูแลระบบกำหนด) */
+  const lockCredit = !canEditCustomerCredit(me?.role);
   const [selectedLineCustomerId, setSelectedLineCustomerId] = useState('');
   const [lineMapSaving, setLineMapSaving] = useState(false);
   const [deleteId, setDeleteId] = useState<string | null>(null);
@@ -294,6 +311,15 @@ export default function CustomersPage() {
     void loadLineCustomers();
   }, [companyId]);
 
+  useEffect(() => {
+    const run = async () => {
+      const res = await fetch('/api/users-profile/staff');
+      const data = await res.json();
+      if (res.ok) setStaffUsers((data || []).map((x: any) => ({ id: x.id, full_name: String(x.full_name || ''), role: String(x.role || '') })));
+    };
+    void run();
+  }, []);
+
   const loadAccess = async (customerId: string) => {
     const res = await fetch(`/api/customer-portal/access/${customerId}?company_id=${companyId}`);
     const data = await res.json();
@@ -321,6 +347,9 @@ export default function CustomersPage() {
         address: form.address || null,
         phone: form.phone || null,
         credit_limit: form.credit_limit,
+        price_adjustment_per_liter: Number(form.price_adjustment_per_liter || 0),
+        sales_fee_per_liter: Math.max(0, Number(form.sales_fee_per_liter || 0)),
+        sales_user_id: form.sales_user_id || null,
         status: form.status,
       };
       const res = await fetch(form.id ? `/api/customers/${form.id}` : '/api/customers', {
@@ -479,6 +508,7 @@ export default function CustomersPage() {
 
       {error ? <Alert severity='error'>{error}</Alert> : null}
       {loading ? <Alert severity='info'>กำลังโหลด...</Alert> : null}
+      {isSalesRole && !loading ? <Alert severity='info'>แสดงเฉพาะลูกค้าที่คุณเป็นพนักงานขายประจำ หากต้องการดูแลลูกค้ารายอื่น ให้ผู้ดูแลระบบกำหนดในข้อมูลลูกค้า</Alert> : null}
 
       <Box sx={{ overflowX: 'auto', bgcolor: 'background.paper', borderRadius: 1 }}>
         <Table size='small'>
@@ -511,6 +541,9 @@ export default function CustomersPage() {
                 {/*     <TableCell>{r.payment_conditions?.name ?? '-'}</TableCell> */}
                 <TableCell><Chip size='small' label={r.status} color={r.status === 'ACTIVE' ? 'success' : 'default'} /></TableCell>
                 <TableCell align='right'>
+                  <IconButton component={Link} href={`/dashboard/customers/${r.id}`} title='ประวัติการซื้อ'>
+                    <HistoryOutlined fontSize='small' />
+                  </IconButton>
                   <IconButton onClick={() => {
                     const creditLimit = Number(r.credit_limit);
                     setForm({
@@ -520,6 +553,9 @@ export default function CustomersPage() {
                       address: r.address ?? '',
                       phone: r.phone ?? '',
                       credit_limit: creditLimit,
+                      price_adjustment_per_liter: Number(r.price_adjustment_per_liter || 0),
+                      sales_fee_per_liter: Number(r.sales_fee_per_liter || 0),
+                      sales_user_id: r.sales_user_id || '',
                       status: r.status,
                     });
                     setCreditLimitInput(formatCurrency(creditLimit));
@@ -570,6 +606,7 @@ export default function CustomersPage() {
                 <TextField
                   size='small'
                   label='วงเงินเครดิต'
+                  disabled={lockCredit}
                   value={creditLimitInput}
                   onChange={(e) => {
                     const next = normalizeCurrencyInput(e.target.value);
@@ -582,6 +619,29 @@ export default function CustomersPage() {
                   }}
                   onBlur={() => setCreditLimitInput(formatCurrency(form.credit_limit))}
                   inputProps={{ inputMode: 'decimal' }}
+                  fullWidth
+                />
+                <TextField
+                  size='small'
+                  label='ค่ากลางปรับราคา (บาท/ลิตร)'
+                  type='number'
+                  value={form.price_adjustment_per_liter}
+                  onFocus={(e) => e.target.select()}
+                  onChange={(e) => setForm((p) => ({ ...p, price_adjustment_per_liter: Number(e.target.value || 0) }))}
+                  inputProps={{ step: '0.01' }}
+                  helperText={lockCredit ? 'ผู้ดูแลระบบเป็นผู้กำหนด' : 'ติดลบ = ส่วนลด เช่น -0.20, บวก = เพิ่ม, 0 = ราคามาตรฐาน'}
+                  disabled={lockCredit}
+                  fullWidth
+                />
+                <TextField
+                  size='small'
+                  label='ค่าธรรมเนียมเซลบวกเพิ่ม (บาท/ลิตร)'
+                  type='number'
+                  value={form.sales_fee_per_liter}
+                  onFocus={(e) => e.target.select()}
+                  onChange={(e) => setForm((p) => ({ ...p, sales_fee_per_liter: Math.max(0, Number(e.target.value || 0)) }))}
+                  inputProps={{ step: '0.01', min: 0 }}
+                  helperText={`ราคาต่อลิตรที่ลูกค้าเห็น = มาตรฐาน ${form.price_adjustment_per_liter >= 0 ? '+' : '−'} ${Math.abs(form.price_adjustment_per_liter).toFixed(2)} + ${Number(form.sales_fee_per_liter || 0).toFixed(2)}`}
                   fullWidth
                 />
                 <Box sx={{ display: 'flex', alignItems: 'center', px: 1, border: '1px solid #dbe4f0', borderRadius: 1, minHeight: 40, flex: 1 }}>
@@ -598,6 +658,20 @@ export default function CustomersPage() {
                   />
                 </Box>
               </Stack>
+              <TextField
+                size='small'
+                select
+                label='พนักงานขายประจำ'
+                disabled={isSalesRole}
+                value={form.sales_user_id}
+                onChange={(e) => setForm((p) => ({ ...p, sales_user_id: e.target.value }))}
+                helperText={isSalesRole
+                  ? 'ผู้ดูแลระบบเป็นผู้กำหนด ลูกค้าที่คุณสร้างเองจะถูกกำหนดให้คุณโดยอัตโนมัติ'
+                  : 'เซลที่เลือกจะเห็นลูกค้ารายนี้ (และใบสั่งซื้อ ยอดค้าง เอกสาร รายงานของลูกค้ารายนี้) ถ้าไม่กำหนด เซลจะมองไม่เห็น เฉพาะผู้ดูแลระบบ/บัญชีเห็นทุกราย'}
+              >
+                <MenuItem value=''>ไม่กำหนด</MenuItem>
+                {staffUsers.map((u) => <MenuItem key={u.id} value={u.id}>{u.full_name}</MenuItem>)}
+              </TextField>
             </Stack>
           </Paper>
 

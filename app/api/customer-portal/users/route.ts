@@ -1,10 +1,13 @@
 import { NextRequest, NextResponse } from 'next/server';
+import { requireStaff } from '@/lib/auth/api-guard';
 import { supabaseAdmin } from '@/lib/supabase/server';
-import { resolveCompanyId } from '@/lib/supabase/company';
+import { canAccessCustomer, customerForbidden } from '@/lib/services/customer-scope';
 
 export async function POST(req: NextRequest) {
+  const guard = await requireStaff('customers');
+  if (guard.response) return guard.response;
   const body = await req.json();
-  const companyId = resolveCompanyId(body.company_id);
+  const companyId = guard.ctx.companyId;
   const customerId = String(body.customer_id ?? '').trim();
   const email = String(body.email ?? '').trim().toLowerCase();
   const password = String(body.password ?? '');
@@ -13,6 +16,7 @@ export async function POST(req: NextRequest) {
   if (!customerId) return NextResponse.json({ error: 'กรุณาระบุ customer_id' }, { status: 422 });
   if (!email) return NextResponse.json({ error: 'กรุณาระบุอีเมลลูกค้า' }, { status: 422 });
   if (password.length < 8) return NextResponse.json({ error: 'รหัสผ่านต้องมีอย่างน้อย 8 ตัวอักษร' }, { status: 422 });
+  if (!(await canAccessCustomer(guard.ctx, customerId))) return customerForbidden();
 
   const existing = await supabaseAdmin
     .from('customer_portal_users')
@@ -60,8 +64,10 @@ export async function POST(req: NextRequest) {
 }
 
 export async function PATCH(req: NextRequest) {
+  const guard = await requireStaff('customers');
+  if (guard.response) return guard.response;
   const body = await req.json();
-  const companyId = resolveCompanyId(body.company_id);
+  const companyId = guard.ctx.companyId;
   const customerId = String(body.customer_id ?? '').trim();
   const email = String(body.email ?? '').trim().toLowerCase();
 

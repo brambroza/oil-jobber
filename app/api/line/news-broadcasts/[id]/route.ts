@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
+import { requireStaff } from '@/lib/auth/api-guard';
 import { supabaseAdmin } from '@/lib/supabase/server';
-import { resolveCompanyId } from '@/lib/supabase/company';
 import { buildLineNewsFlex } from '@/lib/services/line-news';
 
 function toRecipientRows(companyId: string, newsId: string, recipientIds: string[]) {
@@ -12,9 +12,11 @@ function toRecipientRows(companyId: string, newsId: string, recipientIds: string
 }
 
 export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
+  const guard = await requireStaff('line');
+  if (guard.response) return guard.response;
   const { id } = await params;
   const body = await req.json();
-  const companyId = resolveCompanyId(body.company_id);
+  const companyId = guard.ctx.companyId;
   if (!companyId) return NextResponse.json({ error: 'กรุณาตั้งค่า company_id หรือ DEFAULT_COMPANY_ID' }, { status: 400 });
 
   const seq = Number(body.seq || 0);
@@ -74,8 +76,10 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
 }
 
 export async function DELETE(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
+  const guard = await requireStaff('line');
+  if (guard.response) return guard.response;
   const { id } = await params;
-  const companyId = resolveCompanyId(req.nextUrl.searchParams.get('company_id'));
+  const companyId = guard.ctx.companyId;
   if (!companyId) return NextResponse.json({ error: 'กรุณาตั้งค่า company_id หรือ DEFAULT_COMPANY_ID' }, { status: 400 });
 
   const { error } = await supabaseAdmin
