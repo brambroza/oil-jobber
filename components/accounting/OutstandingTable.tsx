@@ -7,6 +7,7 @@ import { Payments, PictureAsPdf } from '@mui/icons-material';
 import { PaymentDialog, type PaymentDialogOrder } from '@/components/accounting/PaymentDialog';
 import { PdfPreviewDialog, type PdfPreviewTarget } from '@/components/documents/PdfPreviewDialog';
 import { ActionSnackbar, type ActionSnackbarSeverity } from '@/components/common/ActionSnackbar';
+import { formatDate } from '@/lib/utils/date-format';
 
 export type OutstandingRow = {
   sale_order_id: string;
@@ -99,7 +100,7 @@ export function OutstandingTable({ title, description, endpoint }: { title: stri
                   <TableCell><Link href={`/dashboard/customers/${r.customer_id}`} style={{ color: 'inherit' }}>{r.customer_name}</Link></TableCell>
                   <TableCell>{r.sales_user_name || '-'}</TableCell>
                   <TableCell>{r.invoice_no || '-'}</TableCell>
-                  <TableCell>{r.due_date ?? '-'}</TableCell>
+                  <TableCell>{formatDate(r.due_date)}</TableCell>
                   <TableCell align='right'>{money(r.total_amount)}</TableCell>
                   <TableCell align='right'>{money(r.paid_amount)}</TableCell>
                   <TableCell align='right' sx={{ fontWeight: 900 }}>{money(r.outstanding_amount)}</TableCell>

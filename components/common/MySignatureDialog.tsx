@@ -57,7 +57,7 @@ export default function MySignatureDialog({ open, onClose }: Props) {
       <DialogTitle>ลายเซ็นของฉัน</DialogTitle>
       <DialogContent>
         <Typography variant='body2' color='text.secondary' sx={{ mb: 2 }}>
-          ลายเซ็นนี้จะถูกวางในใบสั่งซื้อ (ช่องพนักงานขาย) และใบเสร็จรับเงิน (ช่องผู้รับเงิน) ที่คุณเป็นผู้ออก
+          ลายเซ็นนี้จะถูกวางในใบสั่งขาย (ช่องพนักงานขาย) และใบเสร็จรับเงิน (ช่องผู้รับเงิน) ที่คุณเป็นผู้ออก
         </Typography>
         {error ? <Alert severity='error' sx={{ mb: 2 }}>{error}</Alert> : null}
         <SignatureUploader value={value} onChange={(next) => { setValue(next); setDirty(true); }} disabled={loading || saving} />

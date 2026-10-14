@@ -1,16 +1,12 @@
 import type { TDocumentDefinitions, Content, TableCell } from 'pdfmake/interfaces';
 import { baseDefinition, customerBlock, metaGrid, sellerBlock, signatures, COLORS } from '@/lib/documents/pdf';
-import { dateTh, liters as formatLiters } from '@/lib/documents/format';
+import { dateTh, liters as formatLiters, phoneTh } from '@/lib/documents/format';
 import type { OrderDocumentData } from '@/lib/documents/types';
+import { formatDateTime } from '@/lib/utils/date-format';
 
 /** `2026-10-09T08:30:00Z` → `09/10/2026 15:30` (Bangkok). */
 function dateTimeTh(value: string | null | undefined): string {
-  if (!value) return '-';
-  const date = new Date(value);
-  if (Number.isNaN(date.getTime())) return value;
-  return new Intl.DateTimeFormat('th-TH-u-ca-gregory', {
-    timeZone: 'Asia/Bangkok', day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit',
-  }).format(date);
+  return formatDateTime(value);
 }
 
 function headerCell(text: string, sub: string, alignment: 'left' | 'right' | 'center' = 'left'): TableCell {
@@ -106,7 +102,7 @@ export function buildDeliveryRecordPdf(data: OrderDocumentData): TDocumentDefini
                 { label: 'เอกสารอ้างอิง', value: data.customer_po_no || data.order_no },
               ],
               [
-                { label: 'ใบสั่งซื้อ', value: data.order_no },
+                { label: 'ใบสั่งขาย', value: data.order_no },
                 { label: 'ใบกำกับภาษี', value: data.invoice?.invoice_no || '-' },
                 { label: 'พนักงานขาย', value: data.sales_name || '-' },
               ],
@@ -125,7 +121,7 @@ export function buildDeliveryRecordPdf(data: OrderDocumentData): TDocumentDefini
             { text: `วิธีรับสินค้า: ${data.receive_method_label}${data.delivery_location ? `   สถานที่ส่ง: ${data.delivery_location}` : ''}`, color: COLORS.muted, fontSize: 9 },
             data.remark ? { text: [{ text: 'หมายเหตุ: ', bold: true }, data.remark], fontSize: 9 } : '',
             data.vehicle
-              ? { text: `รถ: ${data.vehicle.license_plate || '-'}   คนขับ: ${data.vehicle.driver_name || '-'}${data.vehicle.driver_phone ? ` (${data.vehicle.driver_phone})` : ''}`, color: COLORS.muted, fontSize: 9 }
+              ? { text: `รถ: ${data.vehicle.license_plate || '-'}   คนขับ: ${data.vehicle.driver_name || '-'}${data.vehicle.driver_phone ? `\u00A0(${phoneTh(data.vehicle.driver_phone, '')})` : ''}`, color: COLORS.muted, fontSize: 9 }
               : '',
             delivery ? { text: `เวลาส่งของ: ${dateTimeTh(delivery.delivered_at)}`, margin: [0, 6, 0, 0] } : '',
             delivery?.receiver_name ? { text: `ผู้รับของ: ${delivery.receiver_name}` } : '',

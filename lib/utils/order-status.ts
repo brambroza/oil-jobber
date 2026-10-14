@@ -23,7 +23,7 @@ export const ORDER_STATUS_LABELS: Record<OrderStatus, string> = {
   SUBMITTED: 'ส่งคำสั่งซื้อ',
   ADMIN_REVIEW: 'รอตรวจสอบ',
   CONFIRMED: 'ยืนยันแล้ว',
-  PO_SENT: 'ส่งใบสั่งซื้อให้ลูกค้าแล้ว',
+  PO_SENT: 'ส่งใบสั่งขายให้ลูกค้าแล้ว',
   REFINERY_BOOKED: 'จองโรงกลั่นแล้ว',
   WAITING_PAYMENT: 'รอชำระเงิน',
   PAID: 'ชำระแล้ว',
@@ -76,4 +76,19 @@ export const MILESTONE_TIMESTAMP_COLUMN: Record<OrderMilestone, 'po_sent_at' | '
 /** Status the order should move to after `action`, or null to keep the current one. */
 export function nextStatusAfter(action: OrderMilestone, current: string): OrderStatus | null {
   return AUTO_ADVANCE[action].includes(current as OrderStatus) ? action : null;
+}
+
+/** Statuses of an order that has not been approved yet (approval moves it to CONFIRMED). */
+export const PENDING_APPROVAL_STATUSES: OrderStatus[] = ['DRAFT', 'SUBMITTED', 'ADMIN_REVIEW'];
+
+/**
+ * Whether a tax invoice may be issued for an order in `status`: the order must
+ * have passed approval and must not be cancelled.
+ *
+ * @param status - current order status
+ * @returns true when the tax invoice may be issued
+ */
+export function canIssueTaxInvoice(status: string | null | undefined): boolean {
+  if (!status) return false;
+  return status !== 'CANCELLED' && !PENDING_APPROVAL_STATUSES.includes(status as OrderStatus);
 }

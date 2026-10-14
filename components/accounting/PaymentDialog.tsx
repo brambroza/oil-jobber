@@ -8,6 +8,7 @@ import {
 import { DeleteOutline, PictureAsPdf } from '@mui/icons-material';
 import { PAYMENT_METHOD_LABELS } from '@/lib/documents/format';
 import { useCurrentUser } from '@/components/layout/CurrentUserProvider';
+import { formatDate } from '@/lib/utils/date-format';
 
 export type PaymentDialogOrder = {
   sale_order_id: string;
@@ -188,7 +189,7 @@ export function PaymentDialog({ order, onClose, onSaved, onPrintReceipt }: {
                 <TableBody>
                   {history.map((row) => (
                     <TableRow key={row.id} hover>
-                      <TableCell>{row.paid_at}</TableCell>
+                      <TableCell>{formatDate(row.paid_at)}</TableCell>
                       <TableCell>{row.receipt_no || '-'}</TableCell>
                       <TableCell>{PAYMENT_METHOD_LABELS[row.payment_method] ?? row.payment_method}</TableCell>
                       <TableCell>{row.reference_no || '-'}</TableCell>

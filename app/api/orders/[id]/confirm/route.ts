@@ -9,7 +9,7 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
   const guard = await requireStaff('orders');
   if (guard.response) return guard.response;
   const { ctx } = guard;
-  if (!canApproveOrders(ctx.role)) return NextResponse.json({ error: 'เฉพาะผู้ดูแลระบบหรือผู้จัดการฝ่ายขายเท่านั้นที่อนุมัติใบสั่งซื้อได้' }, { status: 403 });
+  if (!canApproveOrders(ctx.role)) return NextResponse.json({ error: 'เฉพาะผู้ดูแลระบบหรือผู้จัดการฝ่ายขายเท่านั้นที่อนุมัติใบสั่งขายได้' }, { status: 403 });
   const { id } = await params;
   if (!(await canAccessOrder(ctx, id))) return customerForbidden();
 

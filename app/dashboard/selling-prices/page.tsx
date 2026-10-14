@@ -26,6 +26,7 @@ import {
 import { PageScaffold } from '@/components/common/PageScaffold';
 import { computeUnitPrice } from '@/lib/services/order-pricing';
 import { useCurrentUser } from '@/components/layout/CurrentUserProvider';
+import { formatDate, formatDateTime } from '@/lib/utils/date-format';
 
 type PriceRound = {
   id: string;
@@ -92,12 +93,6 @@ type CustomerAccess = {
   allowed_payment_condition_ids?: string[] | null;
 } | null;
 
-function formatDate(isoDate: string): string {
-  if (!isoDate) return '-';
-  const [yyyy, mm, dd] = isoDate.split('-');
-  if (!yyyy || !mm || !dd) return isoDate;
-  return `${dd}/${mm}/${yyyy}`;
-}
 
 function formatTime(isoDateTime?: string | null): string {
   if (!isoDateTime) return '-';
@@ -110,13 +105,7 @@ function formatMoney(value: number): string {
 }
 
 function formatDateTimeNow(): string {
-  const now = new Date();
-  const dd = String(now.getDate()).padStart(2, '0');
-  const mm = String(now.getMonth() + 1).padStart(2, '0');
-  const yyyy = now.getFullYear();
-  const hh = String(now.getHours()).padStart(2, '0');
-  const min = String(now.getMinutes()).padStart(2, '0');
-  return `${dd}-${mm}-${yyyy} ${hh}:${min}`;
+  return formatDateTime(new Date());
 }
 
 const MAX_BROADCAST_ROUNDS = 10;

@@ -1,7 +1,7 @@
 'use client';
 
-import { useCallback, useEffect, useMemo, useState } from 'react';
-import { Add, Block, Close, Delete, DirectionsCar, Edit, LocalShipping, Payments, PictureAsPdf, Print, ReceiptLong, Remove } from '@mui/icons-material';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { Add, Block, Close, Delete, Description, DirectionsCar, Edit, LocalShipping, Payments, Print, ReceiptLong, Remove } from '@mui/icons-material';
 import {
   Alert,
   Autocomplete,
@@ -38,6 +38,8 @@ import {
   Tooltip,
   Typography,
   createFilterOptions,
+  type SxProps,
+  type Theme,
 } from '@mui/material';
 import { ActionSnackbar, type ActionSnackbarSeverity } from '@/components/common/ActionSnackbar';
 import type { OrderStatus } from '@/types/database';
@@ -45,10 +47,12 @@ import { computeFloorUnitPrice, computeOrderProfit, computeOrderTotals, computeS
 import { useCurrentUser } from '@/components/layout/CurrentUserProvider';
 import { PaymentDialog, type PaymentDialogOrder } from '@/components/accounting/PaymentDialog';
 import { PdfPreviewDialog, type PdfPreviewTarget } from '@/components/documents/PdfPreviewDialog';
-import { canAccess, canApproveOrders } from '@/lib/auth/permissions';
+import { canAccess, canApproveOrders, isAdminRole } from '@/lib/auth/permissions';
 import ApproveOrderDialog from '@/components/orders/ApproveOrderDialog';
+import QuotationDialog, { type QuotationDialogOrder } from '@/components/orders/QuotationDialog';
 import DeliveryRecordDialog, { type DeliveryRecordDialogOrder } from '@/components/orders/DeliveryRecordDialog';
-import { DELIVERY_RECORDABLE_STATUSES, ORDER_STATUS_ORDER, statusColor, statusThai } from '@/lib/utils/order-status';
+import { DELIVERY_RECORDABLE_STATUSES, ORDER_STATUS_ORDER, canIssueTaxInvoice, statusColor, statusThai } from '@/lib/utils/order-status';
+import { formatDate, formatDateTime } from '@/lib/utils/date-format';
 
 type OrderRow = {
   id: string;
@@ -116,6 +120,36 @@ type CustomerPriceOption = {
   product_name: string;
   base_cost_price: number;
 };
+
+/** รอบราคาน้ำมันที่แอดมินเลือกได้ (จาก price-options) */
+type PriceRound = {
+  id: string;
+  refinery_id: string;
+  effective_date: string;
+  effective_at: string | null;
+  expires_date: string | null;
+  expires_at: string | null;
+  is_current: boolean;
+};
+
+/**
+ * Label for a price round option: effective date/time, expiry and a
+ * "current" marker.
+ *
+ * @param round - price round
+ * @returns Thai display label
+ */
+function priceRoundLabel(round: PriceRound): string {
+  const formatPart = (date: string | null, time: string | null) => {
+    if (!date) return '';
+    const day = formatDate(date);
+    const hhmm = String(time || '').slice(0, 5);
+    return hhmm ? `${day} ${hhmm} น.` : day;
+  };
+  const from = formatPart(round.effective_date, round.effective_at);
+  const to = formatPart(round.expires_date, round.expires_at);
+  return `${from}${to ? ` – ${to}` : ''}${round.is_current ? ' (ล่าสุด)' : ''}`;
+}
 
 type OrderItemForm = {
   refinery_id: string;
@@ -292,10 +326,30 @@ function SectionCard({
   );
 }
 
+/**
+ * Pins the "จัดการ" column to the right edge of the orders table so the actions
+ * stay visible while the other columns scroll horizontally. The cell needs an
+ * opaque background (plus the row hover tint layered on top) so scrolled
+ * content does not show through.
+ */
+const STICKY_ACTIONS_SX: SxProps<Theme> = {
+  position: 'sticky',
+  right: 0,
+  zIndex: 1,
+  width: 160,
+  minWidth: 160,
+  bgcolor: 'background.paper',
+  boxShadow: 'inset 1px 0 0 #e2e8f0, -6px 0 8px -6px rgba(15,23,42,0.18)',
+  '.MuiTableRow-hover:hover > &': {
+    backgroundImage: (theme) => `linear-gradient(${theme.palette.action.hover}, ${theme.palette.action.hover})`,
+  },
+};
+
 export default function OrdersPage() {
   const me = useCurrentUser();
   const isSalesRole = me?.role === 'SALES';
   const canApprove = canApproveOrders(me?.role);
+  const canPickPriceRound = isAdminRole(me?.role);
   const [approveOpen, setApproveOpen] = useState(false);
   const [companyId] = useState(process.env.NEXT_PUBLIC_DEFAULT_COMPANY_ID ?? '');
   const [salesUsers, setSalesUsers] = useState<StaffUser[]>([]);
@@ -306,28 +360,12 @@ export default function OrdersPage() {
   const [paymentOrder, setPaymentOrder] = useState<PaymentDialogOrder | null>(null);
   const [pdfTarget, setPdfTarget] = useState<PdfPreviewTarget>(null);
   const [printMenu, setPrintMenu] = useState<{ anchor: HTMLElement; orderId: string; orderNo: string; row?: OrderRow | null } | null>(null);
-  const [issuingInvoice, setIssuingInvoice] = useState(false);
+  const [quotationOrder, setQuotationOrder] = useState<QuotationDialogOrder>(null);
 
-  const openPdf = (type: 'purchase-order' | 'tax-invoice' | 'receipt' | 'delivery-record', id: string, title: string, copy = false) => {
+  const openPdf = (type: 'purchase-order' | 'quotation' | 'tax-invoice' | 'delivery-note' | 'receipt' | 'delivery-record', id: string, title: string, copy = false) => {
     setPdfTarget({ type, id, title, copy });
   };
 
-  const issueInvoiceAndPreview = async (orderId: string, orderNo: string) => {
-    setIssuingInvoice(true);
-    try {
-      const res = await fetch(`/api/accounting/invoice/from-order/${orderId}`, { method: 'POST' });
-      const data = await res.json();
-      if (!res.ok && res.status !== 409) throw new Error(data.error || 'ออกใบกำกับภาษีไม่สำเร็จ');
-      if (res.ok) showSnack(`ออกใบกำกับภาษี ${data.invoice_no} แล้ว`, 'success');
-      openPdf('tax-invoice', orderId, `ใบส่งของ/ใบแจ้งหนี้/ใบกำกับภาษี · ${orderNo}`);
-    } catch (e) {
-      const message = (e as Error).message;
-      setError(message);
-      showSnack(message, 'error');
-    } finally {
-      setIssuingInvoice(false);
-    }
-  };
   const [customerAdjust, setCustomerAdjust] = useState(0);
   const [customerBaseline, setCustomerBaseline] = useState(0);
   const [customerSalesFee, setCustomerSalesFee] = useState(0);
@@ -342,6 +380,11 @@ export default function OrdersPage() {
   const [customerPriceOptions, setCustomerPriceOptions] = useState<CustomerPriceOption[]>([]);
   const [customerAccessLoading, setCustomerAccessLoading] = useState(false);
   const [customerAccessCustomerId, setCustomerAccessCustomerId] = useState('');
+  const [priceRounds, setPriceRounds] = useState<PriceRound[]>([]);
+  /** รอบราคาที่แอดมินเลือก ('' = รอบล่าสุด) */
+  const [selectedRoundId, setSelectedRoundId] = useState('');
+  /** ตั้งเมื่อแอดมินเปลี่ยนรอบราคา เพื่อคำนวณราคารายการใหม่หลังโหลดราคาเสร็จ */
+  const repriceOnLoadRef = useRef(false);
 
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
@@ -351,6 +394,11 @@ export default function OrdersPage() {
   const [rowsPerPage, setRowsPerPage] = useState(15);
   const [open, setOpen] = useState(false);
   const [form, setForm] = useState<OrderForm>(emptyForm);
+  /** Status of the order the print menu is open for (list row, else the open drawer). */
+  const printMenuStatus = printMenu
+    ? printMenu.row?.order_status ?? (form.id === printMenu.orderId ? form.order_status : undefined)
+    : undefined;
+  const printMenuApproved = canIssueTaxInvoice(printMenuStatus);
   const [deleteId, setDeleteId] = useState<string | null>(null);
   const [cancelOpen, setCancelOpen] = useState(false);
   const [uploadingDo, setUploadingDo] = useState(false);
@@ -496,7 +544,7 @@ export default function OrdersPage() {
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || 'โหลดข้อมูลไม่สำเร็จ');
       setRows(data);
-      if (showFeedback) showSnack('รีเฟรชข้อมูลใบสั่งซื้อเรียบร้อยแล้ว', 'info');
+      if (showFeedback) showSnack('รีเฟรชข้อมูลใบสั่งขายเรียบร้อยแล้ว', 'info');
     } catch (e) {
       const message = (e as Error).message;
       setError(message);
@@ -579,6 +627,7 @@ export default function OrdersPage() {
       setCustomerAccessCustomerId('');
       try {
         const params = new URLSearchParams({ company_id: companyId, customer_id: form.customer_id });
+        if (canPickPriceRound && selectedRoundId) params.set('round_id', selectedRoundId);
         const res = await fetch(`/api/orders/price-options?${params.toString()}`, { cache: 'no-store' });
         const data = await res.json();
         if (!active) return;
@@ -598,11 +647,13 @@ export default function OrdersPage() {
           product_name: String(option.product_name || ''),
           base_cost_price: Number(option.base_cost_price || 0),
         })));
+        setPriceRounds(Array.isArray(data.price_rounds) ? data.price_rounds : []);
         setCustomerAccessCustomerId(form.customer_id);
       } catch (caughtError) {
         if (active) {
           setCustomerAccess(null);
           setCustomerPriceOptions([]);
+          setPriceRounds([]);
           setCustomerAccessCustomerId('');
           setError((caughtError as Error).message);
         }
@@ -615,7 +666,7 @@ export default function OrdersPage() {
     return () => {
       active = false;
     };
-  }, [form.customer_id, companyId]);
+  }, [form.customer_id, companyId, canPickPriceRound, selectedRoundId]);
 
   const buildPricedItems = useCallback((
     currentItems: OrderItemForm[],
@@ -655,6 +706,28 @@ export default function OrdersPage() {
       }));
   }, [customerPriceOptions, depots, paymentConditions, customerAdjust]);
 
+  // After an admin switches price round, re-price the current depot's items from the newly loaded round.
+  useEffect(() => {
+    if (!repriceOnLoadRef.current || customerAccessLoading || customerAccessCustomerId !== form.customer_id) return;
+    repriceOnLoadRef.current = false;
+    setForm((prev) => (prev.selected_depot_id && prev.payment_condition_id
+      ? { ...prev, items: buildPricedItems(prev.items, prev.selected_depot_id, prev.payment_condition_id, true) }
+      : prev));
+  }, [buildPricedItems, customerAccessLoading, customerAccessCustomerId, form.customer_id]);
+
+  const refineryPriceRounds = useMemo(
+    () => priceRounds.filter((round) => round.refinery_id === form.selected_refinery_id),
+    [priceRounds, form.selected_refinery_id],
+  );
+
+  /** Admin picks a price round for the selected refinery ('' = current round). */
+  const selectPriceRound = (round: PriceRound | null) => {
+    const nextId = round && !round.is_current ? round.id : '';
+    if (nextId === selectedRoundId) return;
+    repriceOnLoadRef.current = true;
+    setSelectedRoundId(nextId);
+  };
+
   useEffect(() => {
     if (!filteredPaymentConditions.length) return;
     setForm((prev) => {
@@ -690,6 +763,7 @@ export default function OrdersPage() {
   };
 
   const selectRefinery = (refinery: MasterRefinery | null) => {
+    setSelectedRoundId('');
     setForm((prev) => ({
       ...prev,
       refinery_summary: refinery?.name ?? '',
@@ -786,13 +860,14 @@ export default function OrdersPage() {
       } else {
         setOpen(false);
         setForm(emptyForm);
+        setSelectedRoundId('');
         await load();
       }
       if (lineWarning) {
         setError(lineWarning);
         showSnack(lineWarning, 'warning');
       } else {
-        showSnack(wasEditing ? 'แก้ไขใบสั่งซื้อเรียบร้อยแล้ว' : 'เพิ่มใบสั่งซื้อเรียบร้อยแล้ว', 'success');
+        showSnack(wasEditing ? 'แก้ไขใบสั่งขายเรียบร้อยแล้ว' : 'เพิ่มใบสั่งขายเรียบร้อยแล้ว', 'success');
       }
       return true;
     } catch (e) {
@@ -813,11 +888,22 @@ export default function OrdersPage() {
     setPrintMenu({ anchor, orderId, orderNo });
   };
 
+  /** Quotation from the drawer: save first so the snapshot uses what is on screen. */
+  const quotationFromDrawer = async () => {
+    if (!form.id) return;
+    const orderId = form.id;
+    const orderNo = form.order_no || orderId.slice(0, 8);
+    const saved = await save({ keepOpen: true });
+    if (!saved) return;
+    setQuotationOrder({ id: orderId, orderNo });
+  };
+
   const openEdit = async (id: string) => {
+    setSelectedRoundId('');
     try {
       const res = await fetch(`/api/orders/${id}?company_id=${companyId}`);
       const data = await res.json();
-      if (!res.ok) throw new Error(data.error || 'โหลดข้อมูลใบสั่งซื้อไม่สำเร็จ');
+      if (!res.ok) throw new Error(data.error || 'โหลดข้อมูลใบสั่งขายไม่สำเร็จ');
 
       setForm({
         id: data.id,
@@ -892,7 +978,7 @@ export default function OrdersPage() {
       });
 
       setOpen(true);
-      showSnack('โหลดใบสั่งซื้อสำหรับแก้ไขเรียบร้อยแล้ว', 'info');
+      showSnack('โหลดใบสั่งขายสำหรับแก้ไขเรียบร้อยแล้ว', 'info');
     } catch (e) {
       const message = (e as Error).message;
       setError(message);
@@ -1000,7 +1086,7 @@ export default function OrdersPage() {
       if (!res.ok) throw new Error(data.error || 'ลบไม่สำเร็จ');
       setDeleteId(null);
       await load();
-      showSnack('ลบใบสั่งซื้อเรียบร้อยแล้ว', 'success');
+      showSnack('ลบใบสั่งขายเรียบร้อยแล้ว', 'success');
     } catch (e) {
       const message = (e as Error).message;
       setError(message);
@@ -1031,7 +1117,7 @@ export default function OrdersPage() {
         <Stack direction={{ xs: 'column', md: 'row' }} justifyContent="space-between" spacing={1.5}>
           <Box>
             <Typography variant="h5" fontWeight={900}>
-              ใบสั่งซื้อ
+              ใบสั่งขาย
             </Typography>
             <Typography variant="body2" color="text.secondary">
               จัดการคำสั่งซื้อ ตรวจสอบเครดิต แนบ DO และติดตามสถานะ
@@ -1042,12 +1128,13 @@ export default function OrdersPage() {
             startIcon={<Add />}
             onClick={() => {
               setForm({ ...emptyForm, sales_user_id: me?.userId ?? '' });
+              setSelectedRoundId('');
               setOpen(true);
-              showSnack('พร้อมเพิ่มใบสั่งซื้อใหม่', 'info');
+              showSnack('พร้อมเพิ่มใบสั่งขายใหม่', 'info');
             }}
             sx={{ borderRadius: 2, minHeight: 40, width: { xs: '100%', md: 'auto' } }}
           >
-            เพิ่มใบสั่งซื้อ
+            เพิ่มใบสั่งขาย
           </Button>
         </Stack>
 
@@ -1119,7 +1206,7 @@ export default function OrdersPage() {
               <TableCell>สถานะ</TableCell>
               <TableCell sx={{ display: { xs: 'none', lg: 'table-cell' } }}>เลขจอง</TableCell>
               <TableCell sx={{ display: { xs: 'none', md: 'table-cell' } }}>DO</TableCell>
-              <TableCell align="right" sx={{ width: 130, minWidth: 130 }}>จัดการ</TableCell>
+              <TableCell align="right" sx={{ ...STICKY_ACTIONS_SX, zIndex: 3 }}>จัดการ</TableCell>
             </TableRow>
           </TableHead>
           <TableBody>
@@ -1147,13 +1234,13 @@ export default function OrdersPage() {
                     <span>{money(Number(r.total_amount || 0))}</span>
                   </Tooltip>
                 </TableCell>
-                <TableCell sx={{ display: { xs: 'none', md: 'table-cell' } }}>{r.due_date || '-'}</TableCell>
+                <TableCell sx={{ display: { xs: 'none', md: 'table-cell' } }}>{formatDate(r.due_date)}</TableCell>
                 <TableCell>
                   <Chip size="small" label={statusThai(r.order_status)} color={statusColor(r.order_status)} />
                 </TableCell>
                 <TableCell sx={{ display: { xs: 'none', lg: 'table-cell' } }}>{r.refinery_booking_number || '-'}</TableCell>
                 <TableCell sx={{ display: { xs: 'none', md: 'table-cell' } }}>{r.delivery_order_no || '-'}</TableCell>
-                <TableCell align="right" sx={{ width: 130, minWidth: 130 }}>
+                <TableCell align="right" sx={STICKY_ACTIONS_SX}>
                   <Tooltip title="พิมพ์เอกสาร">
                     <span>
                       <IconButton size="small" color="primary" onClick={(event) => setPrintMenu({ anchor: event.currentTarget, orderId: r.id, orderNo: r.order_no || r.id.slice(0, 8), row: r })}>
@@ -1174,7 +1261,7 @@ export default function OrdersPage() {
                     </IconButton>
                   </Tooltip>
                   <Tooltip title="ลบ">
-                    <IconButton size="small" color="error" onClick={() => { setDeleteId(r.id); showSnack('กรุณายืนยันการลบใบสั่งซื้อ', 'warning'); }}>
+                    <IconButton size="small" color="error" onClick={() => { setDeleteId(r.id); showSnack('กรุณายืนยันการลบใบสั่งขาย', 'warning'); }}>
                       <Delete fontSize="small" />
                     </IconButton>
                   </Tooltip>
@@ -1184,7 +1271,7 @@ export default function OrdersPage() {
             {!filteredRows.length && !loading ? (
               <TableRow>
                 <TableCell colSpan={13} align="center" sx={{ py: 5, color: 'text.secondary' }}>
-                  ไม่มีข้อมูลใบสั่งซื้อ
+                  ไม่มีข้อมูลใบสั่งขาย
                 </TableCell>
               </TableRow>
             ) : null}
@@ -1229,7 +1316,7 @@ export default function OrdersPage() {
             <Stack direction="row" justifyContent="space-between" alignItems="center" spacing={1.5}>
               <Box>
                 <Typography variant="h6" fontWeight={900}>
-                  {form.id ? 'แก้ไขใบสั่งซื้อ' : 'เพิ่มใบสั่งซื้อ'}
+                  {form.id ? 'แก้ไขใบสั่งขาย' : 'เพิ่มใบสั่งขาย'}
                 </Typography>
                 <Typography variant="body2" color="text.secondary">
                   {form.order_no ? `เลขที่ ${form.order_no}` : 'ใบใหม่'}
@@ -1246,18 +1333,18 @@ export default function OrdersPage() {
                 </Stack>
                 {form.approved_by_name ? (
                   <Typography variant="caption" color={form.approved_over_credit ? 'error.main' : 'text.secondary'}>
-                    อนุมัติโดย {form.approved_by_name}{form.approved_at ? ` ${new Date(form.approved_at).toLocaleDateString('th-TH')}` : ''}{form.approved_over_credit ? ' (เกินวงเงิน)' : ''}
+                    อนุมัติโดย {form.approved_by_name}{form.approved_at ? ` ${formatDate(form.approved_at)}` : ''}{form.approved_over_credit ? ' (เกินวงเงิน)' : ''}
                   </Typography>
                 ) : null}
                 {form.po_sent_at ? (
-                  <Typography variant="caption" color="text.secondary">ส่ง PO {new Date(form.po_sent_at).toLocaleString('th-TH', { dateStyle: 'short', timeStyle: 'short' })}</Typography>
+                  <Typography variant="caption" color="text.secondary">ส่ง PO {formatDateTime(form.po_sent_at)}</Typography>
                 ) : null}
                 {form.documents_sent_at ? (
-                  <Typography variant="caption" color="text.secondary">ส่งใบกำกับ {new Date(form.documents_sent_at).toLocaleString('th-TH', { dateStyle: 'short', timeStyle: 'short' })}</Typography>
+                  <Typography variant="caption" color="text.secondary">ส่งใบกำกับ {formatDateTime(form.documents_sent_at)}</Typography>
                 ) : null}
                 {form.delivered_at ? (
                   <Typography variant="caption" color="success.main">
-                    ส่งของแล้ว {new Date(form.delivered_at).toLocaleString('th-TH', { dateStyle: 'short', timeStyle: 'short' })}
+                    ส่งของแล้ว {formatDateTime(form.delivered_at)}
                     {form.delivery_receiver_name ? ` · ผู้รับ ${form.delivery_receiver_name}` : ''}
                     {form.delivery_record_no ? ` · ${form.delivery_record_no}` : ''}
                   </Typography>
@@ -1286,6 +1373,7 @@ export default function OrdersPage() {
                     onChange={(_, customer) => {
                       const customerId = customer?.id ?? '';
                       if (customerId === form.customer_id) return;
+                      setSelectedRoundId('');
                       setCustomerAccess(null);
                       setCustomerPriceOptions([]);
                       setCustomerAccessLoading(Boolean(customer));
@@ -1448,6 +1536,33 @@ export default function OrdersPage() {
                     )}
                   />
                 </Stack>
+                {canPickPriceRound && selectedRefineryId ? (
+                  <Autocomplete
+                    size="small"
+                    options={refineryPriceRounds}
+                    value={
+                      refineryPriceRounds.find((round) => (selectedRoundId ? round.id === selectedRoundId : round.is_current)) ?? null
+                    }
+                    onChange={(_, round) => selectPriceRound(round)}
+                    getOptionLabel={priceRoundLabel}
+                    isOptionEqualToValue={(option, value) => option.id === value.id}
+                    noOptionsText="ไม่มีรอบราคาของโรงกลั่นนี้"
+                    loading={customerAccessLoading}
+                    loadingText="กำลังโหลด..."
+                    disabled={!form.customer_id || customerAccessLoading}
+                    autoHighlight
+                    openOnFocus
+                    fullWidth
+                    renderInput={(params) => (
+                      <TextField
+                        {...params}
+                        label="รอบราคาน้ำมัน (เฉพาะแอดมิน)"
+                        placeholder="รอบล่าสุด"
+                        helperText={selectedRoundId ? 'ใช้ราคาจากรอบที่เลือก ไม่ใช่รอบล่าสุด' : undefined}
+                      />
+                    )}
+                  />
+                ) : null}
                 <FormControl fullWidth>
                   <FormLabel sx={{ color: '#334155', fontWeight: 800, mb: 0.7 }}>เครดิต</FormLabel>
                   <RadioGroup
@@ -1948,6 +2063,16 @@ export default function OrdersPage() {
               >
                 พิมพ์
               </Button>
+              <Button
+                variant="outlined"
+                color="secondary"
+                startIcon={<Description />}
+                onClick={() => void quotationFromDrawer()}
+                disabled={!form.id || !form.customer_id || !form.items.length || hasBelowFloor || form.order_status === 'CANCELLED'}
+                sx={{ borderRadius: 2 }}
+              >
+                ออกใบเสนอราคา
+              </Button>
               {canApprove ? (
                 <Button
                   variant="contained"
@@ -2011,7 +2136,7 @@ export default function OrdersPage() {
 
       <Dialog open={Boolean(deleteId)} onClose={() => setDeleteId(null)}>
         <DialogTitle>ยืนยันการลบ</DialogTitle>
-        <DialogContent>ต้องการลบใบสั่งซื้อนี้ใช่หรือไม่</DialogContent>
+        <DialogContent>ต้องการลบใบสั่งขายนี้ใช่หรือไม่</DialogContent>
         <DialogActions>
           <Button onClick={() => setDeleteId(null)}>ยกเลิก</Button>
           <Button color="error" onClick={() => void remove()}>
@@ -2021,16 +2146,19 @@ export default function OrdersPage() {
       </Dialog>
 
       <Menu open={Boolean(printMenu)} anchorEl={printMenu?.anchor ?? null} onClose={() => setPrintMenu(null)}>
-        <MenuItem onClick={() => { if (printMenu) openPdf('purchase-order', printMenu.orderId, `ใบสั่งซื้อ · ${printMenu.orderNo}`); setPrintMenu(null); }}>
-          <ReceiptLong fontSize="small" sx={{ mr: 1 }} /> ใบสั่งซื้อ (PDF)
+        <MenuItem onClick={() => { if (printMenu) openPdf('purchase-order', printMenu.orderId, `ใบสั่งขาย · ${printMenu.orderNo}`); setPrintMenu(null); }}>
+          <ReceiptLong fontSize="small" sx={{ mr: 1 }} /> ใบสั่งขาย (PDF)
         </MenuItem>
-        <MenuItem disabled={!canAccounting || issuingInvoice} onClick={() => { if (printMenu) void issueInvoiceAndPreview(printMenu.orderId, printMenu.orderNo); setPrintMenu(null); }}>
-          <PictureAsPdf fontSize="small" sx={{ mr: 1 }} /> ใบส่งของ/ใบแจ้งหนี้/ใบกำกับภาษี (ออกอัตโนมัติถ้ายังไม่มี)
+        <MenuItem
+          disabled={(printMenu?.row?.order_status ?? (form.id === printMenu?.orderId ? form.order_status : '')) === 'CANCELLED'}
+          onClick={() => { if (printMenu) setQuotationOrder({ id: printMenu.orderId, orderNo: printMenu.orderNo }); setPrintMenu(null); }}
+        >
+          <Description fontSize="small" sx={{ mr: 1 }} /> ใบเสนอราคา
         </MenuItem>
-        <MenuItem onClick={() => { if (printMenu) openPdf('tax-invoice', printMenu.orderId, `สำเนาใบกำกับภาษี · ${printMenu.orderNo}`, true); setPrintMenu(null); }}>
-          <PictureAsPdf fontSize="small" sx={{ mr: 1 }} /> สำเนาใบกำกับภาษี
+        <MenuItem disabled={!printMenuApproved} onClick={() => { if (printMenu) openPdf('delivery-note', printMenu.orderId, `ใบส่งของ · ${printMenu.orderNo}`); setPrintMenu(null); }}>
+          <LocalShipping fontSize="small" sx={{ mr: 1 }} /> ใบส่งของ{printMenuApproved ? '' : ' (ต้องอนุมัติใบสั่งขายก่อน)'}
         </MenuItem>
-        <MenuItem onClick={() => {
+        <MenuItem disabled={!printMenuApproved} onClick={() => {
           if (printMenu) {
             const row = printMenu.row ?? null;
             const fromForm = form.id === printMenu.orderId;
@@ -2047,6 +2175,7 @@ export default function OrdersPage() {
           setPrintMenu(null);
         }}>
           <LocalShipping fontSize="small" sx={{ mr: 1 }} /> {(printMenu?.row?.delivery_record_no ?? (form.id === printMenu?.orderId ? form.delivery_record_no : null)) ? 'บันทึกการส่งของ (PDF)' : 'บันทึกการส่งของ'}
+          {printMenuApproved ? '' : ' (ต้องอนุมัติใบสั่งขายก่อน)'}
         </MenuItem>
       </Menu>
 
@@ -2062,6 +2191,12 @@ export default function OrdersPage() {
           if (form.id && open) void openEdit(form.id);
         }}
       />
+      <QuotationDialog
+        order={quotationOrder}
+        onClose={() => setQuotationOrder(null)}
+        onView={(orderId, quotationNo) => openPdf('quotation', orderId, `ใบเสนอราคา · ${quotationNo}`)}
+        onNotify={showSnack}
+      />
       <DeliveryRecordDialog
         order={deliveryRecordOrder}
         onClose={() => setDeliveryRecordOrder(null)}
@@ -2074,7 +2209,7 @@ export default function OrdersPage() {
         orderNo={form.order_no || ''}
         customerName={customers.find((c) => c.id === form.customer_id)?.company_name || ''}
         onClose={() => setApproveOpen(false)}
-        onApproved={() => { showSnack('อนุมัติใบสั่งซื้อเรียบร้อย', 'success'); void load(); if (form.id) void openEdit(form.id); }}
+        onApproved={() => { showSnack('อนุมัติใบสั่งขายเรียบร้อย', 'success'); void load(); if (form.id) void openEdit(form.id); }}
       />
       <PaymentDialog
         order={paymentOrder}

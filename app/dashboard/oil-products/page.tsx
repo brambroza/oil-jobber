@@ -149,7 +149,7 @@ export default function OilProductsPage() {
   return (
     <Stack spacing={2}>
       <Typography variant='h4'>จัดการข้อมูลน้ำมัน</Typography>
-      <Typography variant='body2' color='text.secondary'>จัดการข้อมูลรหัสน้ำมันเพื่อใช้เชื่อมกับราคาและใบสั่งซื้อ</Typography>
+      <Typography variant='body2' color='text.secondary'>จัดการข้อมูลรหัสน้ำมันเพื่อใช้เชื่อมกับราคาและใบสั่งขาย</Typography>
 
       <Stack direction={{ xs: 'column', sm: 'row'  }} spacing={1}>
         <TextField sx={{ display :'none'}} fullWidth label='Company ID' value={companyId} onChange={(e) => setCompanyId(e.target.value)} />

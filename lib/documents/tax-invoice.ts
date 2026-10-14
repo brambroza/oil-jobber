@@ -1,11 +1,11 @@
 import type { TDocumentDefinitions } from 'pdfmake/interfaces';
 import { baseDefinition, customerBlock, itemsTable, metaGrid, sellerBlock, signatures, totalsBlock, COLORS } from '@/lib/documents/pdf';
-import { dateTh, money } from '@/lib/documents/format';
+import { dateTh, money, phoneTh } from '@/lib/documents/format';
 import { round2 } from '@/lib/services/order-pricing';
 import { thaiBahtText } from '@/lib/utils/thai-baht-text';
 import type { OrderDocumentData } from '@/lib/documents/types';
 
-/** ใบส่งของ / ใบแจ้งหนี้ / ใบกำกับภาษี (Thai standard layout, prices excl. VAT). */
+/** ใบแจ้งหนี้ / ใบกำกับภาษี (Thai standard layout, prices excl. VAT). */
 export function buildTaxInvoicePdf(data: OrderDocumentData, copy: 'original' | 'copy' = 'original'): TDocumentDefinitions {
   const t = data.totals;
   const inv = data.invoice;
@@ -16,8 +16,8 @@ export function buildTaxInvoicePdf(data: OrderDocumentData, copy: 'original' | '
         {
           width: 230,
           stack: [
-            { text: 'ใบส่งของ / ใบแจ้งหนี้ / ใบกำกับภาษี', fontSize: 13.5, bold: true, color: COLORS.accent, alignment: 'right' },
-            { text: 'Delivery Order / Invoice / Tax Invoice', alignment: 'right', color: COLORS.muted, fontSize: 8.5 },
+            { text: 'ใบแจ้งหนี้ / ใบกำกับภาษี', fontSize: 15, bold: true, color: COLORS.accent, alignment: 'right' },
+            { text: 'Invoice / Tax Invoice', alignment: 'right', color: COLORS.muted, fontSize: 8.5 },
             { text: copy === 'original' ? 'ต้นฉบับ' : 'สำเนา', alignment: 'right', bold: true, margin: [0, 4, 0, 0] },
           ],
         },
@@ -71,7 +71,7 @@ export function buildTaxInvoicePdf(data: OrderDocumentData, copy: 'original' | '
           stack: [
             { text: [{ text: 'วิธีรับสินค้า: ', bold: true }, data.receive_method_label, data.delivery_location ? `   สถานที่ส่ง: ${data.delivery_location}` : ''] },
             data.remark ? { text: [{ text: 'หมายเหตุ: ', bold: true }, data.remark] } : '',
-            data.vehicle ? { text: [{ text: 'รถ: ', bold: true }, `${data.vehicle.license_plate || '-'}${data.vehicle.driver_name ? ` คนขับ ${data.vehicle.driver_name}` : ''}${data.vehicle.driver_phone ? ` โทร ${data.vehicle.driver_phone}` : ''}`] } : '',
+            data.vehicle ? { text: [{ text: 'รถ: ', bold: true }, `${data.vehicle.license_plate || '-'}${data.vehicle.driver_name ? ` คนขับ ${data.vehicle.driver_name}` : ''}${data.vehicle.driver_phone ? ` ${phoneTh(data.vehicle.driver_phone)}` : ''}`] } : '',
           ],
           margin: [8, 6, 8, 6],
           fillColor: '#fafafe',

@@ -24,6 +24,7 @@ import {
 } from '@mui/material';
 import {
   CampaignOutlined,
+  ReceiptOutlined,
   ChevronRight,
   DashboardOutlined,
   LocalShippingOutlined,
@@ -46,6 +47,7 @@ import { getSupabaseClient } from '@/lib/supabase/client';
 import { canAccess, type AppModule } from '@/lib/auth/permissions';
 import { CurrentUserProvider, type CurrentUser } from '@/components/layout/CurrentUserProvider';
 import MySignatureDialog from '@/components/common/MySignatureDialog';
+import { formatDateTime } from '@/lib/utils/date-format';
 
 type MenuItem = { label: string; href: string; icon: ReactNode; module: AppModule };
 type MenuGroup = { title: string; items: MenuItem[] };
@@ -68,7 +70,8 @@ const menuGroups: MenuGroup[] = [
   {
     title: 'ปฏิบัติการ',
     items: [
-      { label: 'ใบสั่งซื้อ', href: '/dashboard/orders', icon: <ReceiptLongOutlined fontSize='small' />, module: 'orders' },
+      { label: 'ใบสั่งขาย', href: '/dashboard/orders', icon: <ReceiptLongOutlined fontSize='small' />, module: 'orders' },
+      { label: 'ใบกำกับภาษี', href: '/dashboard/accounting/invoices', icon: <ReceiptOutlined fontSize='small' />, module: 'accounting' },
       { label: 'บัญชี', href: '/dashboard/accounting', icon: <RequestQuoteOutlined fontSize='small' />, module: 'accounting' },
 
       { label: 'ลูกค้า', href: '/dashboard/customers', icon: <PeopleOutline fontSize='small' />, module: 'customers' },
@@ -132,15 +135,17 @@ export default function DashboardShell({ children, currentUser }: { children: Re
     return trimmed.slice(0, 2).toUpperCase();
   }, [userLabel]);
 
-  const currentPage = useMemo(() => {
+  /** Longest matching menu item, so nested menus (บัญชี › ใบกำกับภาษี) highlight only one entry. */
+  const currentItem = useMemo(() => {
     let best: { label: string; href: string } | null = null;
     for (const g of visibleGroups) {
       for (const item of g.items) {
         if ((pathname === item.href || pathname.startsWith(item.href + '/')) && (!best || item.href.length > best.href.length)) best = item;
       }
     }
-    return best?.label ?? 'แดชบอร์ด';
+    return best;
   }, [pathname, visibleGroups]);
+  const currentPage = currentItem?.label ?? 'แดชบอร์ด';
 
   const onLogout = async () => {
     const supabaseClient = getSupabaseClient();
@@ -191,7 +196,7 @@ export default function DashboardShell({ children, currentUser }: { children: Re
           <Box key={group.title} sx={{ mb: 0.5 }}>
             <Typography sx={{ px: 2, py: 0.7, fontSize: 10, letterSpacing: '.08em', color: 'text.disabled' }}>{group.title}</Typography>
             {group.items.map((item) => {
-              const selected = pathname === item.href || pathname.startsWith(item.href + '/');
+              const selected = currentItem?.href === item.href;
               return (
                 <ListItemButton
                   key={`${item.href}-${item.label}`}
@@ -321,7 +326,7 @@ export default function DashboardShell({ children, currentUser }: { children: Re
                       ออเดอร์ #{n.id.slice(0, 8)} • {statusThai(n.order_status)}
                     </Typography>
                     <Typography variant='caption' color='text.disabled'>
-                      {new Date(n.created_at).toLocaleString('th-TH')}
+                      {formatDateTime(n.created_at)}
                     </Typography>
                   </Stack>
                 </MenuItem>

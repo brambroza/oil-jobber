@@ -79,7 +79,7 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
   }
 
   if (orderPayload.order_status === 'CONFIRMED' && currentOrder.order_status !== 'CONFIRMED' && !canApproveOrders(ctx.role)) {
-    return NextResponse.json({ error: 'เฉพาะผู้ดูแลระบบหรือผู้จัดการฝ่ายขายเท่านั้นที่อนุมัติใบสั่งซื้อได้ (ใช้ปุ่ม "อนุมัติ")' }, { status: 422 });
+    return NextResponse.json({ error: 'เฉพาะผู้ดูแลระบบหรือผู้จัดการฝ่ายขายเท่านั้นที่อนุมัติใบสั่งขายได้ (ใช้ปุ่ม "อนุมัติ")' }, { status: 422 });
   }
   if (orderPayload.order_status === 'PAID' && currentOrder.order_status !== 'PAID') {
     return NextResponse.json({ error: 'กรุณาบันทึกการรับชำระเงินผ่านเมนูบัญชี ระบบจะเปลี่ยนสถานะเป็นชำระแล้วให้อัตโนมัติ' }, { status: 422 });

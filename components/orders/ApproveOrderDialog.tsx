@@ -101,7 +101,7 @@ export default function ApproveOrderDialog({ open, orderId, orderNo, customerNam
 
   return (
     <Dialog open={open} onClose={saving ? undefined : onClose} fullWidth maxWidth='xs'>
-      <DialogTitle>อนุมัติใบสั่งซื้อ {orderNo || ''}</DialogTitle>
+      <DialogTitle>อนุมัติใบสั่งขาย {orderNo || ''}</DialogTitle>
       <DialogContent>
         <Stack spacing={1.5}>
           <Typography variant='body2' color='text.secondary'>ลูกค้า: {customerName || '-'}</Typography>

@@ -10,6 +10,7 @@ import {
 import { downloadCsv } from '@/lib/utils/csv';
 import { statusColor, statusThai } from '@/lib/utils/order-status';
 import { PdfPreviewDialog, type PdfPreviewTarget } from '@/components/documents/PdfPreviewDialog';
+import { formatDate } from '@/lib/utils/date-format';
 
 type CustomerDetail = {
   id: string;
@@ -89,7 +90,7 @@ export default function CustomerDetailPage() {
     downloadCsv(
       `purchase-history-${customer?.company_name || customerId}-${from}-${to}.csv`,
       ['เลขที่', 'วันที่', 'สินค้า', 'ลิตร', 'ค่าน้ำมัน', 'ค่าขนส่ง', 'ส่วนลด', 'ยอดสุทธิ', 'ชำระแล้ว', 'ค้างชำระ', 'สถานะ'],
-      rows.map((r) => [r.order_no, r.order_date.slice(0, 10), r.product_summary, r.total_liters, r.goods_amount, r.delivery_fee_amount, r.discount_amount, r.total_amount, r.paid_amount, r.outstanding_amount, statusThai(r.order_status)]),
+      rows.map((r) => [r.order_no, formatDate(r.order_date), r.product_summary, r.total_liters, r.goods_amount, r.delivery_fee_amount, r.discount_amount, r.total_amount, r.paid_amount, r.outstanding_amount, statusThai(r.order_status)]),
     );
   };
 
@@ -175,7 +176,7 @@ export default function CustomerDetailPage() {
               <TableBody>
                 {rows.map((r) => (
                   <TableRow key={r.order_id} hover>
-                    <TableCell>{r.order_date.slice(0, 10)}</TableCell>
+                    <TableCell>{formatDate(r.order_date)}</TableCell>
                     <TableCell sx={{ fontWeight: 800 }}>{r.order_no || r.order_id.slice(0, 8)}</TableCell>
                     <TableCell>{r.product_summary || '-'}</TableCell>
                     <TableCell align='right'>{liters(r.total_liters)}</TableCell>
@@ -186,8 +187,8 @@ export default function CustomerDetailPage() {
                     <TableCell align='right' sx={{ color: r.outstanding_amount > 0 ? 'error.main' : 'inherit' }}>{money(r.outstanding_amount)}</TableCell>
                     <TableCell><Chip size='small' label={statusThai(r.order_status)} color={statusColor(r.order_status)} /></TableCell>
                     <TableCell align='right'>
-                      <Tooltip title='ใบสั่งซื้อ (PDF)'>
-                        <IconButton size='small' color='primary' onClick={() => setPdfTarget({ type: 'purchase-order', id: r.order_id, title: `ใบสั่งซื้อ · ${r.order_no || ''}` })}><PictureAsPdf fontSize='small' /></IconButton>
+                      <Tooltip title='ใบสั่งขาย (PDF)'>
+                        <IconButton size='small' color='primary' onClick={() => setPdfTarget({ type: 'purchase-order', id: r.order_id, title: `ใบสั่งขาย · ${r.order_no || ''}` })}><PictureAsPdf fontSize='small' /></IconButton>
                       </Tooltip>
                     </TableCell>
                   </TableRow>

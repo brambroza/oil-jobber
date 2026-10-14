@@ -25,7 +25,7 @@ export const ROLE_MODULES: Record<UserRole, Array<AppModule | '*'>> = {
   SUPER_ADMIN: ['*'],
   ADMIN: ['*'],
   OWNER: ['dashboard', 'reports', 'accounting', 'orders', 'customers', 'prices'],
-  /** ผู้จัดการฝ่ายขาย: เมนูเดียวกับ SALES แต่เห็นลูกค้าทุกราย เลือกพนักงานขายได้ และอนุมัติใบสั่งซื้อได้ */
+  /** ผู้จัดการฝ่ายขาย: เมนูเดียวกับ SALES แต่เห็นลูกค้าทุกราย เลือกพนักงานขายได้ และอนุมัติใบสั่งขายได้ */
   SALES_MANAGER: ['dashboard', 'orders', 'customers', 'prices', 'accounting', 'reports'],
   SALES: ['dashboard', 'orders', 'customers', 'prices', 'accounting', 'reports'],
   ACCOUNTING: ['dashboard', 'accounting', 'orders', 'customers', 'reports'],

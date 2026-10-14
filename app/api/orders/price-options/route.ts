@@ -3,6 +3,8 @@ import { requireStaff } from '@/lib/auth/api-guard';
 import { supabaseAdmin } from '@/lib/supabase/server';
 import { loadDeliveryFeeSurcharge } from '@/lib/services/order-items';
 import { canAccessCustomer, customerForbidden } from '@/lib/services/customer-scope';
+import { isAdminRole } from '@/lib/auth/permissions';
+import { selectPriceRounds, type PriceRoundRow } from '@/lib/services/price-rounds';
 
 type CustomerAccess = {
   allowed_refinery_ids?: string[] | null;
@@ -16,25 +18,23 @@ function isUuid(value: string): boolean {
   return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(value);
 }
 
-function normalizeTime(value: string | null | undefined, fallback: '00:00:00' | '23:59:59'): string {
-  const text = String(value || '').trim();
-  if (!text) return fallback;
-  const match = text.match(/(\d{2}):(\d{2})(?::(\d{2}))?/);
-  if (!match) return fallback;
-  return `${match[1]}:${match[2]}:${match[3] || '00'}`;
-}
-
 /**
  * Price options for a customer: allowed refineries/depots/products with the
  * current base cost, plus the customer's price adjustment and transport fees.
+ * Admins may pass `round_id` to price from a specific (e.g. older) round and
+ * receive the list of selectable rounds as `price_rounds`.
  */
 export async function GET(req: NextRequest) {
   const guard = await requireStaff('orders');
   if (guard.response) return guard.response;
   const companyId = guard.ctx.companyId;
   const customerId = String(req.nextUrl.searchParams.get('customer_id') || '').trim();
+  const roundId = String(req.nextUrl.searchParams.get('round_id') || '').trim();
+  const isAdmin = isAdminRole(guard.ctx.role);
 
   if (!isUuid(customerId)) return NextResponse.json({ error: 'customer_id ต้องเป็น UUID เท่านั้น' }, { status: 422 });
+  if (roundId && !isUuid(roundId)) return NextResponse.json({ error: 'round_id ต้องเป็น UUID เท่านั้น' }, { status: 422 });
+  if (roundId && !isAdmin) return NextResponse.json({ error: 'เฉพาะผู้ดูแลระบบเท่านั้นที่เลือกรอบราคาได้' }, { status: 403 });
   if (!(await canAccessCustomer(guard.ctx, customerId))) return customerForbidden();
 
   const [customerRes, accessRes, roundsRes, productsRes, surchargeRes] = await Promise.all([
@@ -110,22 +110,16 @@ export async function GET(req: NextRequest) {
   const nowDate = `${nowPart('year')}-${nowPart('month')}-${nowPart('day')}`;
   const nowTime = `${nowPart('hour')}:${nowPart('minute')}:${nowPart('second')}`;
 
-  const latestRoundByRefinery = new Map<string, any>();
-  for (const round of roundsRes.data ?? []) {
-    const refineryId = String(round.refinery_id || '');
-    const effectiveDate = String(round.effective_date || '').trim();
-    const effectiveTime = normalizeTime(round.effective_at, '00:00:00');
-    const expiresDate = String(round.expires_date || '').trim();
-    const expiresTime = normalizeTime(round.expires_at, '23:59:59');
+  const { selected: currentRounds, options: roundOptions, overrideFound } = selectPriceRounds(
+    (roundsRes.data ?? []) as PriceRoundRow[],
+    allowedRefineryIds,
+    nowDate,
+    nowTime,
+    roundId || null,
+  );
+  if (roundId && !overrideFound) return NextResponse.json({ error: 'ไม่พบรอบราคาที่เลือก หรือลูกค้าไม่มีสิทธิ์โรงกลั่นนี้' }, { status: 404 });
+  const priceRounds = isAdmin ? roundOptions : undefined;
 
-    if (!refineryId || !effectiveDate) continue;
-    if (allowedRefineryIds.length && !allowedRefineryIds.includes(refineryId)) continue;
-    if (effectiveDate > nowDate || (effectiveDate === nowDate && effectiveTime > nowTime)) continue;
-    if (expiresDate && (expiresDate < nowDate || (expiresDate === nowDate && expiresTime <= nowTime))) continue;
-    if (!latestRoundByRefinery.has(refineryId)) latestRoundByRefinery.set(refineryId, round);
-  }
-
-  const currentRounds = [...latestRoundByRefinery.values()];
   const roundIds = currentRounds.map((round) => String(round.id));
   if (!roundIds.length) {
     return NextResponse.json({
@@ -134,6 +128,7 @@ export async function GET(req: NextRequest) {
       delivery_fee_per_liter_by_depot: deliveryFeeByDepot,
       delivery_fee_surcharge_per_liter: deliveryFeeSurcharge,
       price_options: [],
+      price_rounds: priceRounds,
     });
   }
 
@@ -175,5 +170,6 @@ export async function GET(req: NextRequest) {
     delivery_fee_per_liter_by_depot: deliveryFeeByDepot,
     delivery_fee_surcharge_per_liter: deliveryFeeSurcharge,
     price_options: priceOptions,
+    price_rounds: priceRounds,
   });
 }

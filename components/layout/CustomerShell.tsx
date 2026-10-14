@@ -35,6 +35,7 @@ import {
   Typography,
 } from '@mui/material';
 import { createSupabaseBrowserClient } from '@/lib/supabase/browser';
+import { formatDateTime } from '@/lib/utils/date-format';
 
 type Props = {
   children: ReactNode;
@@ -215,7 +216,7 @@ export default function CustomerShell({ children, title = 'พอร์ทัล
               <Paper key={n.id} variant='outlined' sx={{ p: 1.2, borderColor: n.is_read ? '#e2e8f0' : '#93c5fd', bgcolor: n.is_read ? '#fff' : '#eff6ff' }}>
                 <Typography fontSize={13} fontWeight={700}>{n.title}</Typography>
                 <Typography fontSize={12} color='text.secondary'>{n.message}</Typography>
-                <Typography fontSize={11} color='text.disabled' sx={{ mt: 0.4 }}>{new Date(n.created_at).toLocaleString('th-TH')}</Typography>
+                <Typography fontSize={11} color='text.disabled' sx={{ mt: 0.4 }}>{formatDateTime(n.created_at)}</Typography>
               </Paper>
             ))}
             {!notifications.length ? <Typography color='text.secondary'>ยังไม่มีการแจ้งเตือน</Typography> : null}

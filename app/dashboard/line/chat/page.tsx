@@ -21,6 +21,7 @@ import {
   Typography,
 } from '@mui/material';
 import { PageScaffold } from '@/components/common/PageScaffold';
+import { formatDateTime } from '@/lib/utils/date-format';
 
 type LineCustomer = {
   id: string;
@@ -46,11 +47,6 @@ function formatTime(value: string): string {
   return date.toLocaleTimeString('th-TH', { hour: '2-digit', minute: '2-digit' });
 }
 
-function formatDateTime(value: string): string {
-  const date = new Date(value);
-  if (Number.isNaN(date.getTime())) return '-';
-  return date.toLocaleString('th-TH', { day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit' });
-}
 
 export default function LineChatPage() {
   const [companyId] = useState(process.env.NEXT_PUBLIC_DEFAULT_COMPANY_ID ?? '');

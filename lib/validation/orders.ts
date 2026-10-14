@@ -71,3 +71,13 @@ export const deliveryRecordSchema = z.object({
 });
 
 export type DeliveryRecordInput = z.infer<typeof deliveryRecordSchema>;
+
+/** POST /api/orders/[id]/quotation */
+export const issueQuotationSchema = z.object({
+  valid_until: z.union([dateYmd, z.literal(''), z.null()])
+    .optional()
+    .transform((value): string | null | undefined => (value === '' ? null : value)),
+  note: optionalText(1000),
+  /** ออกใหม่: ยกเลิกใบเสนอราคาเดิมของใบสั่งขายนี้แล้วออกเลขใหม่ */
+  reissue: z.boolean().optional(),
+});

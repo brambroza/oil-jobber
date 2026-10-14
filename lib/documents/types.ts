@@ -1,6 +1,6 @@
 import type { PaymentMethod } from '@/types/database';
 
-export type DocumentType = 'purchase-order' | 'tax-invoice' | 'receipt' | 'delivery-record';
+export type DocumentType = 'purchase-order' | 'quotation' | 'tax-invoice' | 'delivery-note' | 'receipt' | 'delivery-record';
 
 export type SellerInfo = {
   name: string;
@@ -107,4 +107,16 @@ export type ReceiptDocumentData = OrderDocumentData & {
   receipt: { receipt_no: string; issued_at: string; amount: number; payment_method: string | null; reference_no: string | null };
   /** ลายเซ็นผู้รับเงิน (ผู้บันทึกการรับชำระ) ถ้ามี */
   receiver_signature: string | null;
+};
+
+export type QuotationInfo = {
+  quotation_no: string;
+  issued_at: string;
+  valid_until: string | null;
+  note: string | null;
+};
+
+/** ใบเสนอราคา: order context plus the customer/items/totals snapshot taken when it was issued. */
+export type QuotationDocumentData = OrderDocumentData & {
+  quotation: QuotationInfo;
 };

@@ -5,9 +5,13 @@ import { supabaseAdmin } from '@/lib/supabase/server';
 /** Max ids per `.in()` filter to keep PostgREST GET URLs within length limits. */
 const ID_CHUNK_SIZE = 200;
 
+/** PostgREST caps each response at 1000 rows (max-rows), so page within each chunk. */
+const PAGE_SIZE = 1000;
+
 /**
  * Counts non-deleted oil_price_items per oil_base_price_id in a few bulk
- * queries instead of one count query per price round (N+1).
+ * queries instead of one count query per price round (N+1). Each chunk is
+ * paged with `.range()` so the PostgREST row cap does not silently truncate counts.
  *
  * @param companyId - tenant scope
  * @param basePriceIds - price round ids to count items for
@@ -20,16 +24,22 @@ async function countItemsByBasePrice(
   const counts = new Map<string, number>();
   for (let i = 0; i < basePriceIds.length; i += ID_CHUNK_SIZE) {
     const chunk = basePriceIds.slice(i, i + ID_CHUNK_SIZE);
-    const { data, error } = await supabaseAdmin
-      .from('oil_price_items')
-      .select('oil_base_price_id')
-      .eq('company_id', companyId)
-      .eq('is_deleted', false)
-      .in('oil_base_price_id', chunk);
-    if (error) return { counts, error: error.message };
-    for (const item of data ?? []) {
-      const key = String(item.oil_base_price_id);
-      counts.set(key, (counts.get(key) ?? 0) + 1);
+    for (let offset = 0; ; offset += PAGE_SIZE) {
+      const { data, error } = await supabaseAdmin
+        .from('oil_price_items')
+        .select('oil_base_price_id')
+        .eq('company_id', companyId)
+        .eq('is_deleted', false)
+        .in('oil_base_price_id', chunk)
+        .order('id')
+        .range(offset, offset + PAGE_SIZE - 1);
+      if (error) return { counts, error: error.message };
+      const page = data ?? [];
+      for (const item of page) {
+        const key = String(item.oil_base_price_id);
+        counts.set(key, (counts.get(key) ?? 0) + 1);
+      }
+      if (page.length < PAGE_SIZE) break;
     }
   }
   return { counts };

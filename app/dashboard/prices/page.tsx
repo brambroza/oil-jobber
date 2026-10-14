@@ -24,6 +24,7 @@ import {
   Typography,
 } from '@mui/material';
 import { ActionSnackbar, type ActionSnackbarSeverity } from '@/components/common/ActionSnackbar';
+import { formatDate } from '@/lib/utils/date-format';
 
 type BasePriceRow = {
   id: string;
@@ -303,12 +304,6 @@ export default function PricesPage() {
     }
   };
 
-  function formatDate(isoDate: string): string {
-    if (!isoDate) return '-';
-    const [yyyy, mm, dd] = isoDate.split('-');
-    if (!yyyy || !mm || !dd) return isoDate;
-    return `${dd}/${mm}/${yyyy}`;
-  }
 
 
   return (

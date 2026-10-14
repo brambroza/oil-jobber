@@ -28,6 +28,7 @@ import {
   Typography,
 } from '@mui/material';
 import CustomerShell from '@/components/layout/CustomerShell';
+import { formatDate } from '@/lib/utils/date-format';
 
 type HomeData = {
   customer: {
@@ -93,10 +94,8 @@ function customerSellingPrice(base?: number | null, extraCostPerLiter = 0) {
 
 function fmtThaiDateTime(date?: string, time?: string | null): string {
   if (!date) return '-';
-  const dt = new Date(`${date}${time ? `T${String(time).slice(11, 19)}` : 'T00:00:00'}`);
-  const d = dt.toLocaleDateString('th-TH', { day: '2-digit', month: 'short', year: 'numeric' });
-  const t = dt.toLocaleTimeString('th-TH', { hour: '2-digit', minute: '2-digit' });
-  return `${d} ${t} น.`;
+  const t = time ? String(time).slice(11, 16) : '00:00';
+  return `${formatDate(date)} ${t} น.`;
 }
 
 function productColor(code: string) {

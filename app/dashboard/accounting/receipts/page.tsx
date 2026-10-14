@@ -6,6 +6,7 @@ import { Alert, Box, Button, IconButton, Stack, Table, TableBody, TableCell, Tab
 import { PdfPreviewDialog, type PdfPreviewTarget } from '@/components/documents/PdfPreviewDialog';
 import { ActionSnackbar, type ActionSnackbarSeverity } from '@/components/common/ActionSnackbar';
 import { PAYMENT_METHOD_LABELS } from '@/lib/documents/format';
+import { formatDate } from '@/lib/utils/date-format';
 
 type ReceiptRow = {
   id: string;
@@ -79,7 +80,7 @@ export default function ReceiptsPage() {
                 <TableCell sx={{ fontWeight: 800 }}>{r.receipt_no}</TableCell>
                 <TableCell>{r.order_no || r.sale_order_id.slice(0, 8)}</TableCell>
                 <TableCell>{r.customer_name || '-'}</TableCell>
-                <TableCell>{r.issued_at}</TableCell>
+                <TableCell>{formatDate(r.issued_at)}</TableCell>
                 <TableCell>{PAYMENT_METHOD_LABELS[String(r.payment_method)] ?? r.payment_method ?? '-'}</TableCell>
                 <TableCell>{r.reference_no || '-'}</TableCell>
                 <TableCell align='right' sx={{ fontWeight: 900 }}>{money(r.amount)}</TableCell>

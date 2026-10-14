@@ -42,6 +42,7 @@ import {
 import Link from 'next/link';
 import CustomerShell from '@/components/layout/CustomerShell';
 import { computeDeliveryFeeAmount, computeUnitPrice } from '@/lib/services/order-pricing';
+import { formatDate, formatDateTime } from '@/lib/utils/date-format';
 
 type OrderRow = {
   id: string;
@@ -217,10 +218,7 @@ function escapeHtml(value: unknown): string {
 }
 
 function dateTh(value?: string | null): string {
-  if (!value) return '-';
-  const date = new Date(value);
-  if (Number.isNaN(date.getTime())) return String(value);
-  return date.toLocaleDateString('th-TH');
+  return formatDate(value);
 }
 
 function paymentExtraById(paymentOptions: PaymentOption[], paymentConditionId: string): number {
@@ -810,7 +808,7 @@ export default function CustomerOrdersPage() {
               <div class="footer">
                 <div>
  
-                  <div>Printed by: ${escapeHtml(customer.company_name || '-')} ${escapeHtml(new Date().toLocaleString('th-TH'))}</div>
+                  <div>Printed by: ${escapeHtml(customer.company_name || '-')} ${escapeHtml(formatDateTime(new Date()))}</div>
                 </div>
                 <div>Page 1 of 1</div>
               </div>
@@ -883,7 +881,7 @@ export default function CustomerOrdersPage() {
                 {pagedOrders.map((r) => (
                   <TableRow key={r.id} hover>
                     <TableCell>{r.order_no || r.id.slice(0, 8)}</TableCell>
-                    <TableCell>{r.created_at ? new Date(r.created_at).toLocaleDateString('th-TH') : '-'}</TableCell>
+                    <TableCell>{formatDate(r.created_at)}</TableCell>
                     <TableCell>{receiveMethodThai(r.receive_method)}</TableCell>
                     <TableCell>
                       {r.delivery_order_no || r.delivery_order_file_url ? (
@@ -949,7 +947,7 @@ export default function CustomerOrdersPage() {
                         <Stack direction='row' spacing={0.5} alignItems='center' sx={{ mt: 0.35 }}>
                           <CalendarTodayOutlined sx={{ fontSize: 12, color: '#94a3b8' }} />
                           <Typography sx={{ fontSize: 12, color: '#64748b' }}>
-                            {r.created_at ? new Date(r.created_at).toLocaleDateString('th-TH') : '-'}
+                            {formatDate(r.created_at)}
                           </Typography>
                         </Stack>
                       </Box>

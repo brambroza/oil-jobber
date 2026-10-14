@@ -18,6 +18,7 @@ import {
   TableRow,
   Typography,
 } from '@mui/material';
+import { formatDate } from '@/lib/utils/date-format';
 
 type OrderRow = {
   id: string;
@@ -288,7 +289,7 @@ export default function DashboardPage() {
                     {latestSales.map((inv) => (
                       <TableRow key={inv.id} hover>
                         <TableCell>{inv.invoice_no || '-'}</TableCell>
-                        <TableCell>{inv.issued_at || '-'}</TableCell>
+                        <TableCell>{formatDate(inv.issued_at)}</TableCell>
                         <TableCell align='right'>{formatMoney(inv.amount)}</TableCell>
                       </TableRow>
                     ))}
@@ -305,7 +306,7 @@ export default function DashboardPage() {
         <Grid item xs={12} md={6}>
           <Card variant='outlined' sx={{ borderRadius: 2, height: '100%' }}>
             <CardContent>
-              <Typography variant='h6' sx={{ mb: 1.5 }}>สถานะใบสั่งซื้อของลูกค้า</Typography>
+              <Typography variant='h6' sx={{ mb: 1.5 }}>สถานะใบสั่งขายของลูกค้า</Typography>
               <Box sx={{ overflowX: 'auto' }}>
                 <Table size='small'>
                   <TableHead>
@@ -320,11 +321,11 @@ export default function DashboardPage() {
                       <TableRow key={o.id} hover>
                         <TableCell>{o.customers?.company_name || '-'}</TableCell>
                         <TableCell>{statusThai(o.order_status)}</TableCell>
-                        <TableCell>{new Date(o.created_at).toLocaleDateString('th-TH')}</TableCell>
+                        <TableCell>{formatDate(o.created_at)}</TableCell>
                       </TableRow>
                     ))}
                     {!latestOrders.length ? (
-                      <TableRow><TableCell colSpan={3} align='center'>ไม่มีข้อมูลใบสั่งซื้อ</TableCell></TableRow>
+                      <TableRow><TableCell colSpan={3} align='center'>ไม่มีข้อมูลใบสั่งขาย</TableCell></TableRow>
                     ) : null}
                   </TableBody>
                 </Table>

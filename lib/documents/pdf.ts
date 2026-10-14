@@ -2,8 +2,9 @@ import fs from 'node:fs';
 import path from 'node:path';
 import PdfPrinter from 'pdfmake';
 import type { TDocumentDefinitions, Content, TableCell } from 'pdfmake/interfaces';
-import { money, liters as formatLiters } from '@/lib/documents/format';
+import { money, liters as formatLiters, phoneTh } from '@/lib/documents/format';
 import type { DocumentItem, DocumentTotals, SellerInfo, CustomerInfo } from '@/lib/documents/types';
+import { formatDateTime } from '@/lib/utils/date-format';
 
 const FONT_DIR = path.join(process.cwd(), 'lib', 'documents', 'fonts');
 
@@ -56,7 +57,7 @@ export function sellerBlock(seller: SellerInfo): Content {
       {
         text: [
           seller.tax_id ? `เลขประจำตัวผู้เสียภาษี ${seller.tax_id}` : '',
-          seller.phone ? `   โทร ${seller.phone}` : '',
+          seller.phone ? `   ${phoneTh(seller.phone)}` : '',
           seller.email ? `   ${seller.email}` : '',
         ].join(''),
         color: COLORS.muted,
@@ -72,7 +73,7 @@ export function customerBlock(customer: CustomerInfo, title = 'ลูกค้�
       { text: title, color: COLORS.muted, fontSize: 9 },
       { text: customer.name, bold: true, fontSize: 11 },
       customer.address ? { text: customer.address } : '',
-      { text: [customer.tax_id ? `เลขประจำตัวผู้เสียภาษี ${customer.tax_id}` : '', customer.phone ? `   โทร ${customer.phone}` : ''].join('') },
+      { text: [customer.tax_id ? `เลขประจำตัวผู้เสียภาษี ${customer.tax_id}` : '', customer.phone ? `   ${phoneTh(customer.phone)}` : ''].join('') },
     ],
   };
 }
@@ -231,7 +232,7 @@ export function baseDefinition(title: string, content: Content[]): TDocumentDefi
     content,
     footer: (currentPage, pageCount) => ({
       columns: [
-        { text: `พิมพ์เมื่อ ${new Date().toLocaleString('th-TH', { timeZone: 'Asia/Bangkok' })}`, fontSize: 7.5, color: COLORS.muted },
+        { text: `พิมพ์เมื่อ ${formatDateTime(new Date())}`, fontSize: 7.5, color: COLORS.muted },
         { text: `หน้า ${currentPage} / ${pageCount}`, alignment: 'right', fontSize: 7.5, color: COLORS.muted },
       ],
       margin: [36, 14, 36, 0],

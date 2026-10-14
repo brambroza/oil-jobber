@@ -2,7 +2,10 @@ import { supabaseAdmin } from '@/lib/supabase/server';
 import { renderPdf } from '@/lib/documents/pdf';
 import { loadOrderDocumentData, loadReceiptDocumentData } from '@/lib/documents/from-order';
 import { buildPurchaseOrderPdf } from '@/lib/documents/purchase-order';
+import { buildQuotationPdf } from '@/lib/documents/quotation';
+import { loadQuotationDocumentData } from '@/lib/services/quotations';
 import { buildTaxInvoicePdf } from '@/lib/documents/tax-invoice';
+import { buildDeliveryNotePdf } from '@/lib/documents/delivery-note';
 import { buildReceiptPdf } from '@/lib/documents/receipt';
 import { buildDeliveryRecordPdf } from '@/lib/documents/delivery-record';
 import { advanceOrderStatus } from '@/lib/services/order-status';
@@ -10,12 +13,15 @@ import { dateTh } from '@/lib/documents/format';
 import { money } from '@/lib/documents/format';
 import { pushLinePayload, type LinePushContext } from '@/lib/services/line';
 import type { DocumentType } from '@/lib/documents/types';
+import { formatDate } from '@/lib/utils/date-format';
 
-export const DOCUMENT_TYPES: DocumentType[] = ['purchase-order', 'tax-invoice', 'receipt', 'delivery-record'];
+export const DOCUMENT_TYPES: DocumentType[] = ['purchase-order', 'quotation', 'tax-invoice', 'delivery-note', 'receipt', 'delivery-record'];
 
 export const DOCUMENT_TITLES: Record<DocumentType, string> = {
-  'purchase-order': 'ใบสั่งซื้อ',
-  'tax-invoice': 'ใบส่งของ/ใบแจ้งหนี้/ใบกำกับภาษี',
+  'purchase-order': 'ใบสั่งขาย',
+  quotation: 'ใบเสนอราคา',
+  'tax-invoice': 'ใบแจ้งหนี้/ใบกำกับภาษี',
+  'delivery-note': 'ใบส่งของ',
   receipt: 'ใบเสร็จรับเงิน',
   'delivery-record': 'บันทึกการส่งของ',
 };
@@ -32,7 +38,8 @@ export type GeneratedDocument = {
 
 /**
  * Generates one PDF document. `id` is an order id for purchase-order /
- * tax-invoice and a receipt id for receipt.
+ * quotation / tax-invoice / delivery-note / delivery-record and a receipt id for receipt.
+ * The quotation prints the latest active quotation of the order.
  */
 export async function generateDocumentPdf(
   companyId: string,
@@ -56,6 +63,22 @@ export async function generateDocumentPdf(
     };
   }
 
+  if (type === 'quotation') {
+    const quote = await loadQuotationDocumentData(companyId, id);
+    if ('error' in quote) return quote;
+    const buffer = await renderPdf(buildQuotationPdf(quote));
+    const { data: quoteCustomer } = await supabaseAdmin.from('sale_orders').select('customer_id').eq('id', id).maybeSingle();
+    return {
+      buffer,
+      filename: `${quote.quotation.quotation_no}.pdf`,
+      title: DOCUMENT_TITLES.quotation,
+      docNo: quote.quotation.quotation_no,
+      orderId: quote.order_id,
+      customerId: quoteCustomer?.customer_id ?? null,
+      summary: `${money(quote.totals.total_liters, 0)} ลิตร ยอดรวม ${money(quote.totals.net_incl_vat)} บาท${quote.quotation.valid_until ? ` ยืนราคาถึง ${dateTh(quote.quotation.valid_until)}` : ''}`,
+    };
+  }
+
   const data = await loadOrderDocumentData(companyId, id);
   if ('error' in data) return data;
   const { data: customerRow } = await supabaseAdmin.from('sale_orders').select('customer_id').eq('id', id).maybeSingle();
@@ -70,7 +93,21 @@ export async function generateDocumentPdf(
       docNo: data.invoice.invoice_no,
       orderId: data.order_id,
       customerId: customerRow?.customer_id ?? null,
-      summary: `ยอดรวม ${money(data.totals.net_incl_vat)} บาท ครบกำหนด ${data.invoice.due_date || data.due_date || '-'}`,
+      summary: `ยอดรวม ${money(data.totals.net_incl_vat)} บาท ครบกำหนด ${formatDate(data.invoice.due_date || data.due_date)}`,
+    };
+  }
+
+  if (type === 'delivery-note') {
+    const buffer = await renderPdf(buildDeliveryNotePdf(data, options.copy ? 'copy' : 'original'));
+    const docNo = data.invoice?.invoice_no || data.order_no;
+    return {
+      buffer,
+      filename: `DN-${docNo}.pdf`,
+      title: DOCUMENT_TITLES['delivery-note'],
+      docNo,
+      orderId: data.order_id,
+      customerId: customerRow?.customer_id ?? null,
+      summary: `${money(data.totals.total_liters, 0)} ลิตร${data.delivery_location ? ` ส่งที่ ${data.delivery_location}` : ''}`,
     };
   }
 
@@ -205,7 +242,7 @@ export async function sendDocumentToLine(
       userId,
       milestone,
       {},
-      milestone === 'PO_SENT' ? 'ส่งใบสั่งซื้อให้ลูกค้าทาง LINE' : 'ส่งใบส่งของ/ใบแจ้งหนี้/ใบกำกับภาษีให้ลูกค้าทาง LINE',
+      milestone === 'PO_SENT' ? 'ส่งใบสั่งขายให้ลูกค้าทาง LINE' : 'ส่งใบแจ้งหนี้/ใบกำกับภาษีให้ลูกค้าทาง LINE',
     );
     if (!('error' in advanced)) {
       orderStatus = advanced.order_status;

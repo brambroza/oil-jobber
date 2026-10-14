@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import Link from 'next/link';
 import { Alert, Box, Button, Card, CardActionArea, CardContent, Chip, Stack, Table, TableBody, TableCell, TableHead, TableRow, Typography } from '@mui/material';
+import { formatDate } from '@/lib/utils/date-format';
 
 type OutstandingRow = { outstanding_amount: number; due_date: string | null };
 type InvoiceRow = { id: string; invoice_no: string; issued_at: string; total_amount: number; status: string; customer_name: string | null; order_no: string | null };
@@ -109,7 +110,7 @@ export default function AccountingSummaryPage() {
                     <TableCell>{r.invoice_no}</TableCell>
                     <TableCell>{r.order_no || '-'}</TableCell>
                     <TableCell>{r.customer_name || '-'}</TableCell>
-                    <TableCell>{r.issued_at}</TableCell>
+                    <TableCell>{formatDate(r.issued_at)}</TableCell>
                     <TableCell align='right'>{money(r.total_amount)}</TableCell>
                     <TableCell align='right'><Chip size='small' label={statusLabel[r.status]?.label ?? r.status} color={statusLabel[r.status]?.color ?? 'default'} /></TableCell>
                   </TableRow>

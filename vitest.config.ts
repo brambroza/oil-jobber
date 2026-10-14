@@ -6,6 +6,6 @@ export default defineConfig({
     alias: { '@': path.resolve(__dirname, '.') },
   },
   test: {
-    include: ['lib/**/__tests__/**/*.test.ts'],
+    include: ['lib/**/__tests__/**/*.test.ts', 'app/**/__tests__/**/*.test.ts'],
   },
 });

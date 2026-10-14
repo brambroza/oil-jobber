@@ -3,10 +3,12 @@ import { requireStaff } from '@/lib/auth/api-guard';
 import { supabaseAdmin } from '@/lib/supabase/server';
 import { loadOrderDocumentData } from '@/lib/documents/from-order';
 import { canAccessCustomer, customerForbidden } from '@/lib/services/customer-scope';
+import { canIssueTaxInvoice } from '@/lib/utils/order-status';
 
 /**
  * Issues a tax invoice from an order: snapshots customer, items and totals and
- * assigns the next IV-YYMMDD#### number. One active invoice per order.
+ * assigns the next IV-YYMMDD#### number. One active invoice per order, and
+ * only once the order has been approved.
  */
 export async function POST(_: Request, { params }: { params: Promise<{ orderId: string }> }) {
   const guard = await requireStaff('accounting');
@@ -24,8 +26,11 @@ export async function POST(_: Request, { params }: { params: Promise<{ orderId: 
   if (orderError) return NextResponse.json({ error: orderError.message }, { status: 400 });
   if (!order) return NextResponse.json({ error: 'ไม่พบคำสั่งซื้อ' }, { status: 404 });
   if (!(await canAccessCustomer(ctx, order.customer_id))) return customerForbidden();
-  if (['DRAFT', 'CANCELLED'].includes(String(order.order_status))) {
-    return NextResponse.json({ error: 'คำสั่งซื้อสถานะร่าง/ยกเลิก ออกใบกำกับภาษีไม่ได้' }, { status: 422 });
+  if (order.order_status === 'CANCELLED') {
+    return NextResponse.json({ error: 'คำสั่งซื้อถูกยกเลิกแล้ว ออกใบกำกับภาษีไม่ได้' }, { status: 422 });
+  }
+  if (!canIssueTaxInvoice(order.order_status)) {
+    return NextResponse.json({ error: 'คำสั่งซื้อยังไม่ผ่านการอนุมัติ ต้องอนุมัติก่อนจึงออกใบกำกับภาษีได้' }, { status: 422 });
   }
 
   const { data: existing } = await supabaseAdmin

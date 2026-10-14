@@ -26,7 +26,7 @@ const empty: CompanyForm = {
   delivery_fee_surcharge_per_liter: '0',
 };
 
-/** Seller details printed on every document (ใบสั่งซื้อ / ใบกำกับภาษี / ใบเสร็จ). */
+/** Seller details printed on every document (ใบสั่งขาย / ใบกำกับภาษี / ใบเสร็จ). */
 export default function CompanySettingsPage() {
   const [form, setForm] = useState<CompanyForm>(empty);
   const [saving, setSaving] = useState(false);
@@ -84,7 +84,7 @@ export default function CompanySettingsPage() {
   return (
     <Stack spacing={2}>
       <Typography variant='h4'>ข้อมูลบริษัท (ผู้ขาย)</Typography>
-      <Typography variant='body2' color='text.secondary'>ชื่อ ที่อยู่ และเลขประจำตัวผู้เสียภาษีที่จะพิมพ์บนใบสั่งซื้อ ใบกำกับภาษี และใบเสร็จรับเงิน</Typography>
+      <Typography variant='body2' color='text.secondary'>ชื่อ ที่อยู่ และเลขประจำตัวผู้เสียภาษีที่จะพิมพ์บนใบสั่งขาย ใบกำกับภาษี และใบเสร็จรับเงิน</Typography>
       {error ? <Alert severity='error' onClose={() => setError('')}>{error}</Alert> : null}
       {notice ? <Alert severity='success' onClose={() => setNotice('')}>{notice}</Alert> : null}
       <Card>
