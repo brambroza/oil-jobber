@@ -7,7 +7,7 @@ import { canIssueTaxInvoice } from '@/lib/utils/order-status';
 
 /**
  * Issues a tax invoice from an order: snapshots customer, items and totals and
- * assigns the next IV-YYMMDD#### number. One active invoice per order, and
+ * assigns the next IV-YY#### number (yearly run). One active invoice per order, and
  * only once the order has been approved.
  */
 export async function POST(_: Request, { params }: { params: Promise<{ orderId: string }> }) {
