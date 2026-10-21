@@ -3,7 +3,7 @@ import { describe, expect, it, vi } from 'vitest';
 vi.mock('@/lib/supabase/server', () => ({ supabaseAdmin: {} }));
 vi.mock('@/lib/documents/from-order', () => ({ loadOrderDocumentData: vi.fn() }));
 
-import { applyQuotationSnapshot, buildQuotationSnapshot, todayBangkok, type QuotationRow } from '../quotations';
+import { applyQuotationSnapshot, buildQuotationSnapshot, todayBangkok, withRefineryLabels, type QuotationRow } from '../quotations';
 import { buildQuotationPdf } from '@/lib/documents/quotation';
 import type { DocumentItem, DocumentTotals, OrderDocumentData } from '@/lib/documents/types';
 
@@ -128,6 +128,26 @@ describe('applyQuotationSnapshot', () => {
     expect(data.items).toEqual(doc.items);
     expect(data.totals).toEqual(doc.totals);
     expect(data.customer.name).toBe('ลูกค้าปัจจุบัน');
+  });
+});
+
+describe('withRefineryLabels', () => {
+  const withDepot = (code: string, label: string | null): DocumentItem => ({ ...item(code, 1000, 32), depot_label: label });
+
+  it('adds the refinery to an old snapshot label of the same depot', () => {
+    const result = withRefineryLabels([withDepot('B7', 'LLK - ลำลูกกา')], [withDepot('B7', 'CALTEX · LLK - ลำลูกกา')]);
+    expect(result[0].depot_label).toBe('CALTEX · LLK - ลำลูกกา');
+  });
+
+  it('keeps the snapshot label when the depot changed after issue', () => {
+    const result = withRefineryLabels([withDepot('B7', 'LLK - ลำลูกกา')], [withDepot('B7', 'IRPC · SR - สุราษฎร์ธานี')]);
+    expect(result[0].depot_label).toBe('LLK - ลำลูกกา');
+  });
+
+  it('keeps the snapshot when the line no longer matches', () => {
+    const snapshot = [withDepot('B7', 'LLK - ลำลูกกา'), withDepot('B10', null)];
+    const result = withRefineryLabels(snapshot, [withDepot('B10', 'CALTEX · LLK - ลำลูกกา')]);
+    expect(result).toEqual(snapshot);
   });
 });
 

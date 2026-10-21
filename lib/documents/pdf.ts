@@ -1,7 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import PdfPrinter from 'pdfmake';
-import type { TDocumentDefinitions, Content, TableCell } from 'pdfmake/interfaces';
+import type { TDocumentDefinitions, Column, Content, TableCell } from 'pdfmake/interfaces';
 import { money, liters as formatLiters, phoneTh } from '@/lib/documents/format';
 import type { DocumentItem, DocumentTotals, SellerInfo, CustomerInfo } from '@/lib/documents/types';
 import { formatDateTime } from '@/lib/utils/date-format';
@@ -223,19 +223,79 @@ export function signatures(slots: SignatureSlot[]): Content {
   };
 }
 
+/**
+ * Two-column sign-off (label on top, signature, name, line, then a plain
+ * `วันที่` row). Used by the tax invoice; unsigned slots stay blank
+ * for handwriting.
+ */
+export function signatureBoxes(slots: SignatureSlot[]): Content {
+  const lineWidth = 200;
+  const dateLabelWidth = 36;
+  const signatureHeight = 36;
+  // A fresh node per slot: pdfmake mutates content while laying it out.
+  const line = (): Content => ({ canvas: [{ type: 'line', x1: 0, y1: 0, x2: lineWidth, y2: 0, lineWidth: 0.6, lineColor: COLORS.text }] });
+  const boxes = slots.map((slot): Column => {
+    const { label, image = null, date = null, name = null } = typeof slot === 'string' ? { label: slot } : slot;
+    return {
+      width: lineWidth,
+      stack: [
+        { text: label, alignment: 'center', margin: [0, 0, 0, 4] },
+        // Fixed-height signature area so both columns' lines stay level, signed or not.
+        {
+          table: { widths: ['*'], heights: [signatureHeight], body: [[image ? { image, fit: [110, signatureHeight], alignment: 'center' } : '']] },
+          layout: 'noBorders',
+        },
+        { text: name ? `(${name})` : ' ', alignment: 'center' },
+        { stack: [line()], margin: [0, 2, 0, 0] },
+        {
+          columns: [
+            { text: 'วันที่', width: dateLabelWidth },
+            { text: date && (image || name) ? date : ' ', width: lineWidth - dateLabelWidth, alignment: 'center' },
+          ],
+          margin: [0, 10, 0, 0],
+        },
+      ],
+    };
+  });
+  // Fixed-width boxes centred on the page with blank '*' columns either side.
+  const spacer = (width: number | '*'): Column => ({ text: '', width });
+  return {
+    columns: [spacer('*'), ...boxes.flatMap((box, i) => (i ? [spacer(60), box] : [box])), spacer('*')],
+    margin: [0, 24, 0, 0],
+  };
+}
+
+/** Block pinned to the bottom of the last page, above the printed-at line. */
+export type PageBottom = {
+  /** Builds the block; called per render because pdfmake mutates content nodes. */
+  build: () => Content;
+  /** Space (pt) the block takes; reserved on every page so body content never runs under it. */
+  height: number;
+};
+
 /** Standard A4 page settings shared by all documents. */
-export function baseDefinition(title: string, content: Content[]): TDocumentDefinitions {
+export function baseDefinition(title: string, content: Content[], bottom?: PageBottom): TDocumentDefinitions {
+  const reserved = bottom?.height ?? 0;
   return {
     info: { title },
     pageSize: 'A4',
-    pageMargins: [36, 36, 36, 44],
+    pageMargins: [36, 36, 36, 44 + reserved],
     content,
-    footer: (currentPage, pageCount) => ({
-      columns: [
-        { text: `พิมพ์เมื่อ ${formatDateTime(new Date())}`, fontSize: 7.5, color: COLORS.muted },
-        { text: `หน้า ${currentPage} / ${pageCount}`, alignment: 'right', fontSize: 7.5, color: COLORS.muted },
-      ],
-      margin: [36, 14, 36, 0],
-    }),
+    footer: (currentPage, pageCount) => {
+      const showBottom = Boolean(bottom) && currentPage === pageCount;
+      return {
+        stack: [
+          showBottom ? { stack: [bottom!.build()], margin: [36, 0, 36, 0] } : '',
+          {
+            columns: [
+              { text: `พิมพ์เมื่อ ${formatDateTime(new Date())}`, fontSize: 7.5, color: COLORS.muted },
+              { text: `หน้า ${currentPage} / ${pageCount}`, alignment: 'right', fontSize: 7.5, color: COLORS.muted },
+            ],
+            // Keep the printed-at line at the page edge on pages without the bottom block.
+            margin: [36, 14 + (showBottom ? 0 : reserved), 36, 0],
+          },
+        ],
+      };
+    },
   };
 }

@@ -102,6 +102,6 @@ export function buildDeliveryNotePdf(data: OrderDocumentData, copy: 'original' |
       },
       layout: { hLineWidth: () => 0.5, vLineWidth: () => 0.5, hLineColor: () => COLORS.line, vLineColor: () => COLORS.line },
     },
-    signatures(['ผู้รับสินค้า', 'ผู้ส่งสินค้า', 'ผู้มีอำนาจลงนาม']),
+    signatures(['ผู้รับสินค้า', 'ผู้ส่งสินค้า', 'ผู้ออกเอกสาร']),
   ]);
 }

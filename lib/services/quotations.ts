@@ -52,6 +52,25 @@ export function buildQuotationSnapshot(doc: OrderDocumentData) {
 }
 
 /**
+ * Snapshots taken before the refinery name was printed only carry the depot
+ * (`LLK - ลำลูกกา`). Upgrade such a label to the live one
+ * (`CALTEX · LLK - ลำลูกกา`) when the same line still points at the same depot;
+ * a depot changed after issue keeps the snapshot label.
+ *
+ * @param snapshot - items stored on the quotation
+ * @param live - current order items
+ * @returns snapshot items with refinery-prefixed depot labels where safe
+ */
+export function withRefineryLabels(snapshot: DocumentItem[], live: DocumentItem[]): DocumentItem[] {
+  return snapshot.map((it, index) => {
+    const current = live[index];
+    if (!current?.depot_label || current.product_code !== it.product_code) return it;
+    const sameDepot = it.depot_label ? current.depot_label.endsWith(` · ${it.depot_label}`) : false;
+    return sameDepot ? { ...it, depot_label: current.depot_label } : it;
+  });
+}
+
+/**
  * Merges a stored quotation into the current order document data so the PDF
  * prints the snapshot (customer, items, totals) instead of the live order.
  *
@@ -60,7 +79,9 @@ export function buildQuotationSnapshot(doc: OrderDocumentData) {
  * @returns data for the quotation PDF
  */
 export function applyQuotationSnapshot(doc: OrderDocumentData, row: QuotationRow): QuotationDocumentData {
-  const items = Array.isArray(row.items_snapshot) && row.items_snapshot.length ? row.items_snapshot : doc.items;
+  const items = Array.isArray(row.items_snapshot) && row.items_snapshot.length
+    ? withRefineryLabels(row.items_snapshot, doc.items)
+    : doc.items;
   const totals = row.totals_snapshot && 'net_incl_vat' in row.totals_snapshot ? (row.totals_snapshot as DocumentTotals) : doc.totals;
   const customer: CustomerInfo = {
     name: row.customer_name || doc.customer.name,

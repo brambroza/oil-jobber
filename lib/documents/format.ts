@@ -45,3 +45,17 @@ export function phoneTh(phone: string, label = 'โทร'): string {
   const number = phone.trim().replace(/\s+/g, NBSP);
   return label ? `${label}${NBSP}${number}` : number;
 }
+
+/**
+ * Item source line under the product name: refinery first, then depot
+ * (`ไทยออยล์ · LLK - ลาดหลุมแก้ว`). Returns null when neither is known.
+ */
+export function sourceLabel(
+  refineryName: string | null | undefined,
+  depotCode: string | null | undefined,
+  depotName: string | null | undefined,
+): string | null {
+  const depot = depotCode ? `${depotCode}${depotName ? ` - ${depotName}` : ''}` : null;
+  const parts = [refineryName?.trim() || null, depot].filter(Boolean);
+  return parts.length ? parts.join(' · ') : null;
+}

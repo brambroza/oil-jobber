@@ -1,7 +1,7 @@
 import { supabaseAdmin } from '@/lib/supabase/server';
 import { loadSalesUserNames, loadStaffSignatures } from '@/lib/services/order-items';
 import { round2, splitVat, VAT_MULTIPLIER } from '@/lib/services/order-pricing';
-import { receiveMethodThai } from '@/lib/documents/format';
+import { receiveMethodThai, sourceLabel } from '@/lib/documents/format';
 import { foldDeliveryFeeIntoItems } from '@/lib/documents/fold-delivery-fee';
 import type { OrderDocumentData, SellerInfo, DocumentItem, PaymentLine, ReceiptDocumentData } from '@/lib/documents/types';
 
@@ -30,7 +30,7 @@ export async function loadSellerInfo(companyId: string): Promise<SellerInfo> {
 export async function loadOrderDocumentData(companyId: string, orderId: string): Promise<OrderDocumentData | { error: string; status: number }> {
   const { data: order, error } = await supabaseAdmin
     .from('sale_orders')
-    .select('*, customers(company_name, tax_id, address, phone), payment_conditions(name, payment_type, credit_days), sale_order_items(*, depots(code, name))')
+    .select('*, customers(company_name, tax_id, address, phone), payment_conditions(name, payment_type, credit_days), sale_order_items(*, refineries(name), depots(code, name, refineries(name)))')
     .eq('id', orderId)
     .eq('company_id', companyId)
     .eq('is_deleted', false)
@@ -79,7 +79,7 @@ export async function loadOrderDocumentData(companyId: string, orderId: string):
       no: index + 1,
       product_code: String(it.product_code || ''),
       product_name: String(it.product_name || it.product_code || ''),
-      depot_label: it.depots?.code ? `${it.depots.code}${it.depots?.name ? ` - ${it.depots.name}` : ''}` : null,
+      depot_label: sourceLabel(it.refineries?.name ?? it.depots?.refineries?.name, it.depots?.code, it.depots?.name),
       liters: litersValue,
       unit_price_incl_vat: unitIncl,
       unit_price_ex_vat: Number((unitIncl / VAT_MULTIPLIER).toFixed(4)),

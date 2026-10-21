@@ -1,9 +1,16 @@
 import type { TDocumentDefinitions } from 'pdfmake/interfaces';
-import { baseDefinition, customerBlock, itemsTable, metaGrid, sellerBlock, signatures, totalsBlock, COLORS } from '@/lib/documents/pdf';
+import { baseDefinition, customerBlock, itemsTable, metaGrid, sellerBlock, signatureBoxes, totalsBlock, COLORS } from '@/lib/documents/pdf';
 import { dateTh, money, phoneTh } from '@/lib/documents/format';
 import { round2 } from '@/lib/services/order-pricing';
 import { thaiBahtText } from '@/lib/utils/thai-baht-text';
 import type { OrderDocumentData } from '@/lib/documents/types';
+
+/** Payee printed in the payment note at the bottom of the tax invoice. */
+const PAYEE_NAME = 'บริษัท เจเอฟซี โซลูชั่น จำกัด';
+const PAYEE_BANK_ACCOUNT = '186-362-082-8 ธ.กสิกรไทย สาขาทองหล่อ 20';
+
+/** Height (pt) of the notes + signature block pinned to the page bottom. */
+const PAGE_BOTTOM_HEIGHT = 170;
 
 /** ใบแจ้งหนี้ / ใบกำกับภาษี (Thai standard layout, prices excl. VAT). */
 export function buildTaxInvoicePdf(data: OrderDocumentData, copy: 'original' | 'copy' = 'original'): TDocumentDefinitions {
@@ -79,6 +86,25 @@ export function buildTaxInvoicePdf(data: OrderDocumentData, copy: 'original' | '
       },
       layout: { hLineWidth: () => 0.5, vLineWidth: () => 0.5, hLineColor: () => COLORS.line, vLineColor: () => COLORS.line },
     },
-    signatures(['ผู้รับสินค้า', 'ผู้ส่งสินค้า', 'ผู้มีอำนาจลงนาม']),
-  ]);
+  ], {
+    // หมายเหตุ + ช่องลงนาม ชิดท้ายกระดาษหน้าสุดท้ายเสมอ
+    height: PAGE_BOTTOM_HEIGHT,
+    build: () => ({
+      stack: [
+        {
+          stack: [
+            { text: 'หมายเหตุ', bold: true },
+            `1. กรุณาโอนเงินหรือสั่งจ่ายเช็คขีดคร่อมในนาม ${PAYEE_NAME} (เลขที่บัญชี ${PAYEE_BANK_ACCOUNT})`,
+            '2. โปรดชำระหนี้ตามเงินที่ระบุภายในระยะเวลาที่กำหนดในเอกสาร ในกรณีชำระเงินเกินกำหนดต้องเสียดอกเบี้ยร้อยละ 15 ต่อปี นับจากวันที่ผิดนัดชำระเป็นต้นไป',
+          ],
+          fontSize: 8.5,
+          margin: [0, 8, 0, 0],
+        },
+        signatureBoxes([
+          'ผู้รับเอกสาร / Received by',
+          { label: 'ผู้ออกเอกสาร / Issued by', name: data.sales_name, image: data.sales_signature, date: dateTh(inv?.issued_at || data.order_date) },
+        ]),
+      ],
+    }),
+  });
 }
