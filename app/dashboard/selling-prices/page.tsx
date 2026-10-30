@@ -503,6 +503,8 @@ export default function SellingPricesPage() {
     const effectiveText = `${formatDate(round.base.effective_date)} ${formatTime(round.base.effective_at)} น.`;
     const remark = String(round.base.remark || '').trim();
     const conditionsToUse = visiblePaymentConditions;
+    // Giga bubble fits 3 price columns at xl; drop to lg when more columns would overflow.
+    const priceSize = conditionsToUse.length >= 4 ? 'lg' : 'xl';
 
     const groupBlocks = visibleGroups.slice(0, MAX_BROADCAST_GROUPS).map((group) => {
       const visibleItems = group.items.filter((it) => Number(it.base_cost_price || 0) > 0);
@@ -512,11 +514,11 @@ export default function SellingPricesPage() {
         layout: 'horizontal',
         spacing: 'xs',
         contents: [
-          { type: 'text', text: 'ชำระเงิน', size: 'xxs', color: '#64748b', weight: 'bold', flex: 3 },
+          { type: 'text', text: 'ชำระเงิน', size: 'sm', color: '#64748b', weight: 'bold', flex: 2 },
           ...conditionsToUse.map((pc: any) => ({
             type: 'text',
             text: pc.name,
-            size: 'xxs',
+            size: 'sm',
             color: '#64748b',
             weight: 'bold',
             align: 'center',
@@ -532,7 +534,7 @@ export default function SellingPricesPage() {
         spacing: 'xs',
         margin: 'sm',
         contents: [
-          { type: 'text', text: item.product_code, size: 'xs', color: '#1e3a8a', weight: 'bold', flex: 3 },
+          { type: 'text', text: item.product_code, size: 'md', color: '#1e3a8a', weight: 'bold', flex: 2 },
           ...conditionsToUse.map((pc: any) => {
             const basePrice = broadcastPrice(item.base_cost_price, pc, customerAdjust);
             const cheapestPrice = cheapestPriceByKey.get(getCheapestPriceKey(item.product_code));
@@ -546,8 +548,8 @@ export default function SellingPricesPage() {
               backgroundColor: isCheapest ? '#fef3c7' : '#ffffff',
               flex: 3,
               contents: [
-                { type: 'text', text: basePrice.toFixed(2), size: 'sm', color: isCheapest ? '#92400e' : '#111827', weight: 'bold', align: 'center' },
-                isCheapest ? { type: 'text', text: 'ถูกสุด', size: 'xxs', color: '#92400e', align: 'center', weight: 'bold' } : null,
+                { type: 'text', text: basePrice.toFixed(2), size: priceSize, color: isCheapest ? '#92400e' : '#111827', weight: 'bold', align: 'center' },
+                isCheapest ? { type: 'text', text: 'ถูกสุด', size: 'xs', color: '#92400e', align: 'center', weight: 'bold' } : null,
               ].filter(Boolean),
             };
           }),
@@ -571,14 +573,14 @@ export default function SellingPricesPage() {
         type: 'box',
         layout: 'vertical',
         margin: 'md',
-        paddingAll: '2px',
+        paddingAll: '6px',
         backgroundColor: '#eef2ff',
         cornerRadius: '10px',
         contents: [
           {
             type: 'text',
             text: `${group.depotCode}${group.depotName ? ` (${group.depotName})` : ''}`,
-            size: 'sm',
+            size: 'md',
             weight: 'bold',
             color: '#1e3a8a',
             wrap: true,
@@ -598,12 +600,12 @@ export default function SellingPricesPage() {
       type: 'box',
       layout: 'vertical',
       margin: 'lg',
-      paddingAll: '10px',
+      paddingAll: '8px',
       backgroundColor: '#f8fafc',
       cornerRadius: '10px',
       contents: [
-        { type: 'text', text: refineryName, size: 'md', weight: 'bold', color: '#1e3a8a', wrap: true },
-        { type: 'text', text: `อัปเดต ${effectiveText}`, size: 'xs', color: '#64748b' },
+        { type: 'text', text: refineryName, size: 'lg', weight: 'bold', color: '#1e3a8a', wrap: true },
+        { type: 'text', text: `อัปเดต ${effectiveText}`, size: 'sm', color: '#64748b' },
         {
           type: 'box',
           layout: 'vertical',
@@ -612,8 +614,8 @@ export default function SellingPricesPage() {
           backgroundColor: '#fff1f2',
           cornerRadius: '8px',
           contents: [
-            { type: 'text', text: 'ราคานี้ยังไม่รวมค่าขนส่ง', size: 'xxs', color: '#64748b' },
-            { type: 'text', text: 'ราคานี้รวม Vat แล้ว', size: 'xs', color: '#dc2626', weight: 'bold' },
+            { type: 'text', text: 'ราคานี้ยังไม่รวมค่าขนส่ง', size: 'sm', color: '#64748b' },
+            { type: 'text', text: 'ราคานี้รวม Vat แล้ว', size: 'md', color: '#dc2626', weight: 'bold' },
           ],
         },
 
@@ -627,8 +629,8 @@ export default function SellingPricesPage() {
           backgroundColor: '#ffffff',
           cornerRadius: '8px',
           contents: [
-            { type: 'text', text: 'หมายเหตุ', size: 'xxs', color: '#64748b' },
-            { type: 'text', text: remark, size: 'xs', color: '#334155', weight: 'bold', wrap: true },
+            { type: 'text', text: 'หมายเหตุ', size: 'sm', color: '#64748b' },
+            { type: 'text', text: remark, size: 'md', color: '#334155', weight: 'bold', wrap: true },
           ],
         } : null,
       ].filter(Boolean),
@@ -646,13 +648,14 @@ export default function SellingPricesPage() {
       altText: `ราคาน้ำมันรอบ ${formatDateTimeNow()}`,
       contents: {
         type: 'bubble',
-        size: 'mega',
+        size: 'giga',
         body: {
           type: 'box',
           layout: 'vertical',
           spacing: 'sm',
+          paddingAll: '12px',
           contents: [
-            { type: 'text', text: `ราคาน้ำมันรอบ ${formatDateTimeNow()}`, size: 'lg', weight: 'bold', color: '#1e3a8a', wrap: true },
+            { type: 'text', text: `ราคาน้ำมันรอบ ${formatDateTimeNow()}`, size: 'xl', weight: 'bold', color: '#1e3a8a', wrap: true },
 
             ...roundSections,
           ],
