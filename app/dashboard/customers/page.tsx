@@ -1,15 +1,18 @@
 'use client';
 
-import { useEffect, useMemo, useState, type ReactNode } from 'react';
-import { Add, Delete, Edit, HistoryOutlined } from '@mui/icons-material';
+import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
+import { Add, Delete, Edit, Groups, HistoryOutlined, Refresh, Search } from '@mui/icons-material';
 import Link from 'next/link';
 import { useCurrentUser } from '@/components/layout/CurrentUserProvider';
 import { canEditCustomerCredit } from '@/lib/auth/permissions';
 import {
   Alert,
   Avatar,
+  AvatarGroup,
   Box,
   Button,
+  Card,
+  CardContent,
   Checkbox,
   Chip,
   Dialog,
@@ -22,8 +25,10 @@ import {
   FormGroup,
   IconButton,
   InputAdornment,
+  LinearProgress,
   MenuItem,
   Paper,
+  Skeleton,
   Stack,
   Switch,
   Tab,
@@ -35,10 +40,12 @@ import {
   TableRow,
   Tabs,
   TextField,
+  Tooltip,
   Typography,
 } from '@mui/material';
 import { ActionSnackbar, type ActionSnackbarSeverity } from '@/components/common/ActionSnackbar';
 import { Customer, PaymentCondition } from '@/types/database';
+import { calculateCreditUsage, type CustomerLineAccount } from '@/lib/utils/customer-list';
 
 type MasterRefinery = { id: string; name: string };
 type MasterDepot = { id: string; code: string; name: string; refineries?: { name?: string } | null };
@@ -56,6 +63,7 @@ type CustomerWithPayment = Customer & {
   payment_conditions?: { name?: string; code?: string } | null;
   sales_user_id?: string | null;
   sales_user_name?: string | null;
+  line_accounts?: CustomerLineAccount[];
 };
 type OutstandingRow = { customer_id: string; outstanding_amount: number };
 
@@ -169,6 +177,60 @@ function AccessCheckboxGroup({
   );
 }
 
+/** One figure in the summary row above the table. */
+function StatCard({ label, value, loading = false, color }: { label: string; value: string; loading?: boolean; color?: string }) {
+  return (
+    <Card>
+      <CardContent sx={{ p: 1.75, '&:last-child': { pb: 1.75 } }}>
+        <Typography variant='caption' color='text.secondary'>{label}</Typography>
+        {loading ? (
+          <Skeleton width='60%' sx={{ fontSize: 22 }} />
+        ) : (
+          <Typography noWrap sx={{ fontSize: 22, fontWeight: 700, color }}>{value}</Typography>
+        )}
+      </CardContent>
+    </Card>
+  );
+}
+
+/** Label for a linked LINE account; the name can be missing until the webhook has a profile. */
+function lineAccountName(account: CustomerLineAccount): string {
+  return account.display_name || (account.is_group ? 'กลุ่ม LINE' : 'ผู้ใช้ LINE');
+}
+
+/** LINE avatars and display name of the accounts linked to a customer. */
+function LineAccountsCell({ accounts }: { accounts: CustomerLineAccount[] }) {
+  if (!accounts.length) return <Typography variant='caption' color='text.disabled'>ยังไม่ผูก</Typography>;
+
+  const [first] = accounts;
+  const others = accounts.length - 1;
+  return (
+    <Tooltip title={accounts.map(lineAccountName).join(', ')}>
+      <Stack direction='row' spacing={1} alignItems='center' sx={{ minWidth: 180 }}>
+        <AvatarGroup max={3} sx={{ flexShrink: 0, '& .MuiAvatar-root': { width: 32, height: 32, fontSize: 13 } }}>
+          {accounts.map((account) => (
+            <Avatar
+              key={account.id}
+              alt={lineAccountName(account)}
+              src={account.profile_image_url || undefined}
+              imgProps={{ loading: 'lazy' }}
+              sx={{ bgcolor: '#e2e8f0', color: '#334155' }}
+            >
+              {account.is_group ? <Groups sx={{ fontSize: 18 }} /> : lineAccountName(account).slice(0, 1).toUpperCase()}
+            </Avatar>
+          ))}
+        </AvatarGroup>
+        <Box sx={{ minWidth: 0 }}>
+          <Typography variant='body2' noWrap sx={{ fontWeight: 600, maxWidth: 170 }}>{lineAccountName(first)}</Typography>
+          <Typography variant='caption' color='text.secondary' component='div'>
+            {first.is_group ? 'กลุ่ม LINE' : 'ผู้ใช้ LINE'}{others > 0 ? ` +${others} บัญชี` : ''}
+          </Typography>
+        </Box>
+      </Stack>
+    </Tooltip>
+  );
+}
+
 export default function CustomersPage() {
   const [companyId] = useState(process.env.NEXT_PUBLIC_DEFAULT_COMPANY_ID ?? '');
   const [rows, setRows] = useState<CustomerWithPayment[]>([]);
@@ -176,13 +238,20 @@ export default function CustomersPage() {
   const [refineries, setRefineries] = useState<MasterRefinery[]>([]);
   const [depots, setDepots] = useState<MasterDepot[]>([]);
   const [oilProducts, setOilProducts] = useState<MasterOilProduct[]>([]);
-  const [loading, setLoading] = useState(false);
+  const [loading, setLoading] = useState(true);
+  const [outstandingStatus, setOutstandingStatus] = useState<'loading' | 'ready' | 'error'>('loading');
   const [error, setError] = useState('');
   const [searchText, setSearchText] = useState('');
   const [searchDate, setSearchDate] = useState('');
+  const [statusFilter, setStatusFilter] = useState<'ALL' | 'ACTIVE' | 'INACTIVE'>('ALL');
+  const [lineFilter, setLineFilter] = useState<'ALL' | 'LINKED' | 'UNLINKED'>('ALL');
   const [page, setPage] = useState(0);
   const [rowsPerPage, setRowsPerPage] = useState(10);
   const [drawerOpen, setDrawerOpen] = useState(false);
+  const [drawerLoading, setDrawerLoading] = useState(false);
+  const [drawerReady, setDrawerReady] = useState(false);
+  const drawerDataLoadedRef = useRef(false);
+  const drawerRequestRef = useRef(0);
   const [drawerTab, setDrawerTab] = useState<'portal' | 'login' | 'line-map'>('portal');
   const [form, setForm] = useState<CustomerForm>(emptyForm);
   const [creditLimitInput, setCreditLimitInput] = useState('0.00');
@@ -223,11 +292,15 @@ export default function CustomersPage() {
         (r.phone || '').toLowerCase().includes(q) ||
         (r.address || '').toLowerCase().includes(q) ||
         (r.payment_conditions?.name || '').toLowerCase().includes(q) ||
-        (r.payment_conditions?.code || '').toLowerCase().includes(q);
+        (r.payment_conditions?.code || '').toLowerCase().includes(q) ||
+        (r.line_accounts ?? []).some((account) => lineAccountName(account).toLowerCase().includes(q));
       const okDate = !d || String(r.created_at || '').includes(d) || String(r.updated_at || '').includes(d);
-      return okText && okDate;
+      const okStatus = statusFilter === 'ALL' || (statusFilter === 'ACTIVE' ? r.status === 'ACTIVE' : r.status !== 'ACTIVE');
+      const linked = Boolean(r.line_accounts?.length);
+      const okLine = lineFilter === 'ALL' || (lineFilter === 'LINKED' ? linked : !linked);
+      return okText && okDate && okStatus && okLine;
     });
-  }, [rows, searchText, searchDate]);
+  }, [rows, searchText, searchDate, statusFilter, lineFilter]);
 
   const pagedRows = useMemo(() => {
     const start = page * rowsPerPage;
@@ -253,42 +326,19 @@ export default function CustomersPage() {
     }, {});
   }, [outstandingRows]);
 
-  const load = async () => {
-    if (!companyId) return;
+  const summary = useMemo(() => ({
+    active: rows.filter((r) => r.status === 'ACTIVE').length,
+    linked: rows.filter((r) => r.line_accounts?.length).length,
+    outstanding: rows.reduce((sum, r) => sum + (outstandingByCustomer[r.id] || 0), 0),
+  }), [rows, outstandingByCustomer]);
+
+  const loadCustomers = async () => {
     setLoading(true);
-    setError('');
     try {
-      const [customerRes, paymentRes, refineryRes, depotRes, productRes, outstandingRes] = await Promise.all([
-        fetch(`/api/customers?company_id=${companyId}`),
-        fetch(`/api/payment-conditions?company_id=${companyId}`),
-        fetch(`/api/refineries?company_id=${companyId}`),
-        fetch(`/api/depots?company_id=${companyId}`),
-        fetch(`/api/oil-products?company_id=${companyId}`),
-        fetch(`/api/accounting/outstanding?company_id=${companyId}`),
-      ]);
-
-      const [customerData, paymentData, refineryData, depotData, productData, outstandingData] = await Promise.all([
-        customerRes.json(),
-        paymentRes.json(),
-        refineryRes.json(),
-        depotRes.json(),
-        productRes.json(),
-        outstandingRes.json(),
-      ]);
-
-      if (!customerRes.ok) throw new Error(customerData.error || 'โหลดข้อมูลลูกค้าไม่สำเร็จ');
-      if (!paymentRes.ok) throw new Error(paymentData.error || 'โหลดเงื่อนไขชำระเงินไม่สำเร็จ');
-      if (!refineryRes.ok) throw new Error(refineryData.error || 'โหลดโรงกลั่นไม่สำเร็จ');
-      if (!depotRes.ok) throw new Error(depotData.error || 'โหลดคลังไม่สำเร็จ');
-      if (!productRes.ok) throw new Error(productData.error || 'โหลดสินค้าน้ำมันไม่สำเร็จ');
-      if (!outstandingRes.ok) throw new Error(outstandingData.error || 'โหลดยอดค้างชำระไม่สำเร็จ');
-
-      setRows(customerData);
-      setPaymentConditions(paymentData);
-      setRefineries(refineryData);
-      setDepots(depotData);
-      setOilProducts(productData);
-      setOutstandingRows(outstandingData || []);
+      const res = await fetch(`/api/customers?company_id=${companyId}`);
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || 'โหลดข้อมูลลูกค้าไม่สำเร็จ');
+      setRows(data);
     } catch (e) {
       setError((e as Error).message);
     } finally {
@@ -296,35 +346,82 @@ export default function CustomersPage() {
     }
   };
 
+  // Loaded apart from the customer list: it is the slowest call and the table
+  // should not wait for it. Balances show a placeholder until it finishes.
+  const loadOutstanding = async () => {
+    setOutstandingStatus('loading');
+    try {
+      const res = await fetch(`/api/accounting/outstanding?company_id=${companyId}`);
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || 'โหลดยอดค้างชำระไม่สำเร็จ');
+      setOutstandingRows(data || []);
+      setOutstandingStatus('ready');
+    } catch (e) {
+      setError((e as Error).message);
+      setOutstandingStatus('error');
+    }
+  };
+
+  const load = async () => {
+    if (!companyId) return;
+    setError('');
+    await Promise.all([loadCustomers(), loadOutstanding()]);
+  };
+
   const loadLineCustomers = async () => {
     if (!companyId) return;
-    const res = await fetch(`/api/line/customers?company_id=${companyId}`);
+    const res = await fetch(`/api/line/customers?company_id=${companyId}&summary=1`);
     const data = await res.json();
     if (!res.ok) throw new Error(data.error || 'โหลดรายการ LINE ไม่สำเร็จ');
     setLineCustomers(data || []);
+  };
+
+  const loadStaffUsers = async () => {
+    const res = await fetch('/api/users-profile/staff');
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || 'โหลดรายชื่อพนักงานไม่สำเร็จ');
+    setStaffUsers((data || []).map((x: any) => ({ id: x.id, full_name: String(x.full_name || ''), role: String(x.role || '') })));
+  };
+
+  /** Master data used only inside the drawer; fetched once, on first open. */
+  const loadDrawerData = async () => {
+    if (drawerDataLoadedRef.current) return;
+    const [paymentRes, refineryRes, depotRes, productRes] = await Promise.all([
+      fetch(`/api/payment-conditions?company_id=${companyId}`),
+      fetch(`/api/refineries?company_id=${companyId}`),
+      fetch(`/api/depots?company_id=${companyId}`),
+      fetch(`/api/oil-products?company_id=${companyId}`),
+    ]);
+    const [paymentData, refineryData, depotData, productData] = await Promise.all([
+      paymentRes.json(),
+      refineryRes.json(),
+      depotRes.json(),
+      productRes.json(),
+      loadLineCustomers(),
+      loadStaffUsers(),
+    ]);
+
+    if (!paymentRes.ok) throw new Error(paymentData.error || 'โหลดเงื่อนไขชำระเงินไม่สำเร็จ');
+    if (!refineryRes.ok) throw new Error(refineryData.error || 'โหลดโรงกลั่นไม่สำเร็จ');
+    if (!depotRes.ok) throw new Error(depotData.error || 'โหลดคลังไม่สำเร็จ');
+    if (!productRes.ok) throw new Error(productData.error || 'โหลดสินค้าน้ำมันไม่สำเร็จ');
+
+    setPaymentConditions(paymentData);
+    setRefineries(refineryData);
+    setDepots(depotData);
+    setOilProducts(productData);
+    drawerDataLoadedRef.current = true;
   };
 
   useEffect(() => {
     void load();
   }, [companyId]);
 
-  useEffect(() => {
-    void loadLineCustomers();
-  }, [companyId]);
-
-  useEffect(() => {
-    const run = async () => {
-      const res = await fetch('/api/users-profile/staff');
-      const data = await res.json();
-      if (res.ok) setStaffUsers((data || []).map((x: any) => ({ id: x.id, full_name: String(x.full_name || ''), role: String(x.role || '') })));
-    };
-    void run();
-  }, []);
-
-  const loadAccess = async (customerId: string) => {
+  const loadAccess = async (customerId: string, requestId: number) => {
     const res = await fetch(`/api/customer-portal/access/${customerId}?company_id=${companyId}`);
     const data = await res.json();
     if (!res.ok) throw new Error(data.error || 'โหลดสิทธิ์ลูกค้าไม่สำเร็จ');
+    if (requestId !== drawerRequestRef.current) return;
 
     setAccessForm({
       allowed_refinery_ids: data.access?.allowed_refinery_ids ?? [],
@@ -336,6 +433,57 @@ export default function CustomersPage() {
     });
     setPortalUserId(data.portal_user?.auth_user_id ?? null);
     setPortalEmail(data.portal_user?.email ?? '');
+  };
+
+  /**
+   * Opens the drawer and loads what it needs. Save stays off until both the
+   * master data and the customer's access are in, otherwise saving would
+   * overwrite the stored access with the empty form.
+   */
+  const openDrawer = async (customerId?: string) => {
+    const requestId = ++drawerRequestRef.current;
+    setDrawerTab('portal');
+    setDrawerReady(false);
+    setDrawerLoading(true);
+    setDrawerOpen(true);
+    try {
+      await Promise.all([loadDrawerData(), customerId ? loadAccess(customerId, requestId) : undefined]);
+      if (requestId === drawerRequestRef.current) setDrawerReady(true);
+    } catch (e) {
+      showSnack((e as Error).message, 'error');
+    } finally {
+      if (requestId === drawerRequestRef.current) setDrawerLoading(false);
+    }
+  };
+
+  const onAddCustomer = () => {
+    setForm(emptyForm);
+    setCreditLimitInput(formatCurrency(emptyForm.credit_limit));
+    setAccessForm(emptyAccess);
+    setPortalUserId(null);
+    setPortalEmail('');
+    setPortalPassword('');
+    setSelectedLineCustomerId('');
+    void openDrawer();
+  };
+
+  const onEditCustomer = (r: CustomerWithPayment) => {
+    const creditLimit = Number(r.credit_limit);
+    setForm({
+      id: r.id,
+      company_name: r.company_name,
+      tax_id: r.tax_id ?? '',
+      address: r.address ?? '',
+      phone: r.phone ?? '',
+      credit_limit: creditLimit,
+      price_adjustment_per_liter: Number(r.price_adjustment_per_liter || 0),
+      sales_fee_per_liter: Number(r.sales_fee_per_liter || 0),
+      sales_user_id: r.sales_user_id || '',
+      status: r.status,
+    });
+    setCreditLimitInput(formatCurrency(creditLimit));
+    setSelectedLineCustomerId(r.line_accounts?.[0]?.id || '');
+    void openDrawer(r.id);
   };
 
   const onSave = async () => {
@@ -466,7 +614,7 @@ export default function CustomersPage() {
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || 'บันทึกการผูก LINE ไม่สำเร็จ');
-      await loadLineCustomers();
+      await Promise.all([loadLineCustomers(), loadCustomers()]);
       showSnack('ผูก LINE กับลูกค้าเรียบร้อยแล้ว', 'success');
     } catch (e) {
       const message = (e as Error).message;
@@ -479,103 +627,199 @@ export default function CustomersPage() {
 
   return (
     <Stack spacing={2}>
-      <Typography variant='h4'>จัดการลูกค้า</Typography>
-      <Stack direction={{ xs: 'column', md: 'row' }} spacing={1}>
-        <TextField
-          size='small'
-          label='ค้นหา'
-          placeholder='บริษัท, เลขภาษี, เบอร์โทร, เงื่อนไขชำระเงิน'
-          value={searchText}
-          onChange={(e) => {
-            setSearchText(e.target.value);
-            setPage(0);
-          }}
-          sx={{ minWidth: { xs: '100%', md: 320 } }}
-        />
-        <TextField
-          size='small'
-          label='ค้นหาตามวันที่'
-          placeholder='YYYY-MM-DD'
-          value={searchDate}
-          onChange={(e) => {
-            setSearchDate(e.target.value);
-            setPage(0);
-          }}
-          sx={{ minWidth: { xs: '100%', md: 220 } }}
-        />
-        <Button variant='outlined' onClick={() => void load()}>รีเฟรช</Button>
-        <Button variant='contained' startIcon={<Add />} onClick={() => { setForm(emptyForm); setCreditLimitInput(formatCurrency(emptyForm.credit_limit)); setAccessForm(emptyAccess); setPortalUserId(null); setPortalEmail(''); setPortalPassword(''); setSelectedLineCustomerId(''); setDrawerTab('portal'); setDrawerOpen(true); }}>เพิ่มลูกค้า</Button>
+      <Stack direction={{ xs: 'column', sm: 'row' }} justifyContent='space-between' alignItems={{ sm: 'center' }} spacing={1}>
+        <Box>
+          <Typography variant='h4'>จัดการลูกค้า</Typography>
+          </Box>
+        <Stack direction='row' spacing={1}>
+          <Tooltip title='รีเฟรช'>
+            <span>
+              <IconButton aria-label='รีเฟรช' disabled={loading} onClick={() => void load()}>
+                <Refresh fontSize='small' />
+              </IconButton>
+            </span>
+          </Tooltip>
+          <Button variant='contained' startIcon={<Add />} onClick={onAddCustomer}>เพิ่มลูกค้า</Button>
+        </Stack>
       </Stack>
 
-      {error ? <Alert severity='error'>{error}</Alert> : null}
-      {loading ? <Alert severity='info'>กำลังโหลด...</Alert> : null}
+      {error ? <Alert severity='error' onClose={() => setError('')}>{error}</Alert> : null}
       {isSalesRole && !loading ? <Alert severity='info'>แสดงเฉพาะลูกค้าที่คุณเป็นพนักงานขายประจำ หากต้องการดูแลลูกค้ารายอื่น ให้ผู้ดูแลระบบกำหนดในข้อมูลลูกค้า</Alert> : null}
 
-      <Box sx={{ overflowX: 'auto', bgcolor: 'background.paper', borderRadius: 1 }}>
-        <Table size='small'>
-          <TableHead>
-            <TableRow>
-              <TableCell>บริษัท</TableCell>
-              <TableCell>เลขภาษี</TableCell>
-              <TableCell>ที่อยู่</TableCell>
-              <TableCell>เบอร์โทร</TableCell>
-              <TableCell align='right'>วงเงินเครดิต</TableCell>
-              <TableCell align='right'>ยอดเงินคงเหลือ</TableCell>
-              {/*     <TableCell>เงื่อนไขชำระเงิน</TableCell> */}
-              <TableCell>สถานะ</TableCell>
-              <TableCell align='right'>จัดการ</TableCell>
-            </TableRow>
-          </TableHead>
-          <TableBody>
-            {pagedRows.map((r) => (
-              <TableRow key={r.id} hover>
-                <TableCell>{r.company_name}</TableCell>
-                <TableCell>{r.tax_id ?? '-'}</TableCell>
-                <TableCell sx={{ minWidth: 180 }}>{r.address ?? '-'}</TableCell>
-                <TableCell>{r.phone ?? '-'}</TableCell>
-                <TableCell align='right'>{currencyFormatter.format(Number(r.credit_limit || 0))}</TableCell>
-                <TableCell align='right'>
+      <Box sx={{ display: 'grid', gap: 1.5, gridTemplateColumns: { xs: 'repeat(2, minmax(0, 1fr))', md: 'repeat(4, minmax(0, 1fr))' } }}>
+        <StatCard label='ลูกค้าทั้งหมด' value={rows.length.toLocaleString('th-TH')} loading={loading && !rows.length} />
+        <StatCard label='ใช้งานอยู่' value={summary.active.toLocaleString('th-TH')} loading={loading && !rows.length} />
+        <StatCard label='ผูก LINE แล้ว' value={summary.linked.toLocaleString('th-TH')} loading={loading && !rows.length} color='#06a648' />
+        <StatCard
+          label='ยอดค้างชำระรวม (บาท)'
+          value={outstandingStatus === 'error' ? '-' : currencyFormatter.format(summary.outstanding)}
+          loading={outstandingStatus === 'loading' || (loading && !rows.length)}
+        />
+      </Box>
 
-                  <Chip size='small' label={currencyFormatter.format(Number(r.credit_limit || 0) - Number(outstandingByCustomer[r.id] || 0))} color={r.status === 'ACTIVE' ? 'warning' : 'default'} />
+      <Paper variant='outlined' sx={{ borderRadius: 1.5, overflow: 'hidden' }}>
+        <Stack direction={{ xs: 'column', md: 'row' }} spacing={1} sx={{ p: 1.5 }}>
+          <TextField
+            size='small'
+            placeholder='ค้นหาบริษัท, เลขภาษี, เบอร์โทร, ชื่อ LINE'
+            value={searchText}
+            onChange={(e) => {
+              setSearchText(e.target.value);
+              setPage(0);
+            }}
+            InputProps={{
+              startAdornment: (
+                <InputAdornment position='start'>
+                  <Search fontSize='small' />
+                </InputAdornment>
+              ),
+            }}
+            sx={{ flex: 1 }}
+          />
+          <TextField
+            size='small'
+            type='date'
+            label='วันที่สร้าง/แก้ไข'
+            InputLabelProps={{ shrink: true }}
+            value={searchDate}
+            onChange={(e) => {
+              setSearchDate(e.target.value);
+              setPage(0);
+            }}
+            sx={{ minWidth: { md: 170 } }}
+          />
+          <TextField
+            size='small'
+            select
+            label='สถานะ'
+            value={statusFilter}
+            onChange={(e) => {
+              setStatusFilter(e.target.value as typeof statusFilter);
+              setPage(0);
+            }}
+            sx={{ minWidth: { md: 130 } }}
+          >
+            <MenuItem value='ALL'>ทั้งหมด</MenuItem>
+            <MenuItem value='ACTIVE'>ใช้งาน</MenuItem>
+            <MenuItem value='INACTIVE'>ปิดใช้งาน</MenuItem>
+          </TextField>
+          <TextField
+            size='small'
+            select
+            label='LINE'
+            value={lineFilter}
+            onChange={(e) => {
+              setLineFilter(e.target.value as typeof lineFilter);
+              setPage(0);
+            }}
+            sx={{ minWidth: { md: 130 } }}
+          >
+            <MenuItem value='ALL'>ทั้งหมด</MenuItem>
+            <MenuItem value='LINKED'>ผูกแล้ว</MenuItem>
+            <MenuItem value='UNLINKED'>ยังไม่ผูก</MenuItem>
+          </TextField>
+        </Stack>
+        <Divider />
 
-                </TableCell>
-                {/*     <TableCell>{r.payment_conditions?.name ?? '-'}</TableCell> */}
-                <TableCell><Chip size='small' label={r.status} color={r.status === 'ACTIVE' ? 'success' : 'default'} /></TableCell>
-                <TableCell align='right'>
-                  <IconButton component={Link} href={`/dashboard/customers/${r.id}`} title='ประวัติการซื้อ'>
-                    <HistoryOutlined fontSize='small' />
-                  </IconButton>
-                  <IconButton onClick={() => {
-                    const creditLimit = Number(r.credit_limit);
-                    setForm({
-                      id: r.id,
-                      company_name: r.company_name,
-                      tax_id: r.tax_id ?? '',
-                      address: r.address ?? '',
-                      phone: r.phone ?? '',
-                      credit_limit: creditLimit,
-                      price_adjustment_per_liter: Number(r.price_adjustment_per_liter || 0),
-                      sales_fee_per_liter: Number(r.sales_fee_per_liter || 0),
-                      sales_user_id: r.sales_user_id || '',
-                      status: r.status,
-                    });
-                    setCreditLimitInput(formatCurrency(creditLimit));
-                    void loadAccess(r.id);
-                    const mapped = lineCustomers.find((lc) => lc.customer_id === r.id);
-                    setSelectedLineCustomerId(mapped?.id || '');
-                    setDrawerTab('portal');
-                    setDrawerOpen(true);
-                  }}><Edit fontSize='small' /></IconButton>
-                  <IconButton color='error' onClick={() => {
-                    setDeleteId(r.id);
-                    showSnack('กรุณายืนยันการลบข้อมูลลูกค้า', 'warning');
-                  }}><Delete fontSize='small' /></IconButton>
-                </TableCell>
+        <Box sx={{ overflowX: 'auto' }}>
+          <Table size='small'>
+            <TableHead>
+              <TableRow>
+                <TableCell>ลูกค้า</TableCell>
+                <TableCell>LINE</TableCell>
+                <TableCell>ติดต่อ</TableCell>
+                <TableCell>พนักงานขาย</TableCell>
+                <TableCell align='right'>วงเงินเครดิต</TableCell>
+                <TableCell align='right' sx={{ minWidth: 150 }}>ยอดเงินคงเหลือ</TableCell>
+                <TableCell>สถานะ</TableCell>
+                <TableCell align='right'>จัดการ</TableCell>
               </TableRow>
-            ))}
-            {!filteredRows.length && !loading ? <TableRow><TableCell colSpan={9} align='center'>ไม่มีข้อมูล</TableCell></TableRow> : null}
-          </TableBody>
-        </Table>
+            </TableHead>
+            <TableBody>
+              {loading && !rows.length ? Array.from({ length: 6 }, (_, index) => (
+                <TableRow key={index}>
+                  <TableCell colSpan={8}><Skeleton height={36} /></TableCell>
+                </TableRow>
+              )) : null}
+              {pagedRows.map((r) => {
+                const credit = calculateCreditUsage(Number(r.credit_limit || 0), outstandingByCustomer[r.id] || 0);
+                const overLimit = credit.remaining < 0;
+                return (
+                  <TableRow key={r.id} hover sx={{ '& td': { py: 1 } }}>
+                    <TableCell sx={{ minWidth: 220 }}>
+                      <Typography variant='body2' sx={{ fontWeight: 600 }}>{r.company_name}</Typography>
+                      <Typography variant='caption' color='text.secondary'>เลขภาษี {r.tax_id ?? '-'}</Typography>
+                    </TableCell>
+                    <TableCell><LineAccountsCell accounts={r.line_accounts ?? []} /></TableCell>
+                    <TableCell sx={{ minWidth: 200, maxWidth: 260 }}>
+                      <Typography variant='body2'>{r.phone ?? '-'}</Typography>
+                      <Tooltip title={r.address ?? ''}>
+                        <Typography variant='caption' color='text.secondary' noWrap component='div'>{r.address ?? '-'}</Typography>
+                      </Tooltip>
+                    </TableCell>
+                    <TableCell sx={{ whiteSpace: 'nowrap' }}>{r.sales_user_name ?? '-'}</TableCell>
+                    <TableCell align='right'>{currencyFormatter.format(Number(r.credit_limit || 0))}</TableCell>
+                    <TableCell align='right'>
+                      {outstandingStatus === 'loading' ? (
+                        <Skeleton width={90} sx={{ ml: 'auto' }} />
+                      ) : outstandingStatus === 'error' ? (
+                        '-'
+                      ) : (
+                        <>
+                          <Typography variant='body2' sx={{ fontWeight: 600, color: overLimit ? 'error.main' : 'text.primary' }}>
+                            {currencyFormatter.format(credit.remaining)}
+                          </Typography>
+                          <LinearProgress
+                            variant='determinate'
+                            value={credit.percentUsed}
+                            color={credit.percentUsed >= 80 ? 'error' : 'success'}
+                            aria-label='สัดส่วนวงเงินที่ใช้ไป'
+                            sx={{ mt: 0.5, height: 4, borderRadius: 2, bgcolor: '#e5e7eb' }}
+                          />
+                        </>
+                      )}
+                    </TableCell>
+                    <TableCell>
+                      <Chip size='small' variant='outlined' label={r.status === 'ACTIVE' ? 'ใช้งาน' : 'ปิดใช้งาน'} color={r.status === 'ACTIVE' ? 'success' : 'default'} />
+                    </TableCell>
+                    <TableCell align='right' sx={{ whiteSpace: 'nowrap' }}>
+                      <Tooltip title='ประวัติการซื้อ'>
+                        <IconButton size='small' component={Link} href={`/dashboard/customers/${r.id}`} aria-label='ประวัติการซื้อ'>
+                          <HistoryOutlined fontSize='small' />
+                        </IconButton>
+                      </Tooltip>
+                      <Tooltip title='แก้ไข'>
+                        <IconButton size='small' aria-label='แก้ไข' onClick={() => onEditCustomer(r)}>
+                          <Edit fontSize='small' />
+                        </IconButton>
+                      </Tooltip>
+                      <Tooltip title='ลบ'>
+                        <IconButton
+                          size='small'
+                          color='error'
+                          aria-label='ลบ'
+                          onClick={() => {
+                            setDeleteId(r.id);
+                            showSnack('กรุณายืนยันการลบข้อมูลลูกค้า', 'warning');
+                          }}
+                        >
+                          <Delete fontSize='small' />
+                        </IconButton>
+                      </Tooltip>
+                    </TableCell>
+                  </TableRow>
+                );
+              })}
+              {!filteredRows.length && !loading ? (
+                <TableRow>
+                  <TableCell colSpan={8} align='center' sx={{ py: 5, color: 'text.secondary' }}>
+                    {rows.length ? 'ไม่พบลูกค้าที่ตรงกับเงื่อนไข' : 'ยังไม่มีข้อมูลลูกค้า'}
+                  </TableCell>
+                </TableRow>
+              ) : null}
+            </TableBody>
+          </Table>
+        </Box>
         <TablePagination
           component='div'
           count={filteredRows.length}
@@ -589,7 +833,7 @@ export default function CustomersPage() {
           rowsPerPageOptions={[10, 15, 20, 25]}
           labelRowsPerPage='แถวต่อหน้า'
         />
-      </Box>
+      </Paper>
 
       <Drawer anchor='right' open={drawerOpen} onClose={() => setDrawerOpen(false)}>
         <Stack spacing={2} sx={{ width: { xs: '100vw', sm: 700, md: 1120 }, maxWidth: '100vw', p: { xs: 1.25, md: 2.5 } }}>
@@ -710,7 +954,17 @@ export default function CustomersPage() {
             <Tab value='line-map' label='ผูก LINE กับลูกค้า' />
           </Tabs>
 
-          {drawerTab === 'portal' ? (
+          {!drawerReady ? (
+            drawerLoading ? (
+              <Stack spacing={1}>
+                <Skeleton variant='rounded' height={48} />
+                <Skeleton variant='rounded' height={180} />
+                <Skeleton variant='rounded' height={180} />
+              </Stack>
+            ) : (
+              <Alert severity='error'>โหลดข้อมูลไม่สำเร็จ กรุณาปิดแล้วเปิดใหม่อีกครั้ง</Alert>
+            )
+          ) : drawerTab === 'portal' ? (
             <Stack spacing={1.2}>
               <Stack direction='row' spacing={1} alignItems='center'>
                 <Switch checked={accessForm.can_place_order} onChange={(e) => setAccessForm((p) => ({ ...p, can_place_order: e.target.checked }))} />
@@ -841,7 +1095,7 @@ export default function CustomersPage() {
             </Paper>
           )}
 
-          <Button variant='contained' onClick={() => void onSave()} disabled={!companyId || !form.company_name}>บันทึก</Button>
+          <Button variant='contained' onClick={() => void onSave()} disabled={!companyId || !form.company_name || !drawerReady}>บันทึก</Button>
         </Stack>
       </Drawer>
 

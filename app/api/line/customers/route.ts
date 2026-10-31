@@ -8,6 +8,9 @@ export async function GET(req: NextRequest) {
   const companyId = guard.ctx.companyId;
   if (!companyId) return NextResponse.json({ error: 'กรุณาตั้งค่า company_id หรือ DEFAULT_COMPANY_ID' }, { status: 400 });
 
+  // Pickers only need the account list; the last-message lookup is the slow part.
+  const summaryOnly = req.nextUrl.searchParams.get('summary') === '1';
+
   const selectFields = 'id, customer_id, line_user_id, group_id, conversation_key, display_name, profile_image_url, created_at, updated_at';
   const [directRes, groupRes] = await Promise.all([
     supabaseAdmin
@@ -39,7 +42,7 @@ export async function GET(req: NextRequest) {
   const ids = uniqueCustomers.map((c) => c.id);
   const latestMap: Record<string, { message_text: string | null; created_at: string; direction: string }> = {};
 
-  if (ids.length) {
+  if (ids.length && !summaryOnly) {
     const { data: messages } = await supabaseAdmin
       .from('line_messages')
       .select('line_customer_id, group_id, message_text, created_at, direction')

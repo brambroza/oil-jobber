@@ -5,8 +5,9 @@ import { parseBody } from '@/lib/validation/common';
 import { customerBodySchema } from '@/lib/validation/customers';
 import { loadSalesUserNames } from '@/lib/services/order-items';
 import { isScopedRole } from '@/lib/services/customer-scope';
+import { groupLineAccountsByCustomer } from '@/lib/utils/customer-list';
 
-/** Lists customers with payment condition and default salesperson name. */
+/** Lists customers with payment condition, default salesperson name and linked LINE accounts. */
 export async function GET() {
   const guard = await requireStaff('customers');
   if (guard.response) return guard.response;
@@ -24,26 +25,44 @@ export async function GET() {
   const { data: customers, error } = await query;
   if (error) return NextResponse.json({ error: error.message }, { status: 400 });
 
-  const paymentIds = [...new Set((customers ?? []).map((x) => x.payment_condition_id).filter(Boolean))] as string[];
-  let paymentMap = new Map<string, { name?: string; code?: string }>();
+  const customerRows = customers ?? [];
+  const paymentIds = [...new Set(customerRows.map((x) => x.payment_condition_id).filter(Boolean))] as string[];
 
-  if (paymentIds.length) {
-    const { data: paymentRows, error: paymentErr } = await supabaseAdmin
-      .from('payment_conditions')
-      .select('id, name, code')
-      .in('id', paymentIds)
-      .eq('company_id', ctx.companyId)
-      .eq('is_deleted', false);
-    if (paymentErr) return NextResponse.json({ error: paymentErr.message }, { status: 400 });
-    paymentMap = new Map((paymentRows ?? []).map((p) => [p.id, { name: p.name, code: p.code }]));
-  }
+  let lineQuery = supabaseAdmin
+    .from('line_customers')
+    .select('id, customer_id, group_id, display_name, profile_image_url')
+    .eq('company_id', ctx.companyId)
+    .eq('is_deleted', false)
+    .not('customer_id', 'is', null)
+    .order('updated_at', { ascending: false });
+  // SALES must not receive LINE accounts of customers outside their scope.
+  if (isScopedRole(ctx.role)) lineQuery = lineQuery.in('customer_id', customerRows.map((c) => c.id));
 
-  const salesNames = await loadSalesUserNames(ctx.companyId, (customers ?? []).map((c) => c.sales_user_id));
+  const [paymentRes, lineRes, salesNames] = await Promise.all([
+    paymentIds.length
+      ? supabaseAdmin
+        .from('payment_conditions')
+        .select('id, name, code')
+        .in('id', paymentIds)
+        .eq('company_id', ctx.companyId)
+        .eq('is_deleted', false)
+      : Promise.resolve({ data: [], error: null }),
+    lineQuery,
+    loadSalesUserNames(ctx.companyId, customerRows.map((c) => c.sales_user_id)),
+  ]);
+  if (paymentRes.error) return NextResponse.json({ error: paymentRes.error.message }, { status: 400 });
+  if (lineRes.error) return NextResponse.json({ error: lineRes.error.message }, { status: 400 });
 
-  const rows = (customers ?? []).map((c) => ({
+  const paymentMap = new Map<string, { name?: string; code?: string }>(
+    (paymentRes.data ?? []).map((p) => [p.id, { name: p.name, code: p.code }]),
+  );
+  const lineAccounts = groupLineAccountsByCustomer(lineRes.data ?? []);
+
+  const rows = customerRows.map((c) => ({
     ...c,
     payment_conditions: c.payment_condition_id ? paymentMap.get(c.payment_condition_id) ?? null : null,
     sales_user_name: c.sales_user_id ? salesNames.get(c.sales_user_id) ?? null : null,
+    line_accounts: lineAccounts.get(c.id) ?? [],
   }));
 
   return NextResponse.json(rows);

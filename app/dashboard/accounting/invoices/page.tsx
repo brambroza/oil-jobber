@@ -131,8 +131,7 @@ export default function InvoicesPage() {
     <Stack spacing={2}>
       <Box>
         <Typography variant='h4'>ใบกำกับภาษี</Typography>
-        <Typography variant='body2' color='text.secondary'>ใบสั่งขายที่ยืนยันแล้วขึ้นไป แยกตามสถานะ · ออกใบแจ้งหนี้ / ใบกำกับภาษีได้จากแต่ละรายการ เลขที่ IV-YY####</Typography>
-      </Box>
+        </Box>
       <Stack direction={{ xs: 'column', sm: 'row' }} spacing={1}>
         <TextField id='invoice-search' size='small' label='ค้นหา เลขที่ / คำสั่งซื้อ / ลูกค้า' value={search} onChange={(e) => setSearch(e.target.value)} sx={{ minWidth: 280 }} />
         <Button variant='outlined' onClick={() => void load()}>รีเฟรช</Button>

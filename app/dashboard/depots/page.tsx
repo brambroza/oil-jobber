@@ -162,8 +162,7 @@ export default function DepotsPage() {
   return (
     <Stack spacing={2}>
       <Typography variant='h4'>คลังน้ำมัน</Typography>
-      <Typography variant='body2' color='text.secondary'>กำหนด `code` ให้ชัดเจนเพื่อใช้เชื่อมกับโมดูลราคาน้ำมันและสูตรคำนวณราคา</Typography>
-
+     
       <Stack direction={{ xs: 'column', md: 'row' }} spacing={1}>
         <TextField
           size='small'
