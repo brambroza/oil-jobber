@@ -1,40 +1,28 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-/** PostgREST response cap that the route must page around. */
-const MAX_ROWS = 1000;
-
-type ItemRow = { oil_base_price_id: string };
-
 let baseRows: Array<Record<string, unknown>> = [];
-let itemRows: ItemRow[] = [];
+let baseError: { message: string } | null = null;
+let filters: Array<[string, unknown]> = [];
+let selectedColumns = '';
+let tablesQueried: string[] = [];
 
 /**
- * Minimal chainable stand-in for the Supabase query builder. Base-price
- * queries resolve to `baseRows`; item queries honour `.in()` and `.range()`
- * and never return more than MAX_ROWS rows, like PostgREST.
+ * Minimal chainable stand-in for the Supabase query builder. Records the
+ * select list and filters, then resolves to `baseRows` / `baseError`.
  */
 function makeQuery(table: string) {
-  let ids: string[] | null = null;
-  let range: [number, number] | null = null;
+  tablesQueried.push(table);
   const query: any = {
-    select: () => query,
-    eq: () => query,
+    select: (columns: string) => {
+      selectedColumns = columns;
+      return query;
+    },
+    eq: (column: string, value: unknown) => {
+      filters.push([column, value]);
+      return query;
+    },
     order: () => query,
-    in: (_col: string, values: string[]) => {
-      ids = values;
-      return query;
-    },
-    range: (from: number, to: number) => {
-      range = [from, to];
-      return query;
-    },
-    then: (resolve: (value: unknown) => unknown) => {
-      if (table === 'oil_base_prices') return resolve({ data: baseRows, error: null });
-      const matched = itemRows.filter((row) => !ids || ids.includes(row.oil_base_price_id));
-      const [from, to] = range ?? [0, matched.length - 1];
-      const page = matched.slice(from, Math.min(to + 1, from + MAX_ROWS));
-      return resolve({ data: page, error: null });
-    },
+    then: (resolve: (value: unknown) => unknown) => resolve({ data: baseRows, error: baseError }),
   };
   return query;
 }
@@ -47,29 +35,20 @@ vi.mock('@/lib/auth/api-guard', () => ({
   requireStaff: async () => ({ ctx: { companyId: 'company-1' } }),
 }));
 
-/**
- * Builds `count` item rows for one price round.
- *
- * @param basePriceId - round id the items belong to
- * @param count - number of items to create
- * @returns item rows
- */
-function itemsFor(basePriceId: string, count: number): ItemRow[] {
-  return Array.from({ length: count }, () => ({ oil_base_price_id: basePriceId }));
-}
-
 describe('GET /api/prices item_count', () => {
   beforeEach(() => {
     baseRows = [
-      { id: 'round-a', refineries: { name: 'Refinery A' } },
-      { id: 'round-b', refineries: { name: 'Refinery B' } },
-      { id: 'round-c', refineries: null },
+      { id: 'round-a', refineries: { name: 'Refinery A' }, oil_price_items: [{ count: 1200 }] },
+      { id: 'round-b', refineries: { name: 'Refinery B' }, oil_price_items: [{ count: 5 }] },
+      { id: 'round-c', refineries: null, oil_price_items: [{ count: 0 }] },
     ];
-    itemRows = [];
+    baseError = null;
+    filters = [];
+    selectedColumns = '';
+    tablesQueried = [];
   });
 
-  it('counts every item when the total exceeds the PostgREST row cap', async () => {
-    itemRows = [...itemsFor('round-a', 1200), ...itemsFor('round-b', 5)];
+  it('maps the embedded count to item_count and drops the raw embed', async () => {
     const { GET } = await import('../route');
 
     const res = await GET({} as any);
@@ -81,16 +60,28 @@ describe('GET /api/prices item_count', () => {
       ['round-b', 5],
       ['round-c', 0],
     ]);
+    expect(body[0]).not.toHaveProperty('oil_price_items');
   });
 
-  it('handles a total that is an exact multiple of the page size', async () => {
-    itemRows = [...itemsFor('round-a', 600), ...itemsFor('round-b', 400)];
+  it('counts only non-deleted items in one query, scoped to the company', async () => {
+    const { GET } = await import('../route');
+
+    await GET({} as any);
+
+    expect(tablesQueried).toEqual(['oil_base_prices']);
+    expect(selectedColumns).toContain('oil_price_items(count)');
+    expect(filters).toContainEqual(['company_id', 'company-1']);
+    expect(filters).toContainEqual(['is_deleted', false]);
+    expect(filters).toContainEqual(['oil_price_items.is_deleted', false]);
+  });
+
+  it('falls back to 0 when the embedded count is missing', async () => {
+    baseRows = [{ id: 'round-a', refineries: null }];
     const { GET } = await import('../route');
 
     const body = await (await GET({} as any)).json();
 
-    expect(body.find((r: any) => r.id === 'round-a').item_count).toBe(600);
-    expect(body.find((r: any) => r.id === 'round-b').item_count).toBe(400);
+    expect(body[0].item_count).toBe(0);
   });
 
   it('maps refinery_name with a dash fallback', async () => {
@@ -99,5 +90,15 @@ describe('GET /api/prices item_count', () => {
     const body = await (await GET({} as any)).json();
 
     expect(body.map((r: any) => r.refinery_name)).toEqual(['Refinery A', 'Refinery B', '-']);
+  });
+
+  it('returns 400 with the error message when the query fails', async () => {
+    baseError = { message: 'boom' };
+    const { GET } = await import('../route');
+
+    const res = await GET({} as any);
+
+    expect(res.status).toBe(400);
+    expect(await res.json()).toEqual({ error: 'boom' });
   });
 });
