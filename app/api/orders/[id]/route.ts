@@ -66,7 +66,7 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
 
   const { data: currentOrder, error: currentError } = await supabaseAdmin
     .from('sale_orders')
-    .select('id, customer_id, order_status, payment_condition_id, receive_method, delivery_fee_std_per_liter, delivery_fee_surcharge_per_liter, delivery_fee_adjust_per_liter, discount_amount, sales_user_id, approved_by, delivered_at, sale_order_items(liters, unit_price, is_deleted)')
+    .select('id, customer_id, order_status, quotation_stage, payment_condition_id, receive_method, delivery_fee_std_per_liter, delivery_fee_surcharge_per_liter, delivery_fee_adjust_per_liter, discount_amount, sales_user_id, approved_by, delivered_at, sale_order_items(liters, unit_price, is_deleted)')
     .eq('id', id)
     .eq('company_id', ctx.companyId)
     .eq('is_deleted', false)
@@ -74,6 +74,13 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
   if (currentError) return NextResponse.json({ error: currentError.message }, { status: 400 });
   if (!currentOrder) return NextResponse.json({ error: 'ไม่พบคำสั่งซื้อ' }, { status: 404 });
   if (!(await canAccessCustomer(ctx, currentOrder.customer_id))) return customerForbidden();
+  // ใบเสนอราคาที่ยังไม่แปลง: สถานะต้องเป็นร่างเสมอ เปลี่ยนได้ผ่านเมนูใบเสนอราคา (แปลง/ปฏิเสธ/ยกเลิก) เท่านั้น
+  if (currentOrder.quotation_stage === 'PENDING' && orderPayload.order_status && orderPayload.order_status !== 'DRAFT') {
+    return NextResponse.json({ error: 'ใบเสนอราคายังไม่ได้แปลงเป็นใบสั่งขาย กรุณาใช้ปุ่ม "อนุมัติเป็นใบสั่งขาย" ในเมนูใบเสนอราคา' }, { status: 422 });
+  }
+  if (currentOrder.quotation_stage === 'CLOSED') {
+    return NextResponse.json({ error: 'ใบเสนอราคานี้ปิดแล้ว (ลูกค้าปฏิเสธ/ยกเลิก) แก้ไขไม่ได้' }, { status: 422 });
+  }
   if (orderPayload.customer_id && orderPayload.customer_id !== currentOrder.customer_id && !(await canAccessCustomer(ctx, orderPayload.customer_id))) {
     return customerForbidden();
   }
@@ -233,7 +240,7 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
   return NextResponse.json({ ...(fresh ?? data), line_warning: lineWarning || undefined });
 }
 
-/** Soft-deletes an order and its items. */
+/** Soft-deletes an order and its items; a quotation-first order also soft-deletes its quotations. */
 export async function DELETE(_: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   const guard = await requireStaff('orders');
   if (guard.response) return guard.response;
@@ -241,12 +248,33 @@ export async function DELETE(_: NextRequest, { params }: { params: Promise<{ id:
   const { id } = await params;
   if (!(await canAccessOrder(ctx, id))) return customerForbidden();
 
+  const { data: order, error: loadError } = await supabaseAdmin
+    .from('sale_orders')
+    .select('id, quotation_stage')
+    .eq('id', id)
+    .eq('company_id', ctx.companyId)
+    .eq('is_deleted', false)
+    .maybeSingle();
+  if (loadError) return NextResponse.json({ error: loadError.message }, { status: 400 });
+  if (!order) return NextResponse.json({ error: 'ไม่พบเอกสาร' }, { status: 404 });
+
   const { error } = await supabaseAdmin
     .from('sale_orders')
     .update({ is_deleted: true, updated_by: ctx.userId })
     .eq('id', id)
     .eq('company_id', ctx.companyId);
   if (error) return NextResponse.json({ error: error.message }, { status: 400 });
+
+  // ใบเสนอราคา: ลบเลข QT ของบิลนี้ออกด้วย ไม่ให้ค้างในรายงาน/ค้นหา
+  if (order.quotation_stage) {
+    const { error: quotationError } = await supabaseAdmin
+      .from('quotations')
+      .update({ is_deleted: true, updated_by: ctx.userId, updated_at: new Date().toISOString() })
+      .eq('sale_order_id', id)
+      .eq('company_id', ctx.companyId)
+      .eq('is_deleted', false);
+    if (quotationError) return NextResponse.json({ error: quotationError.message }, { status: 400 });
+  }
 
   await supabaseAdmin
     .from('sale_order_items')

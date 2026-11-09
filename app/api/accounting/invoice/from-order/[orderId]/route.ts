@@ -4,17 +4,27 @@ import { supabaseAdmin } from '@/lib/supabase/server';
 import { loadOrderDocumentData } from '@/lib/documents/from-order';
 import { canAccessCustomer, customerForbidden } from '@/lib/services/customer-scope';
 import { canIssueTaxInvoice } from '@/lib/utils/order-status';
+import { parseBody } from '@/lib/validation/common';
+import { invoiceIssueSchema } from '@/lib/validation/accounting';
+import { todayBangkok } from '@/lib/services/quotations';
+import { validateInvoiceIssueDate } from '@/lib/utils/invoice-dates';
 
 /**
  * Issues a tax invoice from an order: snapshots customer, items and totals and
  * assigns the next IV-YY#### number (yearly run). One active invoice per order, and
- * only once the order has been approved.
+ * only once the order has been approved. Body `{ issued_at? }` sets the issue
+ * date (default today, Asia/Bangkok; not in the future, same year as today).
  */
-export async function POST(_: Request, { params }: { params: Promise<{ orderId: string }> }) {
+export async function POST(req: Request, { params }: { params: Promise<{ orderId: string }> }) {
   const guard = await requireStaff('accounting');
   if (guard.response) return guard.response;
   const { ctx } = guard;
   const { orderId } = await params;
+
+  const parsed = parseBody(invoiceIssueSchema, await req.json().catch(() => ({})));
+  if (parsed.response) return parsed.response;
+  const today = todayBangkok();
+  const issuedAt = parsed.data.issued_at ?? today;
 
   const { data: order, error: orderError } = await supabaseAdmin
     .from('sale_orders')
@@ -42,6 +52,9 @@ export async function POST(_: Request, { params }: { params: Promise<{ orderId: 
     .maybeSingle();
   if (existing) return NextResponse.json({ error: `คำสั่งซื้อนี้มีใบกำกับภาษี ${existing.invoice_no} อยู่แล้ว`, invoice: existing }, { status: 409 });
 
+  const dateError = validateInvoiceIssueDate(issuedAt, { today });
+  if (dateError) return NextResponse.json({ error: dateError }, { status: 422 });
+
   const doc = await loadOrderDocumentData(ctx.companyId, orderId);
   if ('error' in doc) return NextResponse.json({ error: doc.error }, { status: doc.status });
   if (!doc.items.length) return NextResponse.json({ error: 'คำสั่งซื้อไม่มีรายการสินค้า' }, { status: 422 });
@@ -52,7 +65,7 @@ export async function POST(_: Request, { params }: { params: Promise<{ orderId: 
       company_id: ctx.companyId,
       sale_order_id: orderId,
       customer_id: order.customer_id,
-      issued_at: new Date().toISOString().slice(0, 10),
+      issued_at: issuedAt,
       due_date: order.due_date,
       status: doc.outstanding_amount <= 0.005 ? 'PAID' : 'ISSUED',
       amount: doc.totals.net_incl_vat,

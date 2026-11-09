@@ -5,6 +5,8 @@ import { parseBody } from '@/lib/validation/common';
 import { invoicePatchSchema } from '@/lib/validation/accounting';
 import { canAccessOrder, customerForbidden, isScopedRole } from '@/lib/services/customer-scope';
 import type { StaffContext } from '@/lib/auth/api-guard';
+import { todayBangkok } from '@/lib/services/quotations';
+import { validateInvoiceIssueDate } from '@/lib/utils/invoice-dates';
 
 /** SALES may only touch invoices of their own customers. */
 async function canAccessInvoice(ctx: StaffContext, invoiceId: string): Promise<boolean> {
@@ -13,7 +15,11 @@ async function canAccessInvoice(ctx: StaffContext, invoiceId: string): Promise<b
   return canAccessOrder(ctx, data?.sale_order_id ?? null);
 }
 
-/** Only cancellation and due-date changes are allowed on an issued invoice. */
+/**
+ * Allowed changes on an issued invoice: cancellation, due date and issue date.
+ * Dates cannot be changed on a cancelled invoice; the issue date must pass
+ * `validateInvoiceIssueDate` and the due date must not be before it.
+ */
 export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   const guard = await requireStaff('accounting');
   if (guard.response) return guard.response;
@@ -27,6 +33,27 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
   const update: Record<string, unknown> = { updated_by: ctx.userId };
   if (parsed.data.status) update.status = parsed.data.status;
   if (parsed.data.due_date !== undefined) update.due_date = parsed.data.due_date;
+
+  if (parsed.data.issued_at !== undefined || parsed.data.due_date !== undefined) {
+    const { data: current, error: currentError } = await supabaseAdmin
+      .from('invoices')
+      .select('invoice_no, status, issued_at, due_date')
+      .eq('id', id)
+      .eq('company_id', ctx.companyId)
+      .eq('is_deleted', false)
+      .maybeSingle();
+    if (currentError) return NextResponse.json({ error: currentError.message }, { status: 400 });
+    if (!current) return NextResponse.json({ error: 'ไม่พบใบกำกับภาษี' }, { status: 404 });
+    if (current.status === 'CANCELLED') return NextResponse.json({ error: 'ใบกำกับภาษีถูกยกเลิกแล้ว แก้ไขวันที่ไม่ได้' }, { status: 422 });
+
+    const issuedAt = parsed.data.issued_at ?? String(current.issued_at);
+    const dueDate = parsed.data.due_date !== undefined ? parsed.data.due_date : current.due_date;
+    const dateError = parsed.data.issued_at !== undefined
+      ? validateInvoiceIssueDate(issuedAt, { today: todayBangkok(), invoiceNo: current.invoice_no, dueDate })
+      : (dueDate && dueDate < issuedAt ? 'วันครบกำหนดต้องไม่ก่อนวันที่ออกใบกำกับภาษี' : null);
+    if (dateError) return NextResponse.json({ error: dateError }, { status: 422 });
+    if (parsed.data.issued_at !== undefined) update.issued_at = parsed.data.issued_at;
+  }
 
   const { data, error } = await supabaseAdmin
     .from('invoices')

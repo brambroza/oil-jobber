@@ -4,6 +4,7 @@ import {
   formatConversationTime,
   formatDayLabel,
   groupMessagesByDay,
+  mergeMessages,
   sortConversations,
 } from '@/lib/utils/line-chat';
 
@@ -53,6 +54,21 @@ describe('sortConversations', () => {
     ];
     expect(sortConversations(rooms).map((r) => r.id)).toEqual(['new', 'old', 'empty']);
     expect(rooms[0].id).toBe('empty');
+  });
+});
+
+describe('mergeMessages', () => {
+  const a = { id: 'a', created_at: '2026-10-31T01:00:00Z' };
+  const b = { id: 'b', created_at: '2026-10-31T02:00:00Z' };
+  const c = { id: 'c', created_at: '2026-10-31T03:00:00Z' };
+
+  it('appends only new rows in time order', () => {
+    expect(mergeMessages([a, c], [c, b]).map((m) => m.id)).toEqual(['a', 'b', 'c']);
+  });
+
+  it('returns the same array when nothing is new', () => {
+    const current = [a, b];
+    expect(mergeMessages(current, [b])).toBe(current);
   });
 });
 

@@ -1,0 +1,2588 @@
+'use client';
+
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { Add, Block, Close, Delete, Description, DirectionsCar, Edit, LocalShipping, Print, ReceiptLong, Remove, TaskAlt, ThumbDown } from '@mui/icons-material';
+import {
+  Alert,
+  Autocomplete,
+  Box,
+  Button,
+  Card,
+  CardActionArea,
+  CardContent,
+  Chip,
+  Dialog,
+  DialogActions,
+  DialogContent,
+  DialogTitle,
+  Divider,
+  Drawer,
+  FormControl,
+  FormControlLabel,
+  FormLabel,
+  IconButton,
+  Menu,
+  MenuItem,
+  Paper,
+  Radio,
+  RadioGroup,
+  Stack,
+  Table,
+  TableBody,
+  ToggleButton,
+  ToggleButtonGroup,
+  TableCell,
+  TableContainer,
+  TableHead,
+  TablePagination,
+  TableRow,
+  TextField,
+  Tooltip,
+  Typography,
+  createFilterOptions,
+  type SxProps,
+  type Theme,
+} from '@mui/material';
+import { ActionSnackbar, type ActionSnackbarSeverity } from '@/components/common/ActionSnackbar';
+import VatPriceInput, { toDisplayPrice } from '@/components/orders/VatPriceInput';
+import { DEFAULT_VAT_MODE, parseVatMode, VAT_MODE_OPTIONS, type VatMode } from '@/lib/documents/vat-mode';
+import type { OrderStatus } from '@/types/database';
+import { computeFloorUnitPrice, computeOrderProfit, computeOrderTotals, computeStandardUnitPrice, computeUnitPrice, isPickupMethod, VAT_MULTIPLIER } from '@/lib/services/order-pricing';
+import { useCurrentUser } from '@/components/layout/CurrentUserProvider';
+import { PdfPreviewDialog, type PdfPreviewTarget } from '@/components/documents/PdfPreviewDialog';
+import { canApproveOrders, isAdminRole } from '@/lib/auth/permissions';
+import ApproveOrderDialog from '@/components/orders/ApproveOrderDialog';
+import QuotationDialog, { type QuotationDialogOrder } from '@/components/orders/QuotationDialog';
+import DeliveryRecordDialog, { type DeliveryRecordDialogOrder } from '@/components/orders/DeliveryRecordDialog';
+import { DELIVERY_RECORDABLE_STATUSES, ORDER_STATUS_ORDER, canIssueTaxInvoice, statusColor, statusThai } from '@/lib/utils/order-status';
+import { formatDate, formatDateTime } from '@/lib/utils/date-format';
+import { paymentDueLabel, paymentDueStatus } from '@/lib/utils/payment-due';
+import { pickDefaultDepot } from '@/lib/utils/default-depot';
+import QuotationDecisionDialog, { type QuotationDecisionTarget } from '@/components/orders/QuotationDecisionDialog';
+import {
+  QUOTATION_STATUS_COLORS,
+  QUOTATION_STATUS_LABELS,
+  quotationDisplayStatus,
+  type QuotationDocStatus,
+  type QuotationStage,
+} from '@/lib/utils/quotation-status';
+
+/** `order` = เมนูใบสั่งขาย, `quotation` = เมนูใบเสนอราคา (quotation-first orders). */
+export type OrdersWorkspaceMode = 'order' | 'quotation';
+
+/** Latest quotation of a quotation-first order (list view). */
+type RowQuotation = {
+  quotation_no: string;
+  issued_at: string;
+  valid_until: string | null;
+  status: QuotationDocStatus;
+} | null;
+
+/** Today's date in Asia/Bangkok as `YYYY-MM-DD`. */
+function todayBangkok(): string {
+  return new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Bangkok', year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date());
+}
+
+type OrderRow = {
+  id: string;
+  order_no?: string | null;
+  customer_id: string;
+  order_status: OrderStatus;
+  delivery_location: string | null;
+  refinery_summary?: string | null;
+  depot_summary?: string | null;
+  selected_credit_label?: string | null;
+  refinery_booking_number: string | null;
+  delivery_order_no?: string | null;
+  delivery_order_file_url?: string | null;
+  due_date: string | null;
+  receive_method?: string | null;
+  requested_delivery_date?: string | null;
+  customer_po_no?: string | null;
+  created_at?: string | null;
+  total_liters?: number;
+  total_amount?: number;
+  goods_amount?: number;
+  delivery_fee_amount?: number;
+  sales_user_name?: string | null;
+  approved_by_name?: string | null;
+  approved_at?: string | null;
+  po_sent_at?: string | null;
+  documents_sent_at?: string | null;
+  delivered_at?: string | null;
+  delivery_record_no?: string | null;
+  delivery_receiver_name?: string | null;
+  customers?: { company_name?: string } | null;
+  quotation_stage?: QuotationStage | null;
+  quotation?: RowQuotation;
+  /** Active tax invoice (orders view only). */
+  invoice?: { invoice_no: string; issued_at: string; due_date: string | null; status: string } | null;
+  paid_amount?: number;
+  outstanding_amount?: number;
+};
+type StaffUser = { id: string; full_name: string; role: string };
+
+type MasterCustomer = {
+  id: string;
+  company_name: string;
+  tax_id?: string | null;
+  phone?: string | null;
+  address?: string | null;
+  payment_condition_id?: string | null;
+  price_adjustment_per_liter?: number;
+  sales_user_id?: string | null;
+};
+type MasterRefinery = { id: string; name: string };
+type MasterDepot = { id: string; code: string; name: string; refinery_id?: string | null };
+type MasterProduct = { code: string; name: string; is_active: boolean };
+type MasterPaymentCondition = {
+  id: string;
+  name: string;
+  payment_type: string;
+  credit_days: number;
+  extra_cost_per_liter: number;
+};
+type CustomerAccess = {
+  allowed_refinery_ids?: string[] | null;
+  allowed_depot_ids?: string[] | null;
+  allowed_payment_condition_ids?: string[] | null;
+} | null;
+
+type CustomerPriceOption = {
+  refinery_id: string | null;
+  depot_id: string;
+  product_code: string;
+  product_name: string;
+  base_cost_price: number;
+};
+
+/** รอบราคาน้ำมันที่แอดมินเลือกได้ (จาก price-options) */
+type PriceRound = {
+  id: string;
+  refinery_id: string;
+  effective_date: string;
+  effective_at: string | null;
+  expires_date: string | null;
+  expires_at: string | null;
+  is_current: boolean;
+};
+
+/**
+ * Label for a price round option: effective date/time, expiry and a
+ * "current" marker.
+ *
+ * @param round - price round
+ * @returns Thai display label
+ */
+function priceRoundLabel(round: PriceRound): string {
+  const formatPart = (date: string | null, time: string | null) => {
+    if (!date) return '';
+    const day = formatDate(date);
+    const hhmm = String(time || '').slice(0, 5);
+    return hhmm ? `${day} ${hhmm} น.` : day;
+  };
+  const from = formatPart(round.effective_date, round.effective_at);
+  const to = formatPart(round.expires_date, round.expires_at);
+  return `${from}${to ? ` – ${to}` : ''}${round.is_current ? ' (ล่าสุด)' : ''}`;
+}
+
+type OrderItemForm = {
+  refinery_id: string;
+  depot_id: string;
+  product_code: string;
+  product_name: string;
+  unit_price: number;
+  liters: number;
+  /** ราคามาตรฐานก่อนปรับลูกค้า (แสดงเป็น hint) */
+  std_unit_price?: number;
+  base_cost_price?: number | null;
+};
+
+type OrderForm = {
+  id?: string;
+  order_no?: string;
+  /** null = ใบสั่งขายปกติ, PENDING/CONVERTED/CLOSED = มาจากเมนูใบเสนอราคา */
+  quotation_stage?: QuotationStage | null;
+  approved_by_name?: string | null;
+  approved_at?: string | null;
+  approved_over_credit?: boolean;
+  po_sent_at?: string | null;
+  documents_sent_at?: string | null;
+  delivered_at?: string | null;
+  delivery_receiver_name?: string | null;
+  delivery_record_note?: string | null;
+  delivery_record_no?: string | null;
+  delivery_recorded_by_name?: string | null;
+  /** snapshot กำไรที่บันทึกไว้บน server (บิลเดิม) */
+  saved_profit?: { revenue_ex_vat_amount: number; cost_goods_amount: number; cost_delivery_amount: number; profit_amount: number; gp_percent: number; cost_incomplete: boolean } | null;
+  payment_condition_id?: string;
+  refinery_summary?: string;
+  depot_summary?: string;
+  selected_refinery_id: string;
+  selected_depot_id: string;
+  customer_id: string;
+  order_status: OrderStatus;
+  delivery_location: string;
+  refinery_booking_number: string;
+  delivery_order_no: string;
+  delivery_order_file_url: string;
+  due_date: string;
+  receive_method: string;
+  requested_delivery_date: string;
+  customer_vehicle_id: string;
+  vehicle_license_plate: string;
+  vehicle_driver_name: string;
+  vehicle_driver_phone: string;
+  vehicle_pickup_license_number: string;
+  delivery_fee_std_per_liter: number;
+  /** ค่าขนส่งเพิ่มส่วนกลางที่ snapshot ไว้บนบิล (บิลเดิม) */
+  delivery_fee_surcharge_per_liter: number;
+  /** วิธีรับของตอนโหลดบิลเดิม ('' เมื่อสร้างใหม่) ใช้ตัดสินว่า server จะ snapshot surcharge ใหม่หรือไม่ */
+  original_receive_method: string;
+  delivery_fee_adjust_per_liter: number;
+  discount_amount: number;
+  discount_note: string;
+  remark: string;
+  sales_user_id: string;
+  /** แสดง/กรอกราคาต่อลิตร แบบไม่รวมภาษี (excl) หรือรวมภาษี (incl); unit_price ในฟอร์มรวม VAT เสมอ */
+  price_vat_mode: VatMode;
+  items: OrderItemForm[];
+};
+
+type CustomerVehicle = {
+  id: string;
+  customer_id: string;
+  license_plate: string;
+  driver_name: string | null;
+  driver_phone: string | null;
+  pickup_license_number: string | null;
+};
+
+const receiveMethods = [
+  { code: 'DELIVER_BY_TRUCK', label: 'จัดส่งให้', icon: <LocalShipping /> },
+  { code: 'PICKUP_BY_TRUCK', label: 'รับเอง', icon: <DirectionsCar /> },
+];
+
+
+const filterCustomerOptions = createFilterOptions<MasterCustomer>({
+  stringify: (customer) => [customer.company_name, customer.tax_id, customer.phone].filter(Boolean).join(' '),
+});
+
+function calculateDueDate(creditDays: number): string {
+  const dueDate = new Date();
+  dueDate.setHours(12, 0, 0, 0);
+  dueDate.setDate(dueDate.getDate() + Math.max(0, Math.trunc(Number(creditDays) || 0)));
+
+  const year = dueDate.getFullYear();
+  const month = String(dueDate.getMonth() + 1).padStart(2, '0');
+  const day = String(dueDate.getDate()).padStart(2, '0');
+  return `${year}-${month}-${day}`;
+}
+
+const emptyItem: OrderItemForm = {
+  refinery_id: '',
+  depot_id: '',
+  product_code: '',
+  product_name: '',
+  unit_price: 0,
+  liters: 0,
+};
+
+const emptyForm: OrderForm = {
+  customer_id: '',
+  order_status: 'SUBMITTED',
+  delivery_location: '',
+  refinery_booking_number: '',
+  delivery_order_no: '',
+  delivery_order_file_url: '',
+  due_date: '',
+  receive_method: 'PICKUP_BY_TRUCK',
+  requested_delivery_date: new Date().toISOString().slice(0, 10),
+  customer_vehicle_id: '',
+  vehicle_license_plate: '',
+  vehicle_driver_name: '',
+  vehicle_driver_phone: '',
+  vehicle_pickup_license_number: '',
+  payment_condition_id: '',
+  refinery_summary: '',
+  depot_summary: '',
+  selected_refinery_id: '',
+  selected_depot_id: '',
+  delivery_fee_std_per_liter: 0,
+  delivery_fee_surcharge_per_liter: 0,
+  original_receive_method: '',
+  delivery_fee_adjust_per_liter: 0,
+  discount_amount: 0,
+  discount_note: '',
+  remark: '',
+  sales_user_id: '',
+  price_vat_mode: DEFAULT_VAT_MODE,
+  items: [],
+};
+
+function money(v: number): string {
+  return Number(v || 0).toLocaleString('th-TH', {
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2,
+  });
+}
+
+function receiveMethodThai(code?: string | null): string {
+  if (code === 'DELIVER_BY_TRUCK') return 'จัดส่งให้ทางรถ';
+  if (code === 'PICKUP_BY_TRUCK') return 'รับเองทางรถ';
+  return code || '-';
+}
+
+function SectionCard({
+  title,
+  subtitle,
+  children,
+}: {
+  title: string;
+  subtitle?: string;
+  children: React.ReactNode;
+}) {
+  return (
+    <Box
+      sx={{
+        p: { xs: 1.5, md: 2 },
+        border: '1px solid',
+        borderColor: '#e5e7eb',
+        borderRadius: 3,
+        bgcolor: '#fff',
+        boxShadow: '0 8px 24px rgba(15,23,42,0.04)',
+      }}
+    >
+      <Stack spacing={0.3} sx={{ mb: 1.5 }}>
+        <Typography fontWeight={900}>{title}</Typography>
+        {subtitle ? (
+          <Typography variant="caption" color="text.secondary">
+            {subtitle}
+          </Typography>
+        ) : null}
+      </Stack>
+      {children}
+    </Box>
+  );
+}
+
+/**
+ * Pins the "จัดการ" column to the right edge of the orders table so the actions
+ * stay visible while the other columns scroll horizontally. The cell needs an
+ * opaque background (plus the row hover tint layered on top) so scrolled
+ * content does not show through.
+ */
+const STICKY_ACTIONS_SX: SxProps<Theme> = {
+  position: 'sticky',
+  right: 0,
+  zIndex: 1,
+  width: 160,
+  minWidth: 160,
+  bgcolor: 'background.paper',
+  boxShadow: 'inset 1px 0 0 #e2e8f0, -6px 0 8px -6px rgba(15,23,42,0.18)',
+  '.MuiTableRow-hover:hover > &': {
+    backgroundImage: (theme) => `linear-gradient(${theme.palette.action.hover}, ${theme.palette.action.hover})`,
+  },
+};
+
+/**
+ * Sale order workspace (list + full-screen order drawer). Shared by the
+ * ใบสั่งขาย menu and the ใบเสนอราคา menu: in `quotation` mode the same form
+ * creates a DRAFT order flagged as a quotation, which is converted into a sale
+ * order once the customer accepts.
+ *
+ * @param mode - which menu the workspace serves
+ */
+export default function OrdersWorkspace({ mode = 'order' }: { mode?: OrdersWorkspaceMode }) {
+  const isQuotationMode = mode === 'quotation';
+  const docLabel = isQuotationMode ? 'ใบเสนอราคา' : 'ใบสั่งขาย';
+  const me = useCurrentUser();
+  const isSalesRole = me?.role === 'SALES';
+  const canApprove = canApproveOrders(me?.role);
+  const canPickPriceRound = isAdminRole(me?.role);
+  const [approveOpen, setApproveOpen] = useState(false);
+  const [companyId] = useState(process.env.NEXT_PUBLIC_DEFAULT_COMPANY_ID ?? '');
+  const [salesUsers, setSalesUsers] = useState<StaffUser[]>([]);
+  const [deliveryFeeByDepot, setDeliveryFeeByDepot] = useState<Record<string, number>>({});
+  /** โรงกลั่น/คลังของออเดอร์ล่าสุดของลูกค้าที่เลือก (ค่าเริ่มต้นของบิลใหม่) */
+  const [lastOrderDepot, setLastOrderDepot] = useState<{ refinery_id: string | null; depot_id: string } | null>(null);
+  /** Customer whose default refinery/depot was already applied to the new form. */
+  const depotDefaultsAppliedRef = useRef('');
+  /** ค่าขนส่งเพิ่มส่วนกลางปัจจุบันของบริษัท (บาท/ลิตร) จาก price-options */
+  const [companySurcharge, setCompanySurcharge] = useState(0);
+  const [pdfTarget, setPdfTarget] = useState<PdfPreviewTarget>(null);
+  const [printMenu, setPrintMenu] = useState<{ anchor: HTMLElement; orderId: string; orderNo: string; row?: OrderRow | null } | null>(null);
+  const [quotationOrder, setQuotationOrder] = useState<QuotationDialogOrder>(null);
+  const [decisionTarget, setDecisionTarget] = useState<QuotationDecisionTarget>(null);
+  /** True while the quotations menu issues a quotation without the dialog. */
+  const [issuingQuotation, setIssuingQuotation] = useState(false);
+  const today = todayBangkok();
+
+  const openPdf = (type: 'purchase-order' | 'quotation' | 'tax-invoice' | 'delivery-note' | 'receipt' | 'delivery-record', id: string, title: string, copy = false) => {
+    setPdfTarget({ type, id, title, copy });
+  };
+
+  const [customerAdjust, setCustomerAdjust] = useState(0);
+  const [customerBaseline, setCustomerBaseline] = useState(0);
+  const [customerSalesFee, setCustomerSalesFee] = useState(0);
+  const [rows, setRows] = useState<OrderRow[]>([]);
+  const [customers, setCustomers] = useState<MasterCustomer[]>([]);
+  const [refineries, setRefineries] = useState<MasterRefinery[]>([]);
+  const [depots, setDepots] = useState<MasterDepot[]>([]);
+  const [products, setProducts] = useState<MasterProduct[]>([]);
+  const [paymentConditions, setPaymentConditions] = useState<MasterPaymentCondition[]>([]);
+  const [vehicles, setVehicles] = useState<CustomerVehicle[]>([]);
+  const [customerAccess, setCustomerAccess] = useState<CustomerAccess>(null);
+  const [customerPriceOptions, setCustomerPriceOptions] = useState<CustomerPriceOption[]>([]);
+  const [customerAccessLoading, setCustomerAccessLoading] = useState(false);
+  const [customerAccessCustomerId, setCustomerAccessCustomerId] = useState('');
+  const [priceRounds, setPriceRounds] = useState<PriceRound[]>([]);
+  /** รอบราคาที่แอดมินเลือก ('' = รอบล่าสุด) */
+  const [selectedRoundId, setSelectedRoundId] = useState('');
+  /** ตั้งเมื่อแอดมินเปลี่ยนรอบราคา เพื่อคำนวณราคารายการใหม่หลังโหลดราคาเสร็จ */
+  const repriceOnLoadRef = useRef(false);
+
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState('');
+  const [searchText, setSearchText] = useState('');
+  const [searchDate, setSearchDate] = useState('');
+  const [page, setPage] = useState(0);
+  const [rowsPerPage, setRowsPerPage] = useState(15);
+  const [open, setOpen] = useState(false);
+  const [form, setForm] = useState<OrderForm>(emptyForm);
+  /** Drawer is a quotation-first order (any stage). */
+  const formIsQuotation = Boolean(form.quotation_stage) || (isQuotationMode && !form.id);
+  /** Drawer is a quotation still waiting for the customer. */
+  const formIsPendingQuotation = form.quotation_stage === 'PENDING' || (isQuotationMode && !form.id);
+  const formDocLabel = formIsPendingQuotation ? 'ใบเสนอราคา' : 'ใบสั่งขาย';
+  /** Status of the order the print menu is open for (list row, else the open drawer). */
+  const printMenuStatus = printMenu
+    ? printMenu.row?.order_status ?? (form.id === printMenu.orderId ? form.order_status : undefined)
+    : undefined;
+  const printMenuApproved = canIssueTaxInvoice(printMenuStatus);
+  const [deleteId, setDeleteId] = useState<string | null>(null);
+  const [cancelOpen, setCancelOpen] = useState(false);
+  const [uploadingDo, setUploadingDo] = useState(false);
+  const [deliveryRecordOrder, setDeliveryRecordOrder] = useState<DeliveryRecordDialogOrder>(null);
+  const [snack, setSnack] = useState<{
+    open: boolean;
+    message: string;
+    severity: ActionSnackbarSeverity;
+  }>({
+    open: false,
+    message: '',
+    severity: 'info',
+  });
+
+  const showSnack = (message: string, severity: ActionSnackbarSeverity) => {
+    setSnack({ open: true, message, severity });
+  };
+
+  /**
+   * ค่าขนส่งเพิ่มส่วนกลางที่จะมีผลกับบิลนี้ (สะท้อนกฎฝั่ง server):
+   * บิลใหม่ หรือบิลเดิมที่เปลี่ยนจากรับเองเป็นจัดส่ง → ใช้ค่าปัจจุบันของบริษัท
+   * บิลเดิมที่จัดส่งอยู่แล้ว → ใช้ค่าที่ snapshot ไว้บนบิล
+   */
+  const effectiveSurcharge = useMemo(() => {
+    if (isPickupMethod(form.receive_method)) return 0;
+    if (form.id && !isPickupMethod(form.original_receive_method)) return Number(form.delivery_fee_surcharge_per_liter || 0);
+    return Number(companySurcharge || 0);
+  }, [companySurcharge, form.id, form.original_receive_method, form.receive_method, form.delivery_fee_surcharge_per_liter]);
+
+  const totals = useMemo(() => computeOrderTotals({
+    items: form.items,
+    deliveryFeeStdPerLiter: form.delivery_fee_std_per_liter,
+    deliveryFeeSurchargePerLiter: effectiveSurcharge,
+    deliveryFeeAdjustPerLiter: form.delivery_fee_adjust_per_liter,
+    receiveMethod: form.receive_method,
+    discountAmount: form.discount_amount,
+  }), [form.items, form.delivery_fee_std_per_liter, effectiveSurcharge, form.delivery_fee_adjust_per_liter, form.receive_method, form.discount_amount]);
+  /** กำไร/ขาดทุนก่อน VAT คำนวณสดจากฟอร์ม (สูตรเดียวกับ server) */
+  const profit = useMemo(() => computeOrderProfit({
+    items: form.items,
+    deliveryFeeStdPerLiter: form.delivery_fee_std_per_liter,
+    deliveryFeeSurchargePerLiter: effectiveSurcharge,
+    deliveryFeeAdjustPerLiter: form.delivery_fee_adjust_per_liter,
+    receiveMethod: form.receive_method,
+    discountAmount: form.discount_amount,
+  }), [form.items, form.delivery_fee_std_per_liter, effectiveSurcharge, form.delivery_fee_adjust_per_liter, form.receive_method, form.discount_amount]);
+  /** ค่าเงื่อนไขชำระ บาท/ลิตร ของเครดิตที่เลือก */
+  const paymentExtra = Number(paymentConditions.find((pc) => pc.id === form.payment_condition_id)?.extra_cost_per_liter || 0);
+  /** ขั้นต่ำราคาขายของรายการ (มาตรฐาน + ค่ากลาง admin) หรือ null เมื่อไม่มีราคาโรงกลั่น */
+  const floorFor = (it: OrderItemForm): number | null => (
+    Number(it.base_cost_price || 0) > 0 ? computeFloorUnitPrice(Number(it.base_cost_price), paymentExtra, customerBaseline) : null
+  );
+  const belowFloor = (it: OrderItemForm): boolean => { const f = floorFor(it); return f != null && Number(it.unit_price || 0) < f - 0.005; };
+  const hasBelowFloor = form.items.some(belowFloor);
+  const grandTotal = totals.net;
+  const subTotal = totals.beforeVat;
+  const vatAmount = totals.vat;
+  const totalLiters = totals.totalLiters;
+  const isPickup = isPickupMethod(form.receive_method);
+  const selectedDepotId = form.selected_depot_id;
+  const selectedRefineryId = form.selected_refinery_id;
+  const customerVehicles = useMemo(
+    () => vehicles.filter((vehicle) => vehicle.customer_id === form.customer_id),
+    [vehicles, form.customer_id],
+  );
+
+  const customerRefineries = useMemo(() => {
+    if (!form.customer_id || customerAccessLoading || customerAccessCustomerId !== form.customer_id) return [];
+    const allowed = customerAccess?.allowed_refinery_ids ?? [];
+    if (!allowed.length) return refineries;
+
+    const allowedSet = new Set(allowed.map(String));
+    const existingIds = new Set(form.id ? form.items.map((item) => item.refinery_id).filter(Boolean) : []);
+    return refineries.filter((refinery) => allowedSet.has(refinery.id) || existingIds.has(refinery.id));
+  }, [refineries, customerAccess, customerAccessLoading, customerAccessCustomerId, form.customer_id, form.id, form.items]);
+
+  const customerDepots = useMemo(() => {
+    if (!form.customer_id || customerAccessLoading || customerAccessCustomerId !== form.customer_id) return [];
+    const allowed = customerAccess?.allowed_depot_ids ?? [];
+    if (!allowed.length) return depots;
+
+    const allowedSet = new Set(allowed.map(String));
+    const existingIds = new Set(form.id ? form.items.map((item) => item.depot_id).filter(Boolean) : []);
+    return depots.filter((depot) => allowedSet.has(depot.id) || existingIds.has(depot.id));
+  }, [depots, customerAccess, customerAccessLoading, customerAccessCustomerId, form.customer_id, form.id, form.items]);
+
+  const filteredDepots = useMemo(
+    () => customerDepots.filter((depot) => !selectedRefineryId || depot.refinery_id === selectedRefineryId),
+    [customerDepots, selectedRefineryId],
+  );
+
+  const filteredPaymentConditions = useMemo(() => {
+    if (form.customer_id && (customerAccessLoading || customerAccessCustomerId !== form.customer_id)) return [];
+    const allowed = customerAccess?.allowed_payment_condition_ids ?? [];
+    if (!allowed.length) return paymentConditions;
+    const allowedSet = new Set(allowed.map((x) => String(x)));
+    return paymentConditions.filter((pc) => allowedSet.has(pc.id));
+  }, [paymentConditions, customerAccess, customerAccessLoading, customerAccessCustomerId, form.customer_id]);
+
+  const filteredRows = useMemo(() => {
+    const q = searchText.trim().toLowerCase();
+    const d = searchDate.trim();
+    return rows.filter((r) => {
+      const customer = (r.customers?.company_name || '').toLowerCase();
+      const status = statusThai(r.order_status).toLowerCase();
+      const orderId = r.id.toLowerCase();
+      const orderNo = String(r.order_no || '').toLowerCase();
+      const delivery = (r.delivery_location || '').toLowerCase();
+      const refinerySummary = String(r.refinery_summary || '').toLowerCase();
+      const depotSummary = String(r.depot_summary || '').toLowerCase();
+      const creditLabel = String(r.selected_credit_label || '').toLowerCase();
+      const booking = (r.refinery_booking_number || '').toLowerCase();
+      const doNo = String(r.delivery_order_no || '').toLowerCase();
+      const quotationNo = String(r.quotation?.quotation_no || '').toLowerCase();
+      const quotationStatus = isQuotationMode
+        ? QUOTATION_STATUS_LABELS[quotationDisplayStatus(r.quotation_stage, r.quotation, today)].toLowerCase()
+        : '';
+
+      const okText =
+        !q ||
+        customer.includes(q) ||
+        status.includes(q) ||
+        orderId.includes(q) ||
+        orderNo.includes(q) ||
+        delivery.includes(q) ||
+        refinerySummary.includes(q) ||
+        depotSummary.includes(q) ||
+        creditLabel.includes(q) ||
+        booking.includes(q) ||
+        doNo.includes(q) ||
+        String(r.invoice?.invoice_no || '').toLowerCase().includes(q) ||
+        (isQuotationMode && (quotationNo.includes(q) || quotationStatus.includes(q)));
+      const okDate = !d || String(r.due_date || '').includes(d);
+      return okText && okDate;
+    });
+  }, [rows, searchText, searchDate, isQuotationMode, today]);
+
+  const pagedRows = useMemo(() => {
+    const start = page * rowsPerPage;
+    return filteredRows.slice(start, start + rowsPerPage);
+  }, [filteredRows, page, rowsPerPage]);
+
+  const load = async (showFeedback = false) => {
+    if (!companyId) return;
+    setLoading(true);
+    setError('');
+    try {
+      const res = await fetch(`/api/orders?company_id=${companyId}${isQuotationMode ? '&view=quotation' : ''}`);
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || 'โหลดข้อมูลไม่สำเร็จ');
+      setRows(data);
+      if (showFeedback) showSnack(`รีเฟรชข้อมูล${docLabel}เรียบร้อยแล้ว`, 'info');
+    } catch (e) {
+      const message = (e as Error).message;
+      setError(message);
+      showSnack(message, 'error');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const loadMasters = async () => {
+    if (!companyId) return;
+    const [r1, r2, r3, r4, r5, r6, r7] = await Promise.all([
+      fetch(`/api/customers?company_id=${companyId}`),
+      fetch(`/api/refineries?company_id=${companyId}`),
+      fetch(`/api/depots?company_id=${companyId}`),
+      fetch(`/api/oil-products?company_id=${companyId}`),
+      fetch(`/api/payment-conditions?company_id=${companyId}`),
+      fetch(`/api/customer-vehicles?company_id=${companyId}`),
+      fetch('/api/users-profile/staff'),
+    ]);
+
+    const [d1, d2, d3, d4, d5, d6, d7] = await Promise.all([r1.json(), r2.json(), r3.json(), r4.json(), r5.json(), r6.json(), r7.json()]);
+
+    if (r1.ok) {
+      setCustomers((d1 || []).map((x: any) => ({
+        id: x.id,
+        company_name: x.company_name,
+        tax_id: x.tax_id,
+        phone: x.phone,
+        address: x.address,
+        payment_condition_id: x.payment_condition_id,
+        price_adjustment_per_liter: Number(x.price_adjustment_per_liter || 0),
+        sales_user_id: x.sales_user_id || null,
+      })));
+    }
+    if (r7.ok) setSalesUsers((d7 || []).map((x: any) => ({ id: x.id, full_name: String(x.full_name || ''), role: String(x.role || '') })));
+    if (r2.ok) setRefineries((d2 || []).map((x: any) => ({ id: x.id, name: x.name })));
+    if (r3.ok) {
+      setDepots((d3 || []).map((x: any) => ({
+        id: x.id,
+        code: x.code,
+        name: x.name,
+        refinery_id: x.refinery_id,
+      })));
+    }
+    if (r4.ok) setProducts((d4 || []).map((x: any) => ({ code: x.code, name: x.name, is_active: Boolean(x.is_active) })));
+    if (r5.ok) {
+      setPaymentConditions(
+        (d5 || []).map((x: any) => ({
+          id: x.id,
+          name: x.name,
+          payment_type: x.payment_type,
+          credit_days: Number(x.credit_days || 0),
+          extra_cost_per_liter: Number(x.extra_cost_per_liter || 0),
+        })),
+      );
+    }
+    if (r6.ok) setVehicles(d6 || []);
+  };
+
+  useEffect(() => {
+    void load();
+    void loadMasters();
+  }, [companyId]);
+
+  // เปิดบิลจาก ?open=<id> (เช่น หลังแปลงใบเสนอราคาเป็นใบสั่งขาย)
+  const openedFromQueryRef = useRef(false);
+  useEffect(() => {
+    if (openedFromQueryRef.current || !companyId || typeof window === 'undefined') return;
+    const openId = new URLSearchParams(window.location.search).get('open');
+    if (!openId) return;
+    openedFromQueryRef.current = true;
+    window.history.replaceState(null, '', window.location.pathname);
+    void openEdit(openId);
+  }, [companyId]);
+
+  useEffect(() => {
+    let active = true;
+
+    const run = async () => {
+      if (!form.customer_id || !companyId) {
+        setCustomerAccess(null);
+        setCustomerPriceOptions([]);
+        setCustomerAccessLoading(false);
+        setCustomerAccessCustomerId('');
+        return;
+      }
+      setCustomerAccess(null);
+      setCustomerPriceOptions([]);
+      setCustomerAccessLoading(true);
+      setCustomerAccessCustomerId('');
+      try {
+        const params = new URLSearchParams({ company_id: companyId, customer_id: form.customer_id });
+        if (canPickPriceRound && selectedRoundId) params.set('round_id', selectedRoundId);
+        const res = await fetch(`/api/orders/price-options?${params.toString()}`, { cache: 'no-store' });
+        const data = await res.json();
+        if (!active) return;
+        if (!res.ok) throw new Error(data.error || 'โหลดสิทธิ์และราคาของลูกค้าไม่สำเร็จ');
+        setCustomerAccess(data.access || null);
+        setDeliveryFeeByDepot(data.delivery_fee_per_liter_by_depot || {});
+        setLastOrderDepot(data.last_order_depot ?? null);
+        setCompanySurcharge(Number(data.delivery_fee_surcharge_per_liter || 0));
+        const baseline = Number(data.customer?.price_adjustment_per_liter || 0);
+        const salesFee = Number(data.customer?.sales_fee_per_liter || 0);
+        setCustomerBaseline(baseline);
+        setCustomerSalesFee(salesFee);
+        setCustomerAdjust(baseline + salesFee);
+        setCustomerPriceOptions((data.price_options || []).map((option: any) => ({
+          refinery_id: option.refinery_id || null,
+          depot_id: String(option.depot_id || ''),
+          product_code: String(option.product_code || ''),
+          product_name: String(option.product_name || ''),
+          base_cost_price: Number(option.base_cost_price || 0),
+        })));
+        setPriceRounds(Array.isArray(data.price_rounds) ? data.price_rounds : []);
+        setCustomerAccessCustomerId(form.customer_id);
+      } catch (caughtError) {
+        if (active) {
+          setCustomerAccess(null);
+          setCustomerPriceOptions([]);
+          setPriceRounds([]);
+          setCustomerAccessCustomerId('');
+          setError((caughtError as Error).message);
+        }
+      } finally {
+        if (active) setCustomerAccessLoading(false);
+      }
+    };
+    void run();
+
+    return () => {
+      active = false;
+    };
+  }, [form.customer_id, companyId, canPickPriceRound, selectedRoundId]);
+
+  const buildPricedItems = useCallback((
+    currentItems: OrderItemForm[],
+    depotId: string,
+    paymentConditionId: string,
+    preserveLiters: boolean,
+  ): OrderItemForm[] => {
+    const depot = depots.find((item) => item.id === depotId);
+    const paymentCondition = paymentConditions.find((condition) => condition.id === paymentConditionId);
+    const extraCost = Number(paymentCondition?.extra_cost_per_liter || 0);
+    const bestPriceByProduct = new Map<string, CustomerPriceOption>();
+
+    for (const option of customerPriceOptions) {
+      if (option.depot_id !== depotId || option.base_cost_price <= 0) continue;
+      const key = `${option.product_code}__${option.product_name}`;
+      const current = bestPriceByProduct.get(key);
+      if (!current || option.base_cost_price < current.base_cost_price) bestPriceByProduct.set(key, option);
+    }
+
+    const litersByProduct = new Map(
+      currentItems.map((item) => [`${item.product_code}__${item.product_name}`, Number(item.liters || 0)]),
+    );
+
+    return [...bestPriceByProduct.values()]
+      .sort((a, b) => a.product_code.localeCompare(b.product_code))
+      .map((option) => ({
+        refinery_id: option.refinery_id || depot?.refinery_id || '',
+        depot_id: depotId,
+        product_code: option.product_code,
+        product_name: option.product_name,
+        unit_price: computeUnitPrice(option.base_cost_price, extraCost, customerAdjust),
+        std_unit_price: computeStandardUnitPrice(option.base_cost_price, extraCost),
+        base_cost_price: option.base_cost_price,
+        liters: preserveLiters
+          ? litersByProduct.get(`${option.product_code}__${option.product_name}`) || 0
+          : 0,
+      }));
+  }, [customerPriceOptions, depots, paymentConditions, customerAdjust]);
+
+  // After an admin switches price round, re-price the current depot's items from the newly loaded round.
+  useEffect(() => {
+    if (!repriceOnLoadRef.current || customerAccessLoading || customerAccessCustomerId !== form.customer_id) return;
+    repriceOnLoadRef.current = false;
+    setForm((prev) => (prev.selected_depot_id && prev.payment_condition_id
+      ? { ...prev, items: buildPricedItems(prev.items, prev.selected_depot_id, prev.payment_condition_id, true) }
+      : prev));
+  }, [buildPricedItems, customerAccessLoading, customerAccessCustomerId, form.customer_id]);
+
+  const refineryPriceRounds = useMemo(
+    () => priceRounds.filter((round) => round.refinery_id === form.selected_refinery_id),
+    [priceRounds, form.selected_refinery_id],
+  );
+
+  /** Admin picks a price round for the selected refinery ('' = current round). */
+  const selectPriceRound = (round: PriceRound | null) => {
+    const nextId = round && !round.is_current ? round.id : '';
+    if (nextId === selectedRoundId) return;
+    repriceOnLoadRef.current = true;
+    setSelectedRoundId(nextId);
+  };
+
+  useEffect(() => {
+    if (!filteredPaymentConditions.length) return;
+    setForm((prev) => {
+      if (!prev.customer_id || prev.id) return prev;
+
+      const customerDefaultPaymentId = customers.find((customer) => customer.id === prev.customer_id)?.payment_condition_id;
+      const currentCondition = filteredPaymentConditions.find((condition) => condition.id === prev.payment_condition_id);
+      const customerDefaultCondition = filteredPaymentConditions.find((condition) => condition.id === customerDefaultPaymentId);
+      const nextCondition = currentCondition ?? customerDefaultCondition ?? filteredPaymentConditions[0];
+      const paymentChanged = nextCondition.id !== prev.payment_condition_id;
+      const dueDate = paymentChanged || !prev.due_date
+        ? calculateDueDate(nextCondition.credit_days)
+        : prev.due_date;
+      const items = paymentChanged && prev.selected_depot_id
+        ? buildPricedItems(prev.items, prev.selected_depot_id, nextCondition.id, true)
+        : prev.items;
+
+      if (!paymentChanged && dueDate === prev.due_date && items === prev.items) return prev;
+      return { ...prev, payment_condition_id: nextCondition.id, due_date: dueDate, items };
+    });
+  }, [filteredPaymentConditions, customers, form.customer_id, buildPricedItems]);
+
+  const selectPaymentCondition = (paymentConditionId: string) => {
+    const paymentCondition = filteredPaymentConditions.find((condition) => condition.id === paymentConditionId);
+    setForm((prev) => ({
+      ...prev,
+      payment_condition_id: paymentConditionId,
+      due_date: !prev.id && paymentCondition ? calculateDueDate(paymentCondition.credit_days) : prev.due_date,
+      items: prev.selected_depot_id
+        ? buildPricedItems(prev.items, prev.selected_depot_id, paymentConditionId, true)
+        : prev.items,
+    }));
+  };
+
+  const selectRefinery = (refinery: MasterRefinery | null) => {
+    setSelectedRoundId('');
+    setForm((prev) => ({
+      ...prev,
+      refinery_summary: refinery?.name ?? '',
+      depot_summary: '',
+      selected_refinery_id: refinery?.id ?? '',
+      selected_depot_id: '',
+      items: [],
+    }));
+  };
+
+  const selectDepot = (depot: MasterDepot | null) => {
+    const refinery = refineries.find((item) => item.id === depot?.refinery_id);
+    setForm((prev) => {
+      const previousDepotId = prev.selected_depot_id;
+      return {
+        ...prev,
+        refinery_summary: refinery?.name ?? prev.refinery_summary,
+        depot_summary: depot ? `${depot.code} - ${depot.name}` : '',
+        selected_refinery_id: depot?.refinery_id || prev.selected_refinery_id,
+        selected_depot_id: depot?.id || '',
+        delivery_fee_std_per_liter: depot ? Number(deliveryFeeByDepot[depot.id] || 0) : 0,
+        items: depot && prev.payment_condition_id
+          ? buildPricedItems(prev.items, depot.id, prev.payment_condition_id || '', previousDepotId === depot.id)
+          : [],
+      };
+    });
+  };
+
+  // บิลใหม่: เลือกโรงกลั่น/คลังให้อัตโนมัติ (คลังของออเดอร์ล่าสุด หรือคลังเดียวที่ลูกค้ามีสิทธิ์)
+  useEffect(() => {
+    if (form.id || !form.customer_id || customerAccessLoading || customerAccessCustomerId !== form.customer_id) return;
+    if (depotDefaultsAppliedRef.current === form.customer_id) return;
+    depotDefaultsAppliedRef.current = form.customer_id;
+    if (form.selected_refinery_id || form.selected_depot_id) return;
+    const picked = pickDefaultDepot({
+      depots: customerDepots.map((depot) => ({ depot_id: depot.id, refinery_id: depot.refinery_id ?? null })),
+      refineryIds: customerRefineries.map((refinery) => refinery.id),
+      lastOrder: lastOrderDepot,
+    });
+    const depot = picked.depot_id ? customerDepots.find((item) => item.id === picked.depot_id) : undefined;
+    if (depot) selectDepot(depot);
+    else if (picked.refinery_id) selectRefinery(customerRefineries.find((item) => item.id === picked.refinery_id) ?? null);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [form.id, form.customer_id, customerAccessLoading, customerAccessCustomerId, customerDepots, customerRefineries, lastOrderDepot]);
+
+  /**
+   * Saves the drawer form. With `keepOpen` the drawer stays open and reloads
+   * the saved order (used before printing so the PDF reflects unsaved edits).
+   * Returns true on success.
+   */
+  const save = async (options: { keepOpen?: boolean; showQuotationPdf?: boolean } = {}): Promise<boolean> => {
+    const cleanedItems = form.items
+      .filter((it) => it.product_code && it.liters > 0)
+      .map((it) => ({
+        refinery_id: it.refinery_id || null,
+        depot_id: it.depot_id || null,
+        product_code: it.product_code,
+        product_name: it.product_name,
+        unit_price: Number(it.unit_price || 0),
+        liters: Number(it.liters || 0),
+        base_cost_price: it.base_cost_price ?? null,
+      }));
+
+    if (!cleanedItems.length) {
+      const message = 'กรุณาระบุรายการน้ำมันและจำนวนลิตรอย่างน้อย 1 รายการ';
+      setError(message);
+      showSnack(message, 'warning');
+      return false;
+    }
+
+    const payload = {
+      company_id: companyId,
+      customer_id: form.customer_id,
+      order_status: form.quotation_stage === 'PENDING' || (isQuotationMode && !form.id) ? 'DRAFT' : form.order_status,
+      ...(isQuotationMode && !form.id ? { as_quotation: true } : {}),
+      delivery_location: form.delivery_location || null,
+      refinery_booking_number: form.refinery_booking_number || null,
+      delivery_order_no: form.delivery_order_no || null,
+      delivery_order_file_url: form.delivery_order_file_url || null,
+      payment_condition_id: form.payment_condition_id || null,
+      due_date: form.due_date || null,
+      receive_method: form.receive_method,
+      requested_delivery_date: form.requested_delivery_date || null,
+      // ทะเบียน/คนขับ ใช้ได้ทั้งรับเองและจัดส่งให้ (จัดส่งให้ = รถที่บริษัทจัดไปส่ง)
+      customer_vehicle_id: form.customer_vehicle_id || null,
+      vehicle_license_plate: form.vehicle_license_plate || null,
+      vehicle_driver_name: form.vehicle_driver_name || null,
+      vehicle_driver_phone: form.vehicle_driver_phone || null,
+      vehicle_pickup_license_number: form.vehicle_pickup_license_number || null,
+      remark: form.remark || null,
+      sales_user_id: form.sales_user_id || null,
+      delivery_fee_std_per_liter: isPickup ? 0 : Number(form.delivery_fee_std_per_liter || 0),
+      delivery_fee_adjust_per_liter: isPickup ? 0 : Number(form.delivery_fee_adjust_per_liter || 0),
+      discount_amount: Math.max(0, Number(form.discount_amount || 0)),
+      discount_note: form.discount_note || null,
+      price_vat_mode: form.price_vat_mode,
+      items: cleanedItems,
+    };
+
+    const wasEditing = Boolean(form.id);
+    /** ใบเสนอราคาที่ยังรอลูกค้า: บันทึกแล้วออกเลข QT ทันที */
+    const savingPendingQuotation = form.quotation_stage === 'PENDING' || (isQuotationMode && !form.id);
+    try {
+      const res = await fetch(form.id ? `/api/orders/${form.id}` : '/api/orders', {
+        method: form.id ? 'PATCH' : 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || 'บันทึกไม่สำเร็จ');
+      const lineWarning = data.line_warning ? String(data.line_warning) : '';
+      const savedId = String(data.id || form.id || '');
+      const issued = savingPendingQuotation && savedId
+        ? await issueQuotationNow(savedId, {
+          showPdf: !options.keepOpen || Boolean(options.showQuotationPdf),
+          notify: false,
+        })
+        : null;
+      if (options.keepOpen && data.id) {
+        await load();
+        await openEdit(String(data.id));
+      } else {
+        setOpen(false);
+        setForm(emptyForm);
+        setSelectedRoundId('');
+        await load();
+      }
+      const savedMessage = wasEditing ? `แก้ไข${docLabel}เรียบร้อยแล้ว` : `เพิ่ม${docLabel}เรียบร้อยแล้ว`;
+      if (lineWarning) {
+        setError(lineWarning);
+        showSnack(lineWarning, 'warning');
+      } else if (issued && 'error' in issued) {
+        showSnack(`${savedMessage} แต่ออกใบเสนอราคาไม่สำเร็จ: ${issued.error}`, 'warning');
+      } else if (issued) {
+        showSnack(issued.unchanged
+          ? `${savedMessage} · ราคาไม่เปลี่ยน ใช้ใบเสนอราคา ${issued.quotationNo} เดิม`
+          : `${savedMessage} · ออกใบเสนอราคา ${issued.quotationNo}`, 'success');
+      } else {
+        showSnack(savedMessage, 'success');
+      }
+      return true;
+    } catch (e) {
+      const message = (e as Error).message;
+      setError(message);
+      showSnack(message, 'error');
+      return false;
+    }
+  };
+
+  /** Print from the drawer: save first so the PDF includes what is on screen. */
+  const printFromDrawer = async (anchor: HTMLElement) => {
+    if (!form.id) return;
+    const orderId = form.id;
+    const orderNo = form.order_no || orderId.slice(0, 8);
+    const saved = await save({ keepOpen: true });
+    if (!saved) return;
+    setPrintMenu({ anchor, orderId, orderNo });
+  };
+
+  /**
+   * Quotations menu: issues the quotation straight away (no dialog), valid
+   * until the issue date. The server keeps the current quotation when its
+   * total still matches and it has not expired, otherwise it issues a new
+   * number (`only_if_changed`).
+   * @param orderId - sale order id
+   * @param options - `showPdf` opens the quotation PDF, `notify` shows the result snack
+   * @returns the quotation number (and whether it was kept), or the error
+   */
+  const issueQuotationNow = async (
+    orderId: string,
+    options: { showPdf: boolean; notify: boolean },
+  ): Promise<{ quotationNo: string; unchanged: boolean } | { error: string }> => {
+    setIssuingQuotation(true);
+    try {
+      const res = await fetch(`/api/orders/${orderId}/quotation`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ valid_until: todayBangkok(), note: '', reissue: false, only_if_changed: true }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || 'ออกใบเสนอราคาไม่สำเร็จ');
+      const quotationNo = String(data.quotation?.quotation_no || '');
+      const unchanged = Boolean(data.unchanged);
+      if (options.notify) {
+        showSnack(unchanged ? `ใช้ใบเสนอราคา ${quotationNo} เดิม` : `ออกใบเสนอราคา ${quotationNo} แล้ว`, 'success');
+      }
+      if (options.showPdf) openPdf('quotation', orderId, `ใบเสนอราคา · ${quotationNo}`);
+      void load();
+      return { quotationNo, unchanged };
+    } catch (caught) {
+      const message = (caught as Error).message;
+      if (options.notify) showSnack(message, 'error');
+      return { error: message };
+    } finally {
+      setIssuingQuotation(false);
+    }
+  };
+
+  /**
+   * Issues a quotation: directly in the quotations menu, through the dialog
+   * (validity date + note) in the orders menu.
+   * @param orderId - sale order id
+   * @param orderNo - number shown in messages
+   */
+  const startQuotation = (orderId: string, orderNo: string) => {
+    if (isQuotationMode) void issueQuotationNow(orderId, { showPdf: true, notify: true });
+    else setQuotationOrder({ id: orderId, orderNo });
+  };
+
+  /**
+   * Quotation from the drawer: save first so the snapshot uses what is on
+   * screen. A pending quotation is issued by the save itself, so only the PDF
+   * is opened; other orders go through the dialog.
+   */
+  const quotationFromDrawer = async () => {
+    if (!form.id) return;
+    const orderId = form.id;
+    const orderNo = form.order_no || orderId.slice(0, 8);
+    if (formIsPendingQuotation) {
+      await save({ keepOpen: true, showQuotationPdf: true });
+      return;
+    }
+    const saved = await save({ keepOpen: true });
+    if (!saved) return;
+    setQuotationOrder({ id: orderId, orderNo });
+  };
+
+  /**
+   * Convert from the drawer: save first so the order matches the screen, then
+   * ask for confirmation (the server refuses when the quotation is outdated).
+   */
+  const convertFromDrawer = async () => {
+    if (!form.id) return;
+    const orderId = form.id;
+    const docNo = form.order_no || orderId.slice(0, 8);
+    const customerName = customers.find((c) => c.id === form.customer_id)?.company_name;
+    const saved = await save({ keepOpen: true });
+    if (!saved) return;
+    setDecisionTarget({ orderId, docNo, action: 'convert', customerName });
+  };
+
+  /** After a quotation decision: refresh, and jump to the new sale order on convert. */
+  const onQuotationDecided = async (result: { action: 'convert' | 'reject' | 'cancel'; orderId: string; orderNo: string | null }) => {
+    setDecisionTarget(null);
+    if (result.action === 'convert') {
+      showSnack(`อนุมัติเป็นใบสั่งขาย ${result.orderNo || ''} แล้ว กำลังเปิดใบสั่งขาย`, 'success');
+      setOpen(false);
+      window.location.href = `/dashboard/orders?open=${result.orderId}`;
+      return;
+    }
+    showSnack(result.action === 'reject' ? 'บันทึกลูกค้าปฏิเสธใบเสนอราคาแล้ว' : 'ยกเลิกใบเสนอราคาแล้ว', 'success');
+    setOpen(false);
+    await load();
+  };
+
+  const openEdit = async (id: string) => {
+    setSelectedRoundId('');
+    try {
+      const res = await fetch(`/api/orders/${id}?company_id=${companyId}`);
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || 'โหลดข้อมูลใบสั่งขายไม่สำเร็จ');
+
+      setForm({
+        id: data.id,
+        order_no: data.order_no || '',
+        quotation_stage: (data.quotation_stage ?? null) as QuotationStage | null,
+        approved_by_name: data.approved_by_name ?? null,
+        approved_at: data.approved_at ?? null,
+        approved_over_credit: Boolean(data.approved_over_credit),
+        po_sent_at: data.po_sent_at ?? null,
+        documents_sent_at: data.documents_sent_at ?? null,
+        delivered_at: data.delivered_at ?? null,
+        delivery_receiver_name: data.delivery_receiver_name ?? null,
+        delivery_record_note: data.delivery_record_note ?? null,
+        delivery_record_no: data.delivery_record_no ?? null,
+        delivery_recorded_by_name: data.delivery_recorded_by_name ?? null,
+        saved_profit: data.profit_amount != null
+          ? {
+            revenue_ex_vat_amount: Number(data.revenue_ex_vat_amount || 0),
+            cost_goods_amount: Number(data.cost_goods_amount || 0),
+            cost_delivery_amount: Number(data.cost_delivery_amount || 0),
+            profit_amount: Number(data.profit_amount || 0),
+            gp_percent: Number(data.gp_percent || 0),
+            cost_incomplete: Boolean(data.cost_incomplete),
+          }
+          : null,
+        payment_condition_id: data.payment_condition_id || '',
+        selected_refinery_id: String(data.sale_order_items?.find((it: any) => it.refinery_id)?.refinery_id || ''),
+        selected_depot_id: String(data.sale_order_items?.find((it: any) => it.depot_id)?.depot_id || ''),
+        refinery_summary: Array.from(
+          new Set((data.sale_order_items || []).map((it: any) => String(it.refineries?.name || '').trim()).filter(Boolean)),
+        ).join(', '),
+        depot_summary: Array.from(
+          new Set(
+            (data.sale_order_items || [])
+              .map((it: any) => (it.depots?.code ? `${it.depots.code}${it.depots?.name ? ` - ${it.depots.name}` : ''}` : ''))
+              .filter(Boolean),
+          ),
+        ).join(', '),
+        customer_id: data.customer_id,
+        order_status: data.order_status,
+        delivery_location: data.delivery_location || '',
+        refinery_booking_number: data.refinery_booking_number || '',
+        delivery_order_no: data.delivery_order_no || '',
+        delivery_order_file_url: data.delivery_order_file_url || '',
+        due_date: data.due_date || '',
+        receive_method: data.receive_method || 'PICKUP_BY_TRUCK',
+        requested_delivery_date: data.requested_delivery_date || '',
+        customer_vehicle_id: data.customer_vehicle_id || '',
+        vehicle_license_plate: data.vehicle_license_plate || '',
+        vehicle_driver_name: data.vehicle_driver_name || '',
+        vehicle_driver_phone: data.vehicle_driver_phone || '',
+        vehicle_pickup_license_number: data.vehicle_pickup_license_number || '',
+        delivery_fee_std_per_liter: Number(data.delivery_fee_std_per_liter || 0),
+        delivery_fee_surcharge_per_liter: Number(data.delivery_fee_surcharge_per_liter || 0),
+        original_receive_method: data.receive_method || 'PICKUP_BY_TRUCK',
+        delivery_fee_adjust_per_liter: Number(data.delivery_fee_adjust_per_liter || 0),
+        discount_amount: Number(data.discount_amount || 0),
+        discount_note: data.discount_note || '',
+        remark: data.remark || '',
+        sales_user_id: data.sales_user_id || '',
+        price_vat_mode: parseVatMode(data.price_vat_mode),
+        items: (data.sale_order_items || []).map((it: any) => ({
+          refinery_id: it.refinery_id || '',
+          depot_id: it.depot_id || '',
+          product_code: it.product_code || '',
+          product_name: it.product_name || '',
+          unit_price: Number(it.unit_price || 0),
+          liters: Number(it.liters || 0),
+          base_cost_price: it.base_cost_price == null ? null : Number(it.base_cost_price),
+          std_unit_price: it.base_cost_price != null
+            ? computeStandardUnitPrice(Number(it.base_cost_price), Number(it.payment_extra_per_liter || 0))
+            : undefined,
+        })),
+      });
+
+      setOpen(true);
+      showSnack(`โหลด${docLabel}สำหรับแก้ไขเรียบร้อยแล้ว`, 'info');
+    } catch (e) {
+      const message = (e as Error).message;
+      setError(message);
+      showSnack(message, 'error');
+    }
+  };
+
+  const patchOrderQuick = async (patch: Record<string, unknown>) => {
+    if (!form.id) return;
+    const actionLabel = patch.order_status === 'CONFIRMED'
+      ? 'กำลังส่งอนุมัติ...'
+      : patch.order_status === 'PAID'
+        ? 'กำลังบันทึกการชำระเงิน...'
+        : patch.order_status === 'CANCELLED'
+          ? 'กำลังยกเลิกการสั่งซื้อ...'
+          : 'กำลังส่งข้อมูล...';
+    setSnack({ open: true, message: actionLabel, severity: 'info' });
+
+    const res = await fetch(`/api/orders/${form.id}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ company_id: companyId, ...patch }),
+    });
+    const data = await res.json();
+    if (!res.ok) {
+      setError(data.error || 'อัปเดตคำสั่งซื้อไม่สำเร็จ');
+      setSnack({ open: true, message: data.error || 'อัปเดตคำสั่งซื้อไม่สำเร็จ', severity: 'error' });
+      return;
+    }
+    if (data.line_warning) {
+      setError(String(data.line_warning));
+      setSnack({ open: true, message: String(data.line_warning), severity: 'warning' });
+    } else {
+      const doneLabel = patch.order_status === 'CONFIRMED'
+        ? 'อนุมัติคำสั่งซื้อเรียบร้อย'
+        : patch.order_status === 'PAID'
+          ? 'บันทึกการชำระเงินเรียบร้อย'
+          : patch.order_status === 'CANCELLED'
+            ? 'ยกเลิกการสั่งซื้อแล้ว'
+            : 'อัปเดตข้อมูลเรียบร้อย';
+      setSnack({ open: true, message: doneLabel, severity: 'success' });
+    }
+    await load();
+    await openEdit(form.id);
+  };
+
+  const onUploadDoFile = async (file: File) => {
+    if (!file) return;
+    setUploadingDo(true);
+    setSnack({ open: true, message: 'กำลังอัปโหลดเอกสาร DO...', severity: 'info' });
+    try {
+      const fd = new FormData();
+      fd.append('file', file);
+      fd.append('company_id', companyId);
+      if (form.id) fd.append('order_id', form.id);
+
+      const res = await fetch('/api/orders/upload-do', {
+        method: 'POST',
+        body: fd,
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        setError(data.error || 'อัปโหลดไฟล์ DO ไม่สำเร็จ');
+        setSnack({ open: true, message: data.error || 'อัปโหลดไฟล์ DO ไม่สำเร็จ', severity: 'error' });
+        return;
+      }
+
+      setForm((p) => ({ ...p, delivery_order_file_url: String(data.url || '') }));
+      setSnack({ open: true, message: 'อัปโหลดไฟล์ DO สำเร็จ', severity: 'success' });
+    } finally {
+      setUploadingDo(false);
+    }
+  };
+
+  /** Opens the delivery record dialog for a row, or the DR PDF when it was already recorded. */
+  const openDeliveryRecord = (row: { id: string; order_no?: string | null; customer_name?: string | null; delivered_at?: string | null; delivery_receiver_name?: string | null; delivery_record_note?: string | null; delivery_record_no?: string | null }, forceDialog = false) => {
+    const orderNo = row.order_no || row.id.slice(0, 8);
+    if (row.delivery_record_no && !forceDialog) {
+      openPdf('delivery-record', row.id, `บันทึกการส่งของ · ${orderNo}`);
+      return;
+    }
+    setDeliveryRecordOrder({
+      id: row.id,
+      order_no: orderNo,
+      customer_name: row.customer_name || '',
+      delivered_at: row.delivered_at ?? null,
+      delivery_receiver_name: row.delivery_receiver_name ?? null,
+      delivery_record_note: row.delivery_record_note ?? null,
+      delivery_record_no: row.delivery_record_no ?? null,
+    });
+  };
+
+  const onDeliveryRecordSaved = async (saved: Record<string, any>) => {
+    showSnack(saved.advanced ? `บันทึกการส่งของแล้ว สถานะเป็น "${statusThai('DELIVERED')}" เลขที่ ${saved.delivery_record_no || ''}` : `บันทึกการส่งของแล้ว เลขที่ ${saved.delivery_record_no || ''}`, 'success');
+    await load();
+    if (form.id === saved.id) await openEdit(saved.id);
+    openPdf('delivery-record', saved.id, `บันทึกการส่งของ · ${saved.order_no || saved.id.slice(0, 8)}`);
+  };
+
+  const remove = async () => {
+    if (!deleteId) return;
+    try {
+      const res = await fetch(`/api/orders/${deleteId}?company_id=${companyId}`, { method: 'DELETE' });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || 'ลบไม่สำเร็จ');
+      setDeleteId(null);
+      await load();
+      showSnack(`ลบ${docLabel}เรียบร้อยแล้ว`, 'success');
+    } catch (e) {
+      const message = (e as Error).message;
+      setError(message);
+      showSnack(message, 'error');
+    }
+  };
+
+  const updateItem = (idx: number, patch: Partial<OrderItemForm>) => {
+    setForm((prev) => {
+      const next = [...prev.items];
+      next[idx] = { ...next[idx], ...patch };
+      return { ...prev, items: next };
+    });
+  };
+
+  return (
+    <Stack spacing={2.2} sx={{ p: { xs: 1.5, md: 2.5 }, bgcolor: '#f8fafc', minHeight: '100%' }}>
+      <Paper
+        elevation={0}
+        sx={{
+          p: { xs: 1.5, md: 2 },
+          borderRadius: 1,
+          border: '1px solid',
+          borderColor: '#e5e7eb',
+          bgcolor: '#fff',
+        }}
+      >
+        <Stack direction={{ xs: 'column', md: 'row' }} justifyContent="space-between" spacing={1.5}>
+          <Box>
+            <Typography variant="h5" fontWeight={900}>
+              {docLabel}
+            </Typography>
+            <Typography variant="body2" color="text.secondary">
+              {isQuotationMode
+                ? 'เสนอราคาให้ลูกค้าก่อน เมื่อลูกค้าอนุมัติแล้วกด "อนุมัติเป็นใบสั่งขาย"'
+                : 'จัดการคำสั่งซื้อ ตรวจสอบเครดิต แนบ DO และติดตามสถานะ'}
+            </Typography>
+          </Box>
+          <Button
+            variant="contained"
+            startIcon={<Add />}
+            onClick={() => {
+              depotDefaultsAppliedRef.current = '';
+              setForm({ ...emptyForm, sales_user_id: me?.userId ?? '', ...(isQuotationMode ? { order_status: 'DRAFT' as OrderStatus, quotation_stage: 'PENDING' as QuotationStage } : {}) });
+              setSelectedRoundId('');
+              setOpen(true);
+              showSnack(`พร้อมเพิ่ม${docLabel}ใหม่`, 'info');
+            }}
+            sx={{ borderRadius: 2, minHeight: 40, width: { xs: '100%', md: 'auto' } }}
+          >
+            เพิ่ม{docLabel}
+          </Button>
+        </Stack>
+
+        <Stack direction={{ xs: 'column', md: 'row' }} spacing={1.2} sx={{ mt: 2 }} alignItems={{ xs: 'stretch', md: 'center' }}>
+          <TextField
+            size="small"
+            label="ค้นหา"
+            placeholder="ลูกค้า, สถานะ, เลขออเดอร์, เลขจอง, DO"
+            value={searchText}
+            onChange={(e) => {
+              setSearchText(e.target.value);
+              setPage(0);
+            }}
+            sx={{ flex: 1 }}
+          />
+          <TextField
+            size="small"
+            label="วันที่กำหนดชำระ"
+            placeholder="YYYY-MM-DD"
+            value={searchDate}
+            onChange={(e) => {
+              setSearchDate(e.target.value);
+              setPage(0);
+            }}
+            sx={{ width: { xs: '100%', md: 220 } }}
+          />
+          <Button variant="outlined" onClick={() => void load(true)} sx={{ borderRadius: 1, width: { xs: '100%', md: 'auto' } }}>
+            รีเฟรช
+          </Button>
+        </Stack>
+      </Paper>
+
+      {error ? <Alert severity="error">{error}</Alert> : null}
+      {loading ? <Alert severity="info">กำลังโหลด...</Alert> : null}
+
+      <TableContainer
+        component={Paper}
+        sx={{
+          borderRadius: 1,
+          border: '1px solid',
+          borderColor: 'divider',
+          boxShadow: '0 10px 28px rgba(15,23,42,0.06)',
+          maxHeight: { xs: 'calc(100vh - 300px)', md: 'calc(100vh - 240px)' },
+          overflowX: 'auto',
+        }}
+      >
+        <Table size="small" stickyHeader sx={{ minWidth: { xs: 860, md: 1180, lg: 1320 } }}>
+          <TableHead>
+            <TableRow
+              sx={{
+                '& th': {
+                  bgcolor: '#f8fafc',
+                  fontWeight: 900,
+                  color: '#334155',
+                  whiteSpace: 'nowrap',
+                },
+              }}
+            >
+              {isQuotationMode ? (
+                <>
+                  <TableCell sx={{ minWidth: 140 }}>เลขใบเสนอราคา</TableCell>
+                  <TableCell>ลูกค้า</TableCell>
+                  <TableCell sx={{ minWidth: 140 }}>คลังรับน้ำมัน</TableCell>
+                  <TableCell sx={{ display: { xs: 'none', lg: 'table-cell' } }}>พนักงานขาย</TableCell>
+                  <TableCell align="right">ลิตร</TableCell>
+                  <TableCell align="right">ยอดรวม</TableCell>
+                  <TableCell sx={{ display: { xs: 'none', md: 'table-cell' } }}>วันที่เสนอ</TableCell>
+                  <TableCell sx={{ display: { xs: 'none', md: 'table-cell' } }}>ยืนราคาถึง</TableCell>
+                  <TableCell>สถานะ</TableCell>
+                  <TableCell sx={{ display: { xs: 'none', lg: 'table-cell' } }}>ใบสั่งขาย</TableCell>
+                </>
+              ) : (<>
+              {/*  <TableCell sx={{ minWidth: 90 }}>Order ID</TableCell> */}
+              <TableCell sx={{ display: { xs: 'none', md: 'table-cell' } }}>วันที่ออก</TableCell>
+              <TableCell sx={{ minWidth: 120 }}>เลขใบกำกับ</TableCell>
+              <TableCell sx={{ display: { xs: 'none', md: 'table-cell' } }}>วันครบกำหนด</TableCell>
+              <TableCell align="right">รวมยอด</TableCell>
+              <TableCell>สถานะชำระ</TableCell>
+              <TableCell sx={{ minWidth: 130, color: 'text.secondary' }}>PO</TableCell>
+              <TableCell>ลูกค้า</TableCell>
+              {/*     <TableCell sx={{ display: { xs: 'none', md: 'table-cell' } }}>โรงกลั่น</TableCell> */}
+              <TableCell sx={{ minWidth: 140 }}>คลังรับน้ำมัน</TableCell>
+              <TableCell sx={{ display: { xs: 'none', lg: 'table-cell' } }}>เครดิต</TableCell>
+              <TableCell sx={{ display: { xs: 'none', lg: 'table-cell' } }}>พนักงานขาย</TableCell>
+              <TableCell align="right">ลิตร</TableCell>
+              <TableCell>สถานะ</TableCell>
+              <TableCell sx={{ display: { xs: 'none', lg: 'table-cell' } }}>เลขจอง</TableCell>
+              <TableCell sx={{ display: { xs: 'none', md: 'table-cell' } }}>DO</TableCell>
+              </>)}
+              <TableCell align="right" sx={{ ...STICKY_ACTIONS_SX, zIndex: 3 }}>จัดการ</TableCell>
+            </TableRow>
+          </TableHead>
+          <TableBody>
+            {isQuotationMode ? pagedRows.map((r) => {
+              const qStatus = quotationDisplayStatus(r.quotation_stage, r.quotation, today);
+              const pending = r.quotation_stage === 'PENDING';
+              const docNo = r.quotation?.quotation_no || r.order_no || r.id.slice(0, 8);
+              return (
+                <TableRow key={r.id} hover sx={{ '& td': { whiteSpace: 'nowrap', borderColor: '#f1f5f9' } }}>
+                  <TableCell sx={{ fontWeight: 800 }}>{r.quotation?.quotation_no || '-'}</TableCell>
+                  <TableCell sx={{ maxWidth: 200, overflow: 'hidden', textOverflow: 'ellipsis' }}>{r.customers?.company_name || r.customer_id}</TableCell>
+                  <TableCell sx={{ maxWidth: 180, overflow: 'hidden', textOverflow: 'ellipsis' }}>{r.depot_summary || '-'} ({r.refinery_summary || '-'})</TableCell>
+                  <TableCell sx={{ display: { xs: 'none', lg: 'table-cell' }, maxWidth: 160, overflow: 'hidden', textOverflow: 'ellipsis' }}>{r.sales_user_name || '-'}</TableCell>
+                  <TableCell align="right">{Number(r.total_liters || 0).toLocaleString('th-TH')}</TableCell>
+                  <TableCell align="right" sx={{ fontWeight: 900 }}>{money(Number(r.total_amount || 0))}</TableCell>
+                  <TableCell sx={{ display: { xs: 'none', md: 'table-cell' } }}>{formatDate(r.quotation?.issued_at ?? null)}</TableCell>
+                  <TableCell sx={{ display: { xs: 'none', md: 'table-cell' } }}>{formatDate(r.quotation?.valid_until ?? null)}</TableCell>
+                  <TableCell>
+                    <Chip size="small" label={QUOTATION_STATUS_LABELS[qStatus]} color={QUOTATION_STATUS_COLORS[qStatus]} />
+                  </TableCell>
+                  <TableCell sx={{ display: { xs: 'none', lg: 'table-cell' } }}>
+                    {r.quotation_stage === 'CONVERTED' ? (
+                      <Button size="small" href={`/dashboard/orders?open=${r.id}`} sx={{ minWidth: 0, p: 0, fontWeight: 800 }}>{r.order_no || 'เปิด'}</Button>
+                    ) : '-'}
+                  </TableCell>
+                  <TableCell align="right" sx={STICKY_ACTIONS_SX}>
+                    <Tooltip title={r.quotation ? 'ดู PDF ใบเสนอราคา' : 'ออกใบเสนอราคา'}>
+                      <span>
+                        <IconButton
+                          size="small"
+                          color="primary"
+                          disabled={!r.quotation && !pending}
+                          onClick={() => (r.quotation
+                            ? openPdf('quotation', r.id, `ใบเสนอราคา · ${r.quotation.quotation_no}`)
+                            : startQuotation(r.id, r.order_no || r.id.slice(0, 8)))}
+                        >
+                          {r.quotation ? <Print fontSize="small" /> : <Description fontSize="small" />}
+                        </IconButton>
+                      </span>
+                    </Tooltip>
+                    {pending ? (
+                      <>
+                        <Tooltip title="อนุมัติเป็นใบสั่งขาย">
+                          <span>
+                            <IconButton
+                              size="small"
+                              color="success"
+                              disabled={qStatus !== 'WAITING'}
+                              onClick={() => setDecisionTarget({ orderId: r.id, docNo, action: 'convert', customerName: r.customers?.company_name })}
+                            >
+                              <TaskAlt fontSize="small" />
+                            </IconButton>
+                          </span>
+                        </Tooltip>
+                        <Tooltip title="ลูกค้าปฏิเสธ">
+                          <IconButton size="small" color="warning" onClick={() => setDecisionTarget({ orderId: r.id, docNo, action: 'reject', customerName: r.customers?.company_name })}>
+                            <ThumbDown fontSize="small" />
+                          </IconButton>
+                        </Tooltip>
+                        <Tooltip title="แก้ไข">
+                          <IconButton size="small" onClick={() => void openEdit(r.id)}>
+                            <Edit fontSize="small" />
+                          </IconButton>
+                        </Tooltip>
+                      </>
+                    ) : null}
+                    {r.quotation_stage !== 'CONVERTED' ? (
+                      <Tooltip title="ลบใบเสนอราคา">
+                        <IconButton size="small" color="error" onClick={() => setDeleteId(r.id)}>
+                          <Delete fontSize="small" />
+                        </IconButton>
+                      </Tooltip>
+                    ) : null}
+                  </TableCell>
+                </TableRow>
+              );
+            }) : null}
+            {!isQuotationMode && pagedRows.map((r) => {
+              const dueDate = r.invoice?.due_date ?? r.due_date;
+              const dueChip = paymentDueLabel(paymentDueStatus({ order_status: r.order_status, due_date: dueDate, outstanding_amount: r.outstanding_amount }, today));
+              return (
+              <TableRow
+                key={r.id}
+                hover
+                sx={{
+                  '& td': {
+                    whiteSpace: 'nowrap',
+                    borderColor: '#f1f5f9',
+                  },
+                }}
+              >
+                {/*    <TableCell>{r.id.slice(0, 8)}</TableCell> */}
+                <TableCell sx={{ display: { xs: 'none', md: 'table-cell' } }}>{formatDate(r.invoice?.issued_at ?? null)}</TableCell>
+                <TableCell sx={{ fontWeight: 800 }}>{r.invoice?.invoice_no || '-'}</TableCell>
+                <TableCell sx={{ display: { xs: 'none', md: 'table-cell' } }}>{formatDate(dueDate)}</TableCell>
+                <TableCell align="right" sx={{ fontWeight: 900 }}>
+                  <Tooltip title={`น้ำมัน ${money(Number(r.goods_amount || 0))} + ค่าขนส่ง ${money(Number(r.delivery_fee_amount || 0))}${Number(r.paid_amount || 0) > 0 ? ` · ชำระแล้ว ${money(Number(r.paid_amount || 0))} · ค้าง ${money(Number(r.outstanding_amount || 0))}` : ''}`}>
+                    <span>{money(Number(r.total_amount || 0))}</span>
+                  </Tooltip>
+                </TableCell>
+                <TableCell>
+                  {dueChip ? <Chip size="small" label={dueChip.label} color={dueChip.color} variant={dueChip.color === 'default' ? 'outlined' : 'filled'} /> : '-'}
+                </TableCell>
+                <TableCell sx={{ color: 'text.secondary' }}>{r.order_no || '-'}</TableCell>
+                <TableCell sx={{ maxWidth: 200, overflow: 'hidden', textOverflow: 'ellipsis' }}>{r.customers?.company_name || r.customer_id}</TableCell>
+                {/*  <TableCell sx={{ display: { xs: 'none', md: 'table-cell' }, maxWidth: 170, overflow: 'hidden', textOverflow: 'ellipsis' }}>{r.refinery_summary || '-'}</TableCell> */}
+                <TableCell sx={{ maxWidth: 180, overflow: 'hidden', textOverflow: 'ellipsis' }}>{r.depot_summary || '-'} ({r.refinery_summary || '-'})</TableCell>
+                <TableCell sx={{ display: { xs: 'none', lg: 'table-cell' }, maxWidth: 220, overflow: 'hidden', textOverflow: 'ellipsis' }}>{r.selected_credit_label || '-'}</TableCell>
+                <TableCell sx={{ display: { xs: 'none', lg: 'table-cell' }, maxWidth: 160, overflow: 'hidden', textOverflow: 'ellipsis' }}>{r.sales_user_name || '-'}</TableCell>
+                <TableCell align="right">{Number(r.total_liters || 0).toLocaleString('th-TH')}</TableCell>
+                <TableCell>
+                  <Chip size="small" label={statusThai(r.order_status)} color={statusColor(r.order_status)} />
+                </TableCell>
+                <TableCell sx={{ display: { xs: 'none', lg: 'table-cell' } }}>{r.refinery_booking_number || '-'}</TableCell>
+                <TableCell sx={{ display: { xs: 'none', md: 'table-cell' } }}>{r.delivery_order_no || '-'}</TableCell>
+                <TableCell align="right" sx={STICKY_ACTIONS_SX}>
+                  <Tooltip title="พิมพ์เอกสาร">
+                    <span>
+                      <IconButton size="small" color="primary" onClick={(event) => setPrintMenu({ anchor: event.currentTarget, orderId: r.id, orderNo: r.order_no || r.id.slice(0, 8), row: r })}>
+                        <Print fontSize="small" />
+                      </IconButton>
+                    </span>
+                  </Tooltip>
+                  <Tooltip title="แก้ไข">
+                    <IconButton size="small" onClick={() => void openEdit(r.id)}>
+                      <Edit fontSize="small" />
+                    </IconButton>
+                  </Tooltip>
+                  <Tooltip title="ลบ">
+                    <IconButton size="small" color="error" onClick={() => { setDeleteId(r.id); showSnack('กรุณายืนยันการลบใบสั่งขาย', 'warning'); }}>
+                      <Delete fontSize="small" />
+                    </IconButton>
+                  </Tooltip>
+                </TableCell>
+              </TableRow>
+              );
+            })}
+            {!filteredRows.length && !loading ? (
+              <TableRow>
+                <TableCell colSpan={16} align="center" sx={{ py: 5, color: 'text.secondary' }}>
+                  ไม่มีข้อมูล{docLabel}
+                </TableCell>
+              </TableRow>
+            ) : null}
+          </TableBody>
+        </Table>
+      </TableContainer>
+
+      <Paper elevation={0} sx={{ borderRadius: 1, border: '1px solid', borderColor: 'divider' }}>
+        <TablePagination
+          component="div"
+          count={filteredRows.length}
+          page={page}
+          onPageChange={(_, nextPage) => setPage(nextPage)}
+          rowsPerPage={rowsPerPage}
+          onRowsPerPageChange={(e) => {
+            setRowsPerPage(Number(e.target.value));
+            setPage(0);
+          }}
+          rowsPerPageOptions={[10, 15, 20, 25, 50]}
+          labelRowsPerPage="แถวต่อหน้า"
+        />
+      </Paper>
+
+      <Drawer
+        anchor="right"
+        open={open}
+        onClose={() => setOpen(false)}
+        PaperProps={{ sx: { width: '100%', maxWidth: '100%', bgcolor: '#f8fafc' } }}
+      >
+        <Stack sx={{ minHeight: '100%' }}>
+          <Box
+            sx={{
+              position: 'sticky',
+              top: 0,
+              zIndex: 110,
+              bgcolor: '#fff',
+              borderBottom: '1px solid #e5e7eb',
+              px: { xs: 2, md: 3 },
+              py: 2,
+            }}
+          >
+            <Stack direction="row" justifyContent="space-between" alignItems="center" spacing={1.5}>
+              <Box>
+                <Typography variant="h6" fontWeight={900}>
+                  {form.id ? `แก้ไข${formDocLabel}` : `เพิ่ม${formDocLabel}`}
+                </Typography>
+                <Typography variant="body2" color="text.secondary">
+                  {form.order_no ? `เลขที่ ${form.order_no}` : 'ใบใหม่'}
+                  {formIsPendingQuotation ? ' · ยังไม่เป็นใบสั่งขาย จนกว่าลูกค้าอนุมัติ' : ''}
+                </Typography>
+              </Box>
+              <Stack alignItems="flex-end" spacing={0.5}>
+                <Stack direction="row" spacing={0.5} alignItems="center">
+                  {formIsPendingQuotation
+                    ? <Chip size="small" label="ใบเสนอราคา" color="secondary" />
+                    : <Chip size="small" label={statusThai(form.order_status)} color={statusColor(form.order_status)} />}
+                  <Tooltip title="ปิด">
+                    <IconButton size="small" onClick={() => setOpen(false)} aria-label="ปิด">
+                      <Close fontSize="small" />
+                    </IconButton>
+                  </Tooltip>
+                </Stack>
+                {form.approved_by_name ? (
+                  <Typography variant="caption" color={form.approved_over_credit ? 'error.main' : 'text.secondary'}>
+                    อนุมัติโดย {form.approved_by_name}{form.approved_at ? ` ${formatDate(form.approved_at)}` : ''}{form.approved_over_credit ? ' (เกินวงเงิน)' : ''}
+                  </Typography>
+                ) : null}
+                {form.po_sent_at ? (
+                  <Typography variant="caption" color="text.secondary">ส่ง PO {formatDateTime(form.po_sent_at)}</Typography>
+                ) : null}
+                {form.documents_sent_at ? (
+                  <Typography variant="caption" color="text.secondary">ส่งใบกำกับ {formatDateTime(form.documents_sent_at)}</Typography>
+                ) : null}
+                {form.delivered_at ? (
+                  <Typography variant="caption" color="success.main">
+                    ส่งของแล้ว {formatDateTime(form.delivered_at)}
+                    {form.delivery_receiver_name ? ` · ผู้รับ ${form.delivery_receiver_name}` : ''}
+                    {form.delivery_record_no ? ` · ${form.delivery_record_no}` : ''}
+                  </Typography>
+                ) : null}
+              </Stack>
+            </Stack>
+          </Box>
+
+          <Stack spacing={2} sx={{ p: { xs: 2, md: 3 } }}>
+
+            <Card sx={{
+              borderRadius: 1, border: '1px solid',
+              borderColor: '#e5e7eb',
+
+              bgcolor: '#fff',
+              boxShadow: '0 8px 24px rgba(15,23,42,0.04)',
+              p: 2,
+
+            }} >
+              <Stack spacing={1.5}>
+                <Stack direction={{ xs: 'column', md: 'row' }} spacing={1.5}>
+                  <Autocomplete
+                    size="small"
+                    options={customers}
+                    value={customers.find((customer) => customer.id === form.customer_id) ?? null}
+                    onChange={(_, customer) => {
+                      const customerId = customer?.id ?? '';
+                      if (customerId === form.customer_id) return;
+                      setSelectedRoundId('');
+                      setCustomerAccess(null);
+                      setCustomerPriceOptions([]);
+                      setCustomerAccessLoading(Boolean(customer));
+                      setCustomerAccessCustomerId('');
+                      setForm((previous) => ({
+                        ...previous,
+                        customer_id: customerId,
+                        sales_user_id: previous.id || isSalesRole
+                          ? previous.sales_user_id
+                          : customer?.sales_user_id || previous.sales_user_id || me?.userId || '',
+                        payment_condition_id: previous.id ? previous.payment_condition_id : '',
+                        due_date: previous.id ? previous.due_date : '',
+                        refinery_summary: previous.id ? previous.refinery_summary : '',
+                        depot_summary: previous.id ? previous.depot_summary : '',
+                        selected_refinery_id: previous.id ? previous.selected_refinery_id : '',
+                        selected_depot_id: previous.id ? previous.selected_depot_id : '',
+                        items: previous.id
+                          ? previous.items
+                          : [],
+                      }));
+                    }}
+                    getOptionLabel={(customer) => customer.company_name || customer.id}
+                    isOptionEqualToValue={(option, value) => option.id === value.id}
+                    filterOptions={filterCustomerOptions}
+                    noOptionsText="ไม่พบลูกค้า"
+                    autoHighlight
+                    openOnFocus
+                    fullWidth
+                    renderInput={(params) => (
+                      <TextField
+                        {...params}
+                        label="ลูกค้า"
+                        placeholder="ชื่อ / เลขภาษี / เบอร์"
+                      />
+                    )}
+                  />
+                  {formIsPendingQuotation ? null : (
+                  <TextField
+                    size="small"
+                    select
+                    label="สถานะ"
+                    value={form.order_status}
+                    onChange={(e) => setForm((p) => ({ ...p, order_status: e.target.value as OrderStatus }))}
+                    fullWidth
+                  >
+                    {ORDER_STATUS_ORDER
+                      .filter((status) => status !== 'CONFIRMED' || canApprove || form.order_status === 'CONFIRMED')
+                      .map((status) => (
+                        <MenuItem key={status} value={status}>
+                          {statusThai(status)}
+                        </MenuItem>
+                      ))}
+                  </TextField>
+                  )}
+                  <TextField
+                    size="small"
+                    label="กำหนดชำระ"
+                    type="date"
+                    value={form.due_date}
+                    onChange={(e) => setForm((p) => ({ ...p, due_date: e.target.value }))}
+                    InputLabelProps={{ shrink: true }}
+                    fullWidth
+                  />
+                </Stack>
+
+                <Stack direction={{ xs: 'column', md: 'row' }} spacing={1.5}>
+                  <TextField
+                    size="small"
+                    label="ตั๋วโรงกลั่น"
+                    value={form.refinery_booking_number}
+                    onChange={(e) => setForm((p) => ({ ...p, refinery_booking_number: e.target.value }))}
+                    fullWidth
+                  />
+                  <TextField
+                    size="small"
+                    label="DO (Delivery Order)"
+                    value={form.delivery_order_no}
+                    onChange={(e) => setForm((p) => ({ ...p, delivery_order_no: e.target.value }))}
+                    fullWidth
+                  />
+                  <TextField
+                    size="small"
+                    label="สถานที่ส่ง"
+                    value={form.delivery_location}
+                    onChange={(e) => setForm((p) => ({ ...p, delivery_location: e.target.value }))}
+                    fullWidth
+                  />
+                </Stack>
+
+                <Stack direction={{ xs: 'column', md: 'row' }} spacing={1.5}>
+                  <Autocomplete
+                    size="small"
+                    options={salesUsers}
+                    value={salesUsers.find((user) => user.id === form.sales_user_id) ?? null}
+                    onChange={(_, user) => setForm((p) => ({ ...p, sales_user_id: user?.id ?? '' }))}
+                    getOptionLabel={(user) => user.full_name || user.id}
+                    isOptionEqualToValue={(option, value) => option.id === value.id}
+                    disabled={isSalesRole}
+                    sx={{ minWidth: { md: 260 } }}
+                    renderInput={(params) => (
+                      <TextField {...params} label="พนักงานขาย" helperText={isSalesRole ? 'ใช้ชื่อคุณ' : undefined} />
+                    )}
+                  />
+                  <TextField
+                    size="small"
+                    label="หมายเหตุ (ลงเอกสาร)"
+                    value={form.remark}
+                    onChange={(e) => setForm((p) => ({ ...p, remark: e.target.value }))}
+                    multiline
+                    minRows={1}
+                    maxRows={4}
+                    fullWidth
+                  />
+                </Stack>
+              </Stack>
+            </Card>
+
+            <Card sx={{
+              borderRadius: 1, border: '1px solid',
+              borderColor: '#e5e7eb',
+
+              bgcolor: '#fff',
+              boxShadow: '0 8px 24px rgba(15,23,42,0.04)',
+              p: 2
+            }} >
+              <Stack spacing={1.5}>
+                <Stack direction={{ xs: 'column', md: 'row' }} spacing={1.5}>
+                  <Autocomplete
+                    size="small"
+                    options={customerRefineries}
+                    value={refineries.find((refinery) => refinery.id === selectedRefineryId) ?? null}
+                    onChange={(_, refinery) => selectRefinery(refinery)}
+                    getOptionLabel={(refinery) => refinery.name || refinery.id}
+                    isOptionEqualToValue={(option, value) => option.id === value.id}
+                    noOptionsText={form.customer_id ? 'ไม่มีโรงกลั่น' : 'เลือกลูกค้าก่อน'}
+                    loading={customerAccessLoading}
+                    loadingText="กำลังโหลด..."
+                    disabled={!form.customer_id || customerAccessLoading}
+                    autoHighlight
+                    openOnFocus
+                    fullWidth
+                    renderInput={(params) => (
+                      <TextField {...params} label="โรงกลั่น" placeholder="ค้นหาโรงกลั่น" />
+                    )}
+                  />
+                  <Autocomplete
+                    size="small"
+                    options={filteredDepots}
+                    value={depots.find((depot) => depot.id === selectedDepotId) ?? null}
+                    onChange={(_, depot) => selectDepot(depot)}
+                    getOptionLabel={(depot) => `${depot.code} - ${depot.name}`}
+                    isOptionEqualToValue={(option, value) => option.id === value.id}
+                    noOptionsText={selectedRefineryId ? 'ไม่มีคลัง' : 'เลือกโรงกลั่นก่อน'}
+                    loading={customerAccessLoading}
+                    loadingText="กำลังโหลด..."
+                    disabled={!form.customer_id || !selectedRefineryId || customerAccessLoading}
+                    autoHighlight
+                    openOnFocus
+                    fullWidth
+                    renderInput={(params) => (
+                      <TextField {...params} label="คลัง" placeholder="รหัส / ชื่อคลัง" />
+                    )}
+                  />
+                </Stack>
+                {canPickPriceRound && selectedRefineryId ? (
+                  <Autocomplete
+                    size="small"
+                    options={refineryPriceRounds}
+                    value={
+                      refineryPriceRounds.find((round) => (selectedRoundId ? round.id === selectedRoundId : round.is_current)) ?? null
+                    }
+                    onChange={(_, round) => selectPriceRound(round)}
+                    getOptionLabel={priceRoundLabel}
+                    isOptionEqualToValue={(option, value) => option.id === value.id}
+                    noOptionsText="ไม่มีรอบราคาของโรงกลั่นนี้"
+                    loading={customerAccessLoading}
+                    loadingText="กำลังโหลด..."
+                    disabled={!form.customer_id || customerAccessLoading}
+                    autoHighlight
+                    openOnFocus
+                    fullWidth
+                    renderInput={(params) => (
+                      <TextField
+                        {...params}
+                        label="รอบราคาน้ำมัน (เฉพาะแอดมิน)"
+                        placeholder="รอบล่าสุด"
+                        helperText={selectedRoundId ? 'ใช้ราคาจากรอบที่เลือก ไม่ใช่รอบล่าสุด' : undefined}
+                      />
+                    )}
+                  />
+                ) : null}
+                <FormControl fullWidth>
+                  <FormLabel sx={{ color: '#334155', fontWeight: 800, mb: 0.7 }}>เครดิต</FormLabel>
+                  <RadioGroup
+                    row
+                    value={form.payment_condition_id || ''}
+                    onChange={(e) => selectPaymentCondition(e.target.value)}
+                    sx={{ gap: 0.8, flexWrap: 'wrap' }}
+                  >
+                    {filteredPaymentConditions.map((pc) => (
+                      <FormControlLabel
+                        key={pc.id}
+                        value={pc.id}
+                        control={<Radio size="small" />}
+                        label={`${pc.payment_type}${pc.credit_days ? ` ${pc.credit_days} วัน` : ''}`}
+                        sx={{
+                          m: 0,
+                          px: 1,
+                          py: 0.3,
+                          border: '1px solid',
+                          borderColor: form.payment_condition_id === pc.id ? '#bfdbfe' : '#e5e7eb',
+                          borderRadius: 999,
+                          bgcolor: form.payment_condition_id === pc.id ? '#eff6ff' : '#fff',
+                          '& .MuiFormControlLabel-label': {
+                            fontSize: 12.5,
+                            color: '#334155',
+                            fontWeight: form.payment_condition_id === pc.id ? 800 : 500,
+                          },
+                          '& .MuiRadio-root': { p: 0.4, color: '#94a3b8' },
+                          '& .Mui-checked': { color: '#2563eb' },
+                        }}
+                      />
+                    ))}
+                  </RadioGroup>
+                  {!filteredPaymentConditions.length ? (
+                    <Typography sx={{ mt: 0.5, fontSize: 12, color: '#64748b' }}>
+                      ลูกค้ายังไม่มีเครดิตเทอม
+                    </Typography>
+                  ) : null}
+                </FormControl>
+              </Stack>
+            </Card>
+
+            <Card sx={{
+              borderRadius: 1, border: '1px solid',
+              borderColor: '#e5e7eb',
+
+              bgcolor: '#fff',
+              boxShadow: '0 8px 24px rgba(15,23,42,0.04)',
+              p: 2
+            }} >
+              <Stack spacing={1.2} direction={{ xs: 'column', md: 'row' }} alignItems={{ xs: 'stretch', md: 'center' }}>
+                <Button component="label" variant="outlined" disabled={uploadingDo} sx={{ borderRadius: 2, minWidth: 130 }}>
+                  {uploadingDo ? 'กำลังอัปโหลด...' : 'แนบไฟล์ DO'}
+                  <input
+                    hidden
+                    type="file"
+                    onChange={(e) => {
+                      const file = e.target.files?.[0];
+                      if (!file) return;
+                      void onUploadDoFile(file);
+                    }}
+                  />
+                </Button>
+                <TextField
+                  size="small"
+                  label="ลิงก์ DO"
+                  value={form.delivery_order_file_url}
+                  onChange={(e) => setForm((p) => ({ ...p, delivery_order_file_url: e.target.value }))}
+                  sx={{ flex: 1 }}
+                />
+                <Button
+                  variant="contained"
+                  color="info"
+                  onClick={() =>
+                    void patchOrderQuick({
+                      delivery_order_no: form.delivery_order_no || null,
+                      delivery_order_file_url: form.delivery_order_file_url || null,
+                    })
+                  }
+                  disabled={!form.id || (!form.delivery_order_no && !form.delivery_order_file_url)}
+                  sx={{ borderRadius: 2 }}
+                >
+                  ส่ง DO
+                </Button>
+
+              </Stack>
+            </Card>
+
+            <Card sx={{
+              borderRadius: 1, border: '1px solid',
+              borderColor: '#e5e7eb',
+
+              bgcolor: '#fff',
+              boxShadow: '0 8px 24px rgba(15,23,42,0.04)',
+              p: 2
+            }} >
+              <TableContainer
+                sx={{
+                  border: '1px solid',
+                  borderColor: '#e2e8f0',
+                  borderRadius: 1.5,
+                  maxHeight: 420,
+                }}
+              >
+                <Table size="small" stickyHeader sx={{ minWidth: 680 }}>
+                  <TableHead>
+                    <TableRow sx={{ '& th': { bgcolor: '#f8fafc', color: '#334155', fontWeight: 900, whiteSpace: 'nowrap' } }}>
+                      <TableCell>รหัสน้ำมัน</TableCell>
+                      <TableCell align="right">
+                        <Stack alignItems="flex-end" spacing={0.5}>
+                          <span>ราคา/ลิตร</span>
+                          <ToggleButtonGroup
+                            size="small"
+                            exclusive
+                            color="primary"
+                            value={form.price_vat_mode}
+                            onChange={(_, value: VatMode | null) => { if (value) setForm((p) => ({ ...p, price_vat_mode: value })); }}
+                            aria-label="รูปแบบราคา"
+                            sx={{ '& .MuiToggleButton-root': { py: 0.25, px: 1, fontSize: 12, whiteSpace: 'nowrap' } }}
+                          >
+                            {VAT_MODE_OPTIONS.map((option) => (
+                              <ToggleButton key={option.value} value={option.value}>{option.label}</ToggleButton>
+                            ))}
+                          </ToggleButtonGroup>
+                        </Stack>
+                      </TableCell>
+                      <TableCell align="right">ลิตร</TableCell>
+                      <TableCell align="right">{form.price_vat_mode === 'excl' ? 'รวม (ก่อน VAT)' : 'รวม (รวม VAT)'}</TableCell>
+                      <TableCell align="right" />
+                    </TableRow>
+                  </TableHead>
+                  <TableBody>
+                    {form.items.map((it, idx) => (
+                      <TableRow key={`item-${idx}`} sx={{ '& td': { borderColor: '#f1f5f9' } }}>
+                        <TableCell>
+                          <TextField
+                            select
+                            size="small"
+                            value={it.product_code}
+                            onChange={(e) => {
+                              const p = products.find((x) => x.code === e.target.value);
+                              const priceOption = customerPriceOptions
+                                .filter((option) => option.depot_id === selectedDepotId && option.product_code === e.target.value)
+                                .reduce<CustomerPriceOption | null>(
+                                  (best, option) => !best || option.base_cost_price < best.base_cost_price ? option : best,
+                                  null,
+                                );
+                              const paymentCondition = paymentConditions.find(
+                                (condition) => condition.id === form.payment_condition_id,
+                              );
+                              const extra = Number(paymentCondition?.extra_cost_per_liter || 0);
+                              updateItem(idx, {
+                                refinery_id: priceOption?.refinery_id || it.refinery_id,
+                                depot_id: selectedDepotId || it.depot_id,
+                                product_code: e.target.value,
+                                product_name: p?.name || priceOption?.product_name || '',
+                                unit_price: priceOption ? computeUnitPrice(priceOption.base_cost_price, extra, customerAdjust) : 0,
+                                std_unit_price: priceOption ? computeStandardUnitPrice(priceOption.base_cost_price, extra) : 0,
+                                base_cost_price: priceOption?.base_cost_price ?? null,
+                              });
+                            }}
+                            sx={{ minWidth: 190 }}
+                          >
+                            {products
+                              .filter((p) => p.is_active && (
+                                p.code === it.product_code
+                                || customerPriceOptions.some(
+                                  (option) => option.depot_id === selectedDepotId && option.product_code === p.code,
+                                )
+                              ))
+                              .map((p) => (
+                                <MenuItem key={p.code} value={p.code}>
+                                  {p.code} - {p.name}
+                                </MenuItem>
+                              ))}
+                          </TextField>
+                        </TableCell>
+                        <TableCell align="right">
+                          <VatPriceInput
+                            unitPriceInclVat={it.unit_price}
+                            mode={form.price_vat_mode}
+                            onChange={(unitPriceInclVat) => updateItem(idx, { unit_price: unitPriceInclVat })}
+                            error={belowFloor(it)}
+                            helperText={floorFor(it) != null
+                              ? `${belowFloor(it) ? 'ต่ำกว่าราคากลาง' : 'ขั้นต่ำ'} ${money(toDisplayPrice(floorFor(it) as number, form.price_vat_mode))}`
+                              : undefined}
+                          />
+                          {/* {customerAdjust !== 0 && it.std_unit_price != null ? (
+                            <Typography variant="caption" sx={{ display: 'block', color: customerAdjust < 0 ? '#15803d' : '#b45309', whiteSpace: 'nowrap' }}>
+                              มาตรฐาน {money(it.std_unit_price)}
+                              {customerBaseline !== 0 ? ` ${customerBaseline < 0 ? '−' : '+'} กลาง ${money(Math.abs(customerBaseline))}` : ''}
+                              {customerSalesFee !== 0 ? ` + เซล ${money(customerSalesFee)}` : ''}
+                            </Typography>
+                          ) : null}
+                          {Number(it.base_cost_price || 0) > 0 ? (
+                            <Typography variant="caption" sx={{ display: 'block', color: 'text.secondary', whiteSpace: 'nowrap' }}>
+                              ทุน {money(Number(it.base_cost_price))} · กำไร {money(Number(it.unit_price || 0) / VAT_MULTIPLIER - Number(it.base_cost_price))} /ลิตร
+                            </Typography>
+                          ) : (
+                            <Typography variant="caption" sx={{ display: 'block', color: '#b45309', whiteSpace: 'nowrap' }}>
+                              ไม่มีต้นทุน
+                            </Typography>
+                          )} */}
+                        </TableCell>
+                        <TableCell align="right">
+                          <TextField
+                            size="small"
+                            type="number"
+                            value={it.liters}
+                            onFocus={(e) => e.target.select()}
+                            onChange={(e) => updateItem(idx, { liters: Number(e.target.value || 0) })}
+                            sx={{ width: 140 }}
+                          />
+                        </TableCell>
+                        <TableCell align="right" sx={{ fontWeight: 800 }}>
+                          {money(toDisplayPrice(Number(it.unit_price || 0) * Number(it.liters || 0), form.price_vat_mode))}
+                        </TableCell>
+                        <TableCell align="right">
+                          <IconButton
+                            color="error"
+                            onClick={() => {
+                              setForm((p) => ({ ...p, items: p.items.filter((_, i) => i !== idx) }));
+                              showSnack(`ลบรายการที่ ${idx + 1}`, 'warning');
+                            }}
+                            disabled={form.items.length <= 1}
+                          >
+                            <Remove fontSize="small" />
+                          </IconButton>
+                        </TableCell>
+                      </TableRow>
+                    ))}
+                    {!form.items.length ? (
+                      <TableRow>
+                        <TableCell colSpan={5} align="center" sx={{ py: 4, color: 'text.secondary' }}>
+                          {selectedDepotId
+                            ? form.payment_condition_id
+                              ? 'คลังนี้ยังไม่มีราคาวันนี้'
+                              : 'เลือกเครดิตก่อน'
+                            : 'เลือกโรงกลั่นและคลังก่อน'}
+                        </TableCell>
+                      </TableRow>
+                    ) : null}
+                  </TableBody>
+                </Table>
+              </TableContainer>
+
+              <Button
+                variant="outlined"
+                startIcon={<Add />}
+                onClick={() => {
+                  setForm((p) => {
+                    return {
+                      ...p,
+                      items: [
+                        ...p.items,
+                        {
+                          ...emptyItem,
+                          refinery_id: p.selected_refinery_id,
+                          depot_id: p.selected_depot_id,
+                        },
+                      ],
+                    };
+                  });
+                  showSnack('เพิ่มรายการแล้ว', 'info');
+                }}
+                disabled={!selectedDepotId || !form.payment_condition_id}
+                sx={{ mt: 1.5, borderRadius: 1 }}
+              >
+                เพิ่มรายการ
+              </Button>
+            </Card>
+
+            <SectionCard title="ค่าขนส่ง" subtitle="มาตรฐานคลัง + ส่วนกลาง ปรับได้ต่อบิล">
+              {isPickup ? (
+                <Alert severity="info" sx={{ borderRadius: 1 }}>รับเอง ไม่มีค่าขนส่ง</Alert>
+              ) : (
+                <Stack direction={{ xs: 'column', md: 'row' }} spacing={1.5} alignItems={{ md: 'center' }}>
+                  {/*     <TextField
+                    size="small"
+                    label="มาตรฐาน (บาท/ลิตร)"
+                    type="number"
+                    value={form.delivery_fee_std_per_liter}
+                    onFocus={(e) => e.target.select()}
+                    onChange={(e) => setForm((p) => ({ ...p, delivery_fee_std_per_liter: Math.max(0, Number(e.target.value || 0)) }))}
+                    inputProps={{ step: '0.01', min: 0 }}
+                    fullWidth
+                    hidden
+                  />
+                  <TextField
+                    size="small"
+                    label="เพิ่มส่วนกลาง (บาท/ลิตร)"
+                    value={money(effectiveSurcharge)}
+                    InputProps={{ readOnly: true }}
+                    helperText="ตั้งค่าโดย admin ที่ ตั้งค่า > ข้อมูลบริษัท"
+                    fullWidth
+                    hidden
+                  /> */}
+                  <TextField
+                    size="small"
+                    label="ปรับ +/- (บาท/ลิตร)"
+                    type="number"
+                    value={form.delivery_fee_adjust_per_liter}
+                    onFocus={(e) => e.target.select()}
+                    onChange={(e) => setForm((p) => ({ ...p, delivery_fee_adjust_per_liter: Number(e.target.value || 0) }))}
+                    inputProps={{ step: '0.01' }}
+
+                    fullWidth
+                  />
+                  <TextField size="small" label="คิดจริง (บาท/ลิตร)" value={money(totals.feePerLiter)} InputProps={{ readOnly: true }} fullWidth />
+                  <TextField size="small" label="รวมค่าขนส่ง" value={money(totals.feeGross)} InputProps={{ readOnly: true }} sx={{ '& input': { fontWeight: 800 } }} fullWidth />
+                </Stack>
+              )}
+            </SectionCard>
+
+            <SectionCard title="สรุป">
+              <Stack direction={{ xs: 'column', md: 'row' }} spacing={2} alignItems={{ md: 'flex-start' }}>
+                <Stack spacing={1.2} sx={{ flex: 1, minWidth: 0 }}>
+                  <Typography fontWeight={800} fontSize={13}>ส่วนลด</Typography>
+                  <TextField
+                    size="small"
+                    label="ส่วนลด (บาท)"
+                    type="number"
+                    value={form.discount_amount}
+                    onFocus={(e) => e.target.select()}
+                    onChange={(e) => setForm((p) => ({ ...p, discount_amount: Math.max(0, Number(e.target.value || 0)) }))}
+                    inputProps={{ step: '0.01', min: 0 }}
+                    helperText={`ไม่เกิน ${money(totals.grossBeforeDiscount)} บาท`}
+                    error={form.discount_amount > totals.grossBeforeDiscount + 0.005}
+                    fullWidth
+                  />
+                  <TextField
+                    size="small"
+                    label="เหตุผล(ส่วนลด)"
+                    value={form.discount_note}
+                    onChange={(e) => setForm((p) => ({ ...p, discount_note: e.target.value }))}
+                    fullWidth
+                  />
+                </Stack>
+                <Box sx={{ ml: 'auto', width: { xs: '100%', md: 420 } }}>
+                  <Stack spacing={0.8}>
+                    <Stack direction="row" justifyContent="space-between">
+                      <Typography color="text.secondary">ปริมาณ</Typography>
+                      <Typography>{money(totalLiters)} ลิตร</Typography>
+                    </Stack>
+                    {totals.discount > 0 ? (
+                      <>
+                        <Stack direction="row" justifyContent="space-between">
+                          <Typography color="text.secondary">รวมก่อนลด</Typography>
+                          <Typography>{money(totals.grossBeforeDiscount)} บาท</Typography>
+                        </Stack>
+                        <Stack direction="row" justifyContent="space-between">
+                          <Typography sx={{ color: '#15803d' }}>ส่วนลด</Typography>
+                          <Typography sx={{ color: '#15803d' }}>-{money(totals.discount)} บาท</Typography>
+                        </Stack>
+                      </>
+                    ) : null}
+                    <Stack direction="row" justifyContent="space-between">
+                      <Typography color="text.secondary">ก่อน VAT</Typography>
+                      <Typography>{money(subTotal)} บาท</Typography>
+                    </Stack>
+                    <Stack direction="row" justifyContent="space-between">
+                      <Typography color="text.secondary">VAT 7%</Typography>
+                      <Typography>{money(vatAmount)} บาท</Typography>
+                    </Stack>
+                    <Divider />
+                    <Stack direction="row" justifyContent="space-between" alignItems="center">
+                      <Typography fontWeight={900}>ยอดสุทธิ</Typography>
+                      <Typography fontWeight={900} fontSize={22}>
+                        {money(grandTotal)} บาท
+                      </Typography>
+                    </Stack>
+                  </Stack>
+                </Box>
+              </Stack>
+
+              <Stack
+                direction="row"
+                spacing={2}
+                alignItems="center"
+                flexWrap="wrap"
+                useFlexGap
+                sx={{
+                  mt: 1.5,
+                  px: 1.5,
+                  py: 0.75,
+                  borderRadius: 1,
+                  bgcolor: profit.profit < 0 ? '#fef2f2' : '#f0fdf4',
+                  color: profit.profit < 0 ? '#b91c1c' : '#15803d',
+                  fontSize: 13,
+                }}
+              >
+                <Typography variant="body2" color="text.secondary">รวมต้นทุน {money(profit.costTotal)} บาท</Typography>
+                <Typography variant="body2" fontWeight={800} sx={{ color: 'inherit' }}>
+                  {profit.profit < 0 ? 'ขาดทุน' : 'กำไร'} {profit.profit < 0 ? '−' : '+'}{money(Math.abs(profit.profit))} บาท
+                </Typography>
+                <Typography variant="body2" fontWeight={800} sx={{ color: 'inherit' }}>GP {money(profit.gpPercent)}%</Typography>
+                {profit.costIncomplete ? (
+                  <Typography variant="caption" sx={{ color: '#b45309' }}>บางรายการไม่มีต้นทุน</Typography>
+                ) : null}
+              </Stack>
+            </SectionCard>
+
+            <SectionCard title="การรับสินค้า">
+              <Stack spacing={1.5}>
+                <Stack direction={{ xs: 'column', md: 'row' }} spacing={1}>
+                  {receiveMethods.map((method) => (
+                    <Card
+                      key={method.code}
+                      variant="outlined"
+                      sx={{
+                        flex: 1,
+                        borderWidth: form.receive_method === method.code ? 2 : 1,
+                        borderColor: form.receive_method === method.code ? '#2563eb' : '#cfd8e3',
+                        bgcolor: form.receive_method === method.code ? '#eff6ff' : '#fff',
+                      }}
+                    >
+                      <CardActionArea
+                        onClick={() => setForm((prev) => ({ ...prev, receive_method: method.code }))}
+                      >
+                        <CardContent>
+                          <Stack spacing={0.8} alignItems="center">
+                            {method.icon}
+                            <Typography fontWeight={800}>{method.label}</Typography>
+                          </Stack>
+                        </CardContent>
+                      </CardActionArea>
+                    </Card>
+                  ))}
+                </Stack>
+
+                <TextField
+                  size="small"
+                  label="วันที่ส่ง"
+                  type="date"
+                  value={form.requested_delivery_date}
+                  onChange={(event) => setForm((prev) => ({ ...prev, requested_delivery_date: event.target.value }))}
+                  InputLabelProps={{ shrink: true }}
+                  fullWidth
+                />
+
+                {(
+                  <Stack spacing={1.2}>
+                    <TextField
+                      select
+                      size="small"
+                      label={isPickup ? 'รถของลูกค้า' : 'รถที่ไปส่ง (เลือกจากรถลูกค้าได้)'}
+                      value={form.customer_vehicle_id}
+                      onChange={(event) => {
+                        const vehicle = customerVehicles.find((item) => item.id === event.target.value);
+                        setForm((prev) => ({
+                          ...prev,
+                          customer_vehicle_id: event.target.value,
+                          vehicle_license_plate: vehicle?.license_plate || '',
+                          vehicle_driver_name: vehicle?.driver_name || '',
+                          vehicle_driver_phone: vehicle?.driver_phone || '',
+                          vehicle_pickup_license_number: vehicle?.pickup_license_number || '',
+                        }));
+                      }}
+                      disabled={!form.customer_id}
+                    >
+                      <MenuItem value="">กรอกเอง</MenuItem>
+                      {customerVehicles.map((vehicle) => (
+                        <MenuItem key={vehicle.id} value={vehicle.id}>
+                          {vehicle.license_plate}{vehicle.driver_name ? ` - ${vehicle.driver_name}` : ''}
+                        </MenuItem>
+                      ))}
+                    </TextField>
+                    <Stack direction={{ xs: 'column', md: 'row' }} spacing={1.2}>
+                      <TextField size="small" required={isPickup} fullWidth label="ทะเบียนรถ" value={form.vehicle_license_plate} onChange={(event) => setForm((prev) => ({ ...prev, customer_vehicle_id: '', vehicle_license_plate: event.target.value }))} />
+                      <TextField size="small" fullWidth label="ชื่อคนขับ" value={form.vehicle_driver_name} onChange={(event) => setForm((prev) => ({ ...prev, customer_vehicle_id: '', vehicle_driver_name: event.target.value }))} />
+                    </Stack>
+                    <Stack direction={{ xs: 'column', md: 'row' }} spacing={1.2}>
+                      <TextField size="small" fullWidth label="เบอร์คนขับ" value={form.vehicle_driver_phone} onChange={(event) => setForm((prev) => ({ ...prev, customer_vehicle_id: '', vehicle_driver_phone: event.target.value }))} />
+                      <TextField size="small" fullWidth label="เลขใบอนุญาต" value={form.vehicle_pickup_license_number} onChange={(event) => setForm((prev) => ({ ...prev, customer_vehicle_id: '', vehicle_pickup_license_number: event.target.value }))} />
+                    </Stack>
+                  </Stack>
+                )}
+              </Stack>
+            </SectionCard>
+          </Stack>
+
+          <Box
+            sx={{
+              mt: 'auto',
+              position: 'sticky',
+              bottom: 0,
+              zIndex: 4,
+              bgcolor: '#fff',
+              borderTop: '1px solid #e5e7eb',
+              p: 2,
+            }}
+          >
+            <Stack direction={{ xs: 'column', sm: 'row' }} spacing={1} justifyContent="flex-end">
+              {formIsPendingQuotation ? (
+                <>
+                  <Button
+                    variant="outlined"
+                    color="error"
+                    startIcon={<Block />}
+                    onClick={() => form.id && setDecisionTarget({ orderId: form.id, docNo: form.order_no || form.id.slice(0, 8), action: 'cancel', customerName: customers.find((c) => c.id === form.customer_id)?.company_name })}
+                    disabled={!form.id}
+                    sx={{ borderRadius: 2, mr: { sm: 'auto' } }}
+                  >
+                    ยกเลิกใบเสนอราคา
+                  </Button>
+                  <Button variant="outlined" startIcon={<Close />} onClick={() => setOpen(false)} sx={{ borderRadius: 2 }}>
+                    ปิด
+                  </Button>
+                  <Button
+                    variant="outlined"
+                    color="secondary"
+                    startIcon={<Description />}
+                    onClick={() => void quotationFromDrawer()}
+                    disabled={!form.id || !form.customer_id || !form.items.length || hasBelowFloor || issuingQuotation}
+                    sx={{ borderRadius: 2 }}
+                  >
+                    {issuingQuotation ? 'กำลังออก...' : 'ออกใบเสนอราคา'}
+                  </Button>
+                  <Button
+                    variant="outlined"
+                    color="warning"
+                    startIcon={<ThumbDown />}
+                    onClick={() => form.id && setDecisionTarget({ orderId: form.id, docNo: form.order_no || form.id.slice(0, 8), action: 'reject', customerName: customers.find((c) => c.id === form.customer_id)?.company_name })}
+                    disabled={!form.id}
+                    sx={{ borderRadius: 2 }}
+                  >
+                    ลูกค้าปฏิเสธ
+                  </Button>
+                  <Button
+                    variant="contained"
+                    color="success"
+                    startIcon={<TaskAlt />}
+                    onClick={() => void convertFromDrawer()}
+                    disabled={!form.id || !form.customer_id || !form.items.length || hasBelowFloor}
+                    sx={{ borderRadius: 2 }}
+                  >
+                    อนุมัติเป็นใบสั่งขาย
+                  </Button>
+                </>
+              ) : (<>
+              <Button
+                variant="outlined"
+                color="error"
+                startIcon={<Block />}
+                onClick={() => setCancelOpen(true)}
+                disabled={!form.id || ['CANCELLED', 'COMPLETED'].includes(form.order_status)}
+                sx={{ borderRadius: 2, mr: { sm: 'auto' } }}
+              >
+                {form.order_status === 'CANCELLED' ? 'ยกเลิกแล้ว' : 'ยกเลิกการสั่งซื้อ'}
+              </Button>
+              <Button variant="outlined" startIcon={<Close />} onClick={() => setOpen(false)} sx={{ borderRadius: 2 }}>
+                ปิด
+              </Button>
+              <Button
+                variant="outlined"
+                startIcon={<Print />}
+                onClick={(event) => void printFromDrawer(event.currentTarget)}
+                disabled={!form.id || !form.customer_id || !form.items.length || hasBelowFloor}
+                sx={{ borderRadius: 2 }}
+              >
+                พิมพ์
+              </Button>
+              <Button
+                variant="outlined"
+                color="secondary"
+                startIcon={<Description />}
+                onClick={() => void quotationFromDrawer()}
+                disabled={!form.id || !form.customer_id || !form.items.length || hasBelowFloor || form.order_status === 'CANCELLED'}
+                sx={{ borderRadius: 2 }}
+              >
+                ออกใบเสนอราคา
+              </Button>
+              {canApprove ? (
+                <Button
+                  variant="contained"
+                  color="success"
+                  onClick={() => setApproveOpen(true)}
+                  disabled={!form.id || !['DRAFT', 'SUBMITTED', 'ADMIN_REVIEW'].includes(form.order_status)}
+                  sx={{ borderRadius: 1 }}
+                >
+                  {['DRAFT', 'SUBMITTED', 'ADMIN_REVIEW'].includes(form.order_status) ? 'อนุมัติ' : 'อนุมัติแล้ว'}
+                </Button>
+              ) : null}
+
+              <Button
+                variant="outlined"
+                color="info"
+                startIcon={<LocalShipping />}
+                onClick={() => form.id && openDeliveryRecord({
+                  id: form.id,
+                  order_no: form.order_no,
+                  customer_name: customers.find((c) => c.id === form.customer_id)?.company_name,
+                  delivered_at: form.delivered_at,
+                  delivery_receiver_name: form.delivery_receiver_name,
+                  delivery_record_note: form.delivery_record_note,
+                  delivery_record_no: form.delivery_record_no,
+                }, true)}
+                disabled={!form.id || !DELIVERY_RECORDABLE_STATUSES.includes(form.order_status)}
+                sx={{ borderRadius: 2 }}
+              >
+                {form.delivery_record_no ? 'แก้บันทึกส่งของ' : 'บันทึกส่งของ'}
+              </Button>
+              </>)}
+              <Button variant={formIsPendingQuotation && form.id ? 'outlined' : 'contained'} onClick={() => void save()} disabled={!form.customer_id || !form.items.length || hasBelowFloor || form.quotation_stage === 'CLOSED' || (!formIsQuotation && form.receive_method === 'PICKUP_BY_TRUCK' && !form.vehicle_license_plate.trim())} sx={{ borderRadius: 2 }}>
+                บันทึก
+              </Button>
+            </Stack>
+          </Box>
+        </Stack>
+      </Drawer>
+
+      <Dialog open={cancelOpen} onClose={() => setCancelOpen(false)}>
+        <DialogTitle>ยกเลิกการสั่งซื้อ {form.order_no || ''}</DialogTitle>
+        <DialogContent>สถานะจะเปลี่ยนเป็น "ยกเลิก" และบิลนี้จะไม่ถูกนับยอดขาย/ยอดค้าง ต้องการยกเลิกใช่หรือไม่</DialogContent>
+        <DialogActions>
+          <Button onClick={() => setCancelOpen(false)}>ไม่ยกเลิก</Button>
+          <Button color="error" variant="contained" onClick={() => { setCancelOpen(false); void patchOrderQuick({ order_status: 'CANCELLED' }); }}>
+            ยืนยันยกเลิก
+          </Button>
+        </DialogActions>
+      </Dialog>
+
+      <Dialog open={Boolean(deleteId)} onClose={() => setDeleteId(null)}>
+        <DialogTitle>ยืนยันการลบ</DialogTitle>
+        <DialogContent>
+          {isQuotationMode
+            ? 'ต้องการลบใบเสนอราคานี้ใช่หรือไม่ ใบเสนอราคาและเลข QT ที่ออกไปแล้วจะถูกลบออกจากรายการ'
+            : 'ต้องการลบใบสั่งขายนี้ใช่หรือไม่'}
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={() => setDeleteId(null)}>ยกเลิก</Button>
+          <Button color="error" onClick={() => void remove()}>
+            ลบ
+          </Button>
+        </DialogActions>
+      </Dialog>
+
+      <Menu open={Boolean(printMenu)} anchorEl={printMenu?.anchor ?? null} onClose={() => setPrintMenu(null)}>
+        <MenuItem onClick={() => { if (printMenu) openPdf('purchase-order', printMenu.orderId, `ใบสั่งขาย · ${printMenu.orderNo}`); setPrintMenu(null); }}>
+          <ReceiptLong fontSize="small" sx={{ mr: 1 }} /> ใบสั่งขาย (PDF)
+        </MenuItem>
+        <MenuItem
+          disabled={(printMenu?.row?.order_status ?? (form.id === printMenu?.orderId ? form.order_status : '')) === 'CANCELLED'}
+          onClick={() => { if (printMenu) setQuotationOrder({ id: printMenu.orderId, orderNo: printMenu.orderNo }); setPrintMenu(null); }}
+        >
+          <Description fontSize="small" sx={{ mr: 1 }} /> ใบเสนอราคา
+        </MenuItem>
+        <MenuItem disabled={!printMenuApproved} onClick={() => { if (printMenu) openPdf('delivery-note', printMenu.orderId, `ใบส่งของ · ${printMenu.orderNo}`); setPrintMenu(null); }}>
+          <LocalShipping fontSize="small" sx={{ mr: 1 }} /> ใบส่งของ{printMenuApproved ? '' : ' (ต้องอนุมัติใบสั่งขายก่อน)'}
+        </MenuItem>
+        <MenuItem disabled={!printMenuApproved} onClick={() => {
+          if (printMenu) {
+            const row = printMenu.row ?? null;
+            const fromForm = form.id === printMenu.orderId;
+            openDeliveryRecord({
+              id: printMenu.orderId,
+              order_no: printMenu.orderNo,
+              customer_name: row?.customers?.company_name ?? customers.find((c) => c.id === form.customer_id)?.company_name,
+              delivered_at: row?.delivered_at ?? (fromForm ? form.delivered_at : null),
+              delivery_receiver_name: row?.delivery_receiver_name ?? (fromForm ? form.delivery_receiver_name : null),
+              delivery_record_note: fromForm ? form.delivery_record_note : null,
+              delivery_record_no: row?.delivery_record_no ?? (fromForm ? form.delivery_record_no : null),
+            });
+          }
+          setPrintMenu(null);
+        }}>
+          <LocalShipping fontSize="small" sx={{ mr: 1 }} /> {(printMenu?.row?.delivery_record_no ?? (form.id === printMenu?.orderId ? form.delivery_record_no : null)) ? 'บันทึกการส่งของ (PDF)' : 'บันทึกการส่งของ'}
+          {printMenuApproved ? '' : ' (ต้องอนุมัติใบสั่งขายก่อน)'}
+        </MenuItem>
+      </Menu>
+
+      <PdfPreviewDialog
+        target={pdfTarget}
+        onClose={() => setPdfTarget(null)}
+        onNotify={showSnack}
+        onSent={(target, result) => {
+          if (result.status_advanced && result.order_status) {
+            showSnack(`ส่ง ${target.title} แล้ว สถานะเป็น "${statusThai(result.order_status)}"`, 'success');
+          }
+          void load();
+          if (form.id && open) void openEdit(form.id);
+        }}
+      />
+      <QuotationDialog
+        order={quotationOrder}
+        onClose={() => setQuotationOrder(null)}
+        onView={(orderId, quotationNo) => { openPdf('quotation', orderId, `ใบเสนอราคา · ${quotationNo}`); if (isQuotationMode) void load(); }}
+        onNotify={showSnack}
+      />
+      <QuotationDecisionDialog
+        target={decisionTarget}
+        onClose={() => setDecisionTarget(null)}
+        onDone={(result) => { void onQuotationDecided(result); }}
+        onNotify={showSnack}
+      />
+      <DeliveryRecordDialog
+        order={deliveryRecordOrder}
+        onClose={() => setDeliveryRecordOrder(null)}
+        onSaved={(saved) => { void onDeliveryRecordSaved(saved); }}
+      />
+
+      <ApproveOrderDialog
+        open={approveOpen}
+        orderId={form.id ?? null}
+        orderNo={form.order_no || ''}
+        customerName={customers.find((c) => c.id === form.customer_id)?.company_name || ''}
+        onClose={() => setApproveOpen(false)}
+        onApproved={() => { showSnack('อนุมัติใบสั่งขายเรียบร้อย', 'success'); void load(); if (form.id) void openEdit(form.id); }}
+      />
+
+      <ActionSnackbar
+        open={snack.open}
+        message={snack.message}
+        severity={snack.severity}
+        onClose={() => setSnack((prev) => ({ ...prev, open: false }))}
+      />
+    </Stack>
+  );
+}

@@ -2,6 +2,7 @@ import { NextResponse } from 'next/server';
 import { createSupabaseServerClient } from '@/lib/supabase/server-client';
 import { supabaseAdmin } from '@/lib/supabase/server';
 import { loadDeliveryFeeSurcharge } from '@/lib/services/order-items';
+import { loadLastOrderDepot } from '@/lib/services/last-order-depot';
 
 type AccessRow = {
   customer_id: string;
@@ -36,7 +37,7 @@ export async function GET() {
 
   const { customer_id: customerId, company_id: companyId } = portalUser;
 
-  const [customerRes, accessRes, creditRes, surchargeRes] = await Promise.all([
+  const [customerRes, accessRes, creditRes, surchargeRes, lastOrderRes] = await Promise.all([
     supabaseAdmin
       .from('customers')
       .select('id, company_name, credit_limit, status, price_adjustment_per_liter, sales_fee_per_liter')
@@ -52,6 +53,7 @@ export async function GET() {
       .maybeSingle(),
     supabaseAdmin.rpc('get_customer_credit_status', { p_customer: customerId }),
     loadDeliveryFeeSurcharge(companyId),
+    loadLastOrderDepot(companyId, customerId),
   ]);
 
   if (customerRes.error) return NextResponse.json({ error: customerRes.error.message }, { status: 400 });
@@ -195,5 +197,7 @@ export async function GET() {
     rounds: [...latestByRefinery.values()],
     items,
     allowedPaymentConditions,
+    /** โรงกลั่น/คลังของออเดอร์ล่าสุด ใช้เป็นค่าเริ่มต้นตอนสั่งใหม่ */
+    last_order_depot: lastOrderRes && !('error' in lastOrderRes) ? lastOrderRes : null,
   });
 }

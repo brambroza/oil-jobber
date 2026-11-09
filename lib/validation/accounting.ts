@@ -19,6 +19,16 @@ export const recordPaymentSchema = z.object({
 export const invoicePatchSchema = z.object({
   status: z.enum(['CANCELLED']).optional(),
   due_date: z.preprocess((v) => (v === '' ? null : v), dateYmd.nullable().optional()),
+  /** วันที่ออกใบกำกับภาษี (แก้ย้อนหลังได้ ภายในปีเดียวกับเลขใบกำกับ) */
+  issued_at: dateYmd.optional(),
+});
+
+/** POST /api/accounting/invoice/from-order/[orderId] */
+export const invoiceIssueSchema = z.object({
+  /** วันที่ออกใบกำกับภาษี; ไม่ระบุ = วันนี้ */
+  issued_at: z.union([dateYmd, z.literal(''), z.null()])
+    .optional()
+    .transform((value): string | undefined => value || undefined),
 });
 
 /** PATCH /api/companies/me */

@@ -8,6 +8,11 @@ import { round2 } from '@/lib/services/order-pricing';
 
 const APPROVABLE_STATUSES = ['DRAFT', 'SUBMITTED', 'ADMIN_REVIEW'];
 
+/** Pending-approval order that is not a quotation still waiting for the customer. */
+function isApprovable(order: { order_status: string | null; quotation_stage?: string | null }): boolean {
+  return order.quotation_stage !== 'PENDING' && APPROVABLE_STATUSES.includes(String(order.order_status));
+}
+
 const approveSchema = z.object({
   /** หมายเหตุการอนุมัติ (บังคับเมื่ออนุมัติเกินวงเงิน) */
   note: optionalText(500),
@@ -61,7 +66,7 @@ export async function GET(_: NextRequest, { params }: { params: Promise<{ id: st
 
   const { data: order, error } = await supabaseAdmin
     .from('sale_orders')
-    .select('id, customer_id, payment_condition_id, order_status')
+    .select('id, customer_id, payment_condition_id, order_status, quotation_stage')
     .eq('id', id)
     .eq('company_id', ctx.companyId)
     .eq('is_deleted', false)
@@ -71,7 +76,7 @@ export async function GET(_: NextRequest, { params }: { params: Promise<{ id: st
 
   const credit = await loadCreditCheck(order);
   if ('error' in credit) return NextResponse.json({ error: credit.error }, { status: 400 });
-  return NextResponse.json({ order_status: order.order_status, can_approve: APPROVABLE_STATUSES.includes(String(order.order_status)), credit });
+  return NextResponse.json({ order_status: order.order_status, can_approve: isApprovable(order), credit });
 }
 
 /**
@@ -92,14 +97,17 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
 
   const { data: order, error } = await supabaseAdmin
     .from('sale_orders')
-    .select('id, customer_id, payment_condition_id, order_status')
+    .select('id, customer_id, payment_condition_id, order_status, quotation_stage')
     .eq('id', id)
     .eq('company_id', ctx.companyId)
     .eq('is_deleted', false)
     .maybeSingle();
   if (error) return NextResponse.json({ error: error.message }, { status: 400 });
   if (!order) return NextResponse.json({ error: 'ไม่พบคำสั่งซื้อ' }, { status: 404 });
-  if (!APPROVABLE_STATUSES.includes(String(order.order_status))) {
+  if (order.quotation_stage === 'PENDING') {
+    return NextResponse.json({ error: 'ยังเป็นใบเสนอราคา กรุณาแปลงเป็นใบสั่งขายก่อนอนุมัติ' }, { status: 422 });
+  }
+  if (!isApprovable(order)) {
     return NextResponse.json({ error: 'คำสั่งซื้อนี้ไม่ได้อยู่ในสถานะรออนุมัติ' }, { status: 422 });
   }
 

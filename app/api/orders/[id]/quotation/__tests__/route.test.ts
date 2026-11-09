@@ -55,8 +55,21 @@ describe('POST /api/orders/[id]/quotation', () => {
     issueQuotation.mockResolvedValue({ quotation: { quotation_no: 'QT-2610140001' } });
     const res = await post(ORDER_ID, { valid_until: '', note: '' });
     expect(res.status).toBe(200);
-    expect(issueQuotation).toHaveBeenCalledWith('c1', 'u1', ORDER_ID, { valid_until: null, note: null, reissue: false });
+    expect(issueQuotation).toHaveBeenCalledWith('c1', 'u1', ORDER_ID, { valid_until: null, note: null, reissue: false, only_if_changed: false });
     expect(await res.json()).toEqual({ quotation: { quotation_no: 'QT-2610140001' } });
+  });
+
+  it('passes only_if_changed through and returns unchanged', async () => {
+    issueQuotation.mockResolvedValue({ quotation: { quotation_no: 'QT-26110001' }, unchanged: true });
+    const res = await post(ORDER_ID, { valid_until: '2026-11-09', note: '', only_if_changed: true });
+    expect(res.status).toBe(200);
+    expect(issueQuotation).toHaveBeenCalledWith('c1', 'u1', ORDER_ID, { valid_until: '2026-11-09', note: null, reissue: false, only_if_changed: true });
+    expect(await res.json()).toEqual({ quotation: { quotation_no: 'QT-26110001' }, unchanged: true });
+  });
+
+  it('rejects a non-boolean only_if_changed', async () => {
+    const res = await post(ORDER_ID, { only_if_changed: 'yes' });
+    expect(res.status).toBe(422);
   });
 
   it('returns 409 with the existing quotation', async () => {

@@ -2,7 +2,8 @@ import { NextRequest, NextResponse } from 'next/server';
 import { requireStaff } from '@/lib/auth/api-guard';
 import { supabaseAdmin } from '@/lib/supabase/server';
 import { parseBody } from '@/lib/validation/common';
-import { orderBodySchema } from '@/lib/validation/orders';
+import { orderCreateSchema } from '@/lib/validation/orders';
+import { loadLatestQuotationsByOrder } from '@/lib/services/quotations';
 import {
   enrichOrderItems,
   loadPricingContext,
@@ -14,9 +15,64 @@ import {
   recomputeOrderProfit,
 } from '@/lib/services/order-items';
 import { canAccessCustomer, customerForbidden, loadCustomerScope } from '@/lib/services/customer-scope';
+import { round2 } from '@/lib/services/order-pricing';
 
-/** Lists orders of the caller's company with computed totals and salesperson name. */
-export async function GET() {
+type OrderInvoiceSummary = { invoice_no: string; issued_at: string; due_date: string | null; status: string };
+
+/**
+ * Loads, per order, the active tax invoice and the sum of recorded payments
+ * for the orders list (ids are queried in chunks to keep URLs short).
+ * @param companyId - tenant scope
+ * @param orderIds - sale order ids
+ */
+async function loadInvoicesAndPayments(
+  companyId: string,
+  orderIds: string[],
+): Promise<{ invoices: Map<string, OrderInvoiceSummary>; paid: Map<string, number> } | { error: string }> {
+  const invoices = new Map<string, OrderInvoiceSummary>();
+  const paid = new Map<string, number>();
+  for (let i = 0; i < orderIds.length; i += 200) {
+    const chunk = orderIds.slice(i, i + 200);
+    const [invoiceRes, paymentRes] = await Promise.all([
+      supabaseAdmin
+        .from('invoices')
+        .select('sale_order_id, invoice_no, issued_at, due_date, status')
+        .eq('company_id', companyId)
+        .eq('is_deleted', false)
+        .neq('status', 'CANCELLED')
+        .in('sale_order_id', chunk),
+      supabaseAdmin
+        .from('payment_transactions')
+        .select('sale_order_id, amount')
+        .eq('company_id', companyId)
+        .eq('is_deleted', false)
+        .in('sale_order_id', chunk),
+    ]);
+    if (invoiceRes.error) return { error: invoiceRes.error.message };
+    if (paymentRes.error) return { error: paymentRes.error.message };
+    for (const inv of invoiceRes.data ?? []) {
+      invoices.set(String(inv.sale_order_id), {
+        invoice_no: String(inv.invoice_no),
+        issued_at: String(inv.issued_at),
+        due_date: inv.due_date ? String(inv.due_date) : null,
+        status: String(inv.status),
+      });
+    }
+    for (const p of paymentRes.data ?? []) {
+      const id = String(p.sale_order_id);
+      paid.set(id, (paid.get(id) || 0) + Number(p.amount || 0));
+    }
+  }
+  return { invoices, paid };
+}
+
+/**
+ * Lists orders of the caller's company with computed totals and salesperson name.
+ * `?view=quotation` lists quotation-first orders (เมนูใบเสนอราคา) with their
+ * latest quotation; the default view hides quotations not yet converted and
+ * adds the active tax invoice, paid amount and outstanding amount per order.
+ */
+export async function GET(req: NextRequest) {
   const guard = await requireStaff('orders');
   if (guard.response) return guard.response;
   const { ctx } = guard;
@@ -33,10 +89,28 @@ export async function GET() {
     .eq('sale_order_items.is_deleted', false)
     .order('created_at', { ascending: false });
   if (Array.isArray(scope)) query = query.in('customer_id', scope);
+  const quotationView = req.nextUrl.searchParams.get('view') === 'quotation';
+  query = quotationView
+    ? query.not('quotation_stage', 'is', null)
+    : query.or('quotation_stage.is.null,quotation_stage.eq.CONVERTED');
 
   const { data, error } = await query;
 
   if (error) return NextResponse.json({ error: error.message }, { status: 400 });
+
+  let billing: { invoices: Map<string, OrderInvoiceSummary>; paid: Map<string, number> } | null = null;
+  if (!quotationView) {
+    const loaded = await loadInvoicesAndPayments(ctx.companyId, (data ?? []).map((r: any) => String(r.id)));
+    if ('error' in loaded) return NextResponse.json({ error: loaded.error }, { status: 400 });
+    billing = loaded;
+  }
+
+  let quotations = new Map<string, unknown>();
+  if (quotationView) {
+    const loaded = await loadLatestQuotationsByOrder(ctx.companyId, (data ?? []).map((r: any) => String(r.id)));
+    if ('error' in loaded) return NextResponse.json({ error: loaded.error }, { status: 400 });
+    quotations = loaded;
+  }
 
   const salesNames = await loadSalesUserNames(ctx.companyId, (data ?? []).flatMap((r: any) => [r.sales_user_id, r.approved_by]));
 
@@ -62,6 +136,8 @@ export async function GET() {
     const goodsAmount = (r.sale_order_items ?? []).reduce((s: number, it: any) => s + Number(it.amount || 0), 0);
     const deliveryFee = Number(r.delivery_fee_amount || 0);
     const discount = Number(r.discount_amount || 0);
+    const totalAmount = Math.max(0, goodsAmount + deliveryFee - discount);
+    const paidAmount = round2(billing?.paid.get(String(r.id)) || 0);
 
     return {
       ...r,
@@ -74,7 +150,13 @@ export async function GET() {
       goods_amount: goodsAmount,
       delivery_fee_amount: deliveryFee,
       discount_amount: discount,
-      total_amount: Math.max(0, goodsAmount + deliveryFee - discount),
+      total_amount: totalAmount,
+      ...(quotationView ? { quotation: quotations.get(String(r.id)) ?? null } : {}),
+      ...(billing ? {
+        invoice: billing.invoices.get(String(r.id)) ?? null,
+        paid_amount: paidAmount,
+        outstanding_amount: round2(Math.max(0, totalAmount - paidAmount)),
+      } : {}),
       sale_order_items: undefined,
     };
   });
@@ -82,15 +164,18 @@ export async function GET() {
   return NextResponse.json(rows);
 }
 
-/** Creates an order with server-verified prices, delivery fee and salesperson. */
+/**
+ * Creates an order with server-verified prices, delivery fee and salesperson.
+ * With `as_quotation` the order is a quotation-first draft (DRAFT, quotation_stage PENDING).
+ */
 export async function POST(req: NextRequest) {
   const guard = await requireStaff('orders');
   if (guard.response) return guard.response;
   const { ctx } = guard;
 
-  const parsed = parseBody(orderBodySchema, await req.json());
+  const parsed = parseBody(orderCreateSchema, await req.json());
   if (parsed.response) return parsed.response;
-  const { items, delivery_fee_std_per_liter, delivery_fee_adjust_per_liter, sales_user_id, discount_amount, ...order } = parsed.data;
+  const { items, delivery_fee_std_per_liter, delivery_fee_adjust_per_liter, sales_user_id, discount_amount, as_quotation, ...order } = parsed.data;
   if (!(await canAccessCustomer(ctx, order.customer_id))) return customerForbidden();
 
   const pricing = await loadPricingContext(ctx.companyId, order.customer_id, order.payment_condition_id ?? null);
@@ -116,7 +201,8 @@ export async function POST(req: NextRequest) {
       company_id: ctx.companyId,
       ...order,
       receive_method: receiveMethod,
-      order_status: order.order_status ?? 'SUBMITTED',
+      order_status: as_quotation ? 'DRAFT' : order.order_status ?? 'SUBMITTED',
+      quotation_stage: as_quotation ? 'PENDING' : null,
       sales_user_id: sales.salesUserId,
       delivery_fee_std_per_liter: feeStd,
       delivery_fee_surcharge_per_liter: feeSurcharge,

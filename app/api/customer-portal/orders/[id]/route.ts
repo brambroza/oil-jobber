@@ -120,6 +120,8 @@ export async function GET(_: NextRequest, { params }: { params: Promise<{ id: st
     .eq('company_id', ctx.companyId)
     .eq('customer_id', ctx.customerId)
     .eq('is_deleted', false)
+    // ใบเสนอราคาที่ยังไม่แปลง/ปิดแล้ว เป็นของฝั่งพนักงาน ไม่แสดงให้ลูกค้า
+    .or('quotation_stage.is.null,quotation_stage.eq.CONVERTED')
     .single();
 
   if (error) return NextResponse.json({ error: error.message }, { status: 400 });
@@ -159,6 +161,8 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
     .eq('company_id', ctx.companyId)
     .eq('customer_id', ctx.customerId)
     .eq('is_deleted', false)
+    // ใบเสนอราคาที่ยังไม่แปลง/ปิดแล้ว เป็นของฝั่งพนักงาน ไม่แสดงให้ลูกค้า
+    .or('quotation_stage.is.null,quotation_stage.eq.CONVERTED')
     .single();
 
   if (checkErr) return NextResponse.json({ error: checkErr.message }, { status: 400 });
@@ -269,6 +273,8 @@ export async function DELETE(_: NextRequest, { params }: { params: Promise<{ id:
     .eq('company_id', ctx.companyId)
     .eq('customer_id', ctx.customerId)
     .eq('is_deleted', false)
+    // ใบเสนอราคาที่ยังไม่แปลง/ปิดแล้ว เป็นของฝั่งพนักงาน ไม่แสดงให้ลูกค้า
+    .or('quotation_stage.is.null,quotation_stage.eq.CONVERTED')
     .single();
 
   if (checkErr) return NextResponse.json({ error: checkErr.message }, { status: 400 });

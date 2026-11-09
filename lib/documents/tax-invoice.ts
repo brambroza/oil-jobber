@@ -1,9 +1,9 @@
 import type { TDocumentDefinitions } from 'pdfmake/interfaces';
-import { baseDefinition, customerBlock, itemsTable, metaGrid, sellerBlock, signatureBoxes, totalsBlock, COLORS } from '@/lib/documents/pdf';
-import { dateTh, money, phoneTh } from '@/lib/documents/format';
-import { round2 } from '@/lib/services/order-pricing';
+import { baseDefinition, customerBlock, itemsTable, metaGrid, sellerBlock, signatureBoxes, totalsBlock, vatTotalsRows, COLORS } from '@/lib/documents/pdf';
+import { dateTh, phoneTh } from '@/lib/documents/format';
 import { thaiBahtText } from '@/lib/utils/thai-baht-text';
 import type { OrderDocumentData } from '@/lib/documents/types';
+import { DEFAULT_VAT_MODE, type VatMode } from '@/lib/documents/vat-mode';
 
 /** Payee printed in the payment note at the bottom of the tax invoice. */
 const PAYEE_NAME = 'บริษัท เจเอฟซี โซลูชั่น จำกัด';
@@ -12,8 +12,13 @@ const PAYEE_BANK_ACCOUNT = '186-362-082-8 ธ.กสิกรไทย สาข
 /** Height (pt) of the notes + signature block pinned to the page bottom. */
 const PAGE_BOTTOM_HEIGHT = 170;
 
-/** ใบแจ้งหนี้ / ใบกำกับภาษี (Thai standard layout, prices excl. VAT). */
-export function buildTaxInvoicePdf(data: OrderDocumentData, copy: 'original' | 'copy' = 'original'): TDocumentDefinitions {
+/**
+ * ใบแจ้งหนี้ / ใบกำกับภาษี (Thai standard layout).
+ * @param data - order document data
+ * @param copy - ต้นฉบับ or สำเนา
+ * @param vatMode - show prices excl. VAT (default) or incl. VAT
+ */
+export function buildTaxInvoicePdf(data: OrderDocumentData, copy: 'original' | 'copy' = 'original', vatMode: VatMode = DEFAULT_VAT_MODE): TDocumentDefinitions {
   const t = data.totals;
   const inv = data.invoice;
   return baseDefinition(`ใบกำกับภาษี ${inv?.invoice_no || data.order_no}`, [
@@ -54,22 +59,8 @@ export function buildTaxInvoicePdf(data: OrderDocumentData, copy: 'original' | '
       ],
       columnGap: 14,
     },
-    itemsTable(data.items, t, 'excl'),
-    totalsBlock(
-      t.discount_incl_vat > 0
-        ? [
-          { label: 'รวมเงิน', value: money(round2(t.goods_ex_vat + t.delivery_fee_ex_vat)) },
-          { label: 'หัก ส่วนลด', value: `-${money(t.discount_ex_vat)}` },
-          { label: 'ยอดหลังหักส่วนลด', value: money(t.subtotal_ex_vat) },
-          { label: 'ภาษีมูลค่าเพิ่ม 7%', value: money(t.vat) },
-          { label: 'จำนวนเงินรวมทั้งสิ้น', value: money(t.net_incl_vat), final: true },
-        ]
-        : [
-          { label: 'รวมเงิน', value: money(t.subtotal_ex_vat) },
-          { label: 'ภาษีมูลค่าเพิ่ม 7%', value: money(t.vat) },
-          { label: 'จำนวนเงินรวมทั้งสิ้น', value: money(t.net_incl_vat), final: true },
-        ],
-    ),
+    itemsTable(data.items, t, vatMode),
+    totalsBlock(vatTotalsRows(t, vatMode, { discountNote: data.discount_note, finalLabel: 'จำนวนเงินรวมทั้งสิ้น' })),
     { text: `(${thaiBahtText(t.net_incl_vat)})`, bold: true, alignment: 'right', margin: [0, 4, 0, 10] },
     {
       table: {

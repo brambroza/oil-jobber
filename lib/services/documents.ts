@@ -11,8 +11,9 @@ import { buildDeliveryRecordPdf } from '@/lib/documents/delivery-record';
 import { advanceOrderStatus } from '@/lib/services/order-status';
 import { dateTh } from '@/lib/documents/format';
 import { money } from '@/lib/documents/format';
-import { pushLinePayload, type LinePushContext } from '@/lib/services/line';
+import { logOutboundLineMessages, pushLinePayload, type LinePushContext } from '@/lib/services/line';
 import type { DocumentType } from '@/lib/documents/types';
+import { DEFAULT_VAT_MODE, type VatMode } from '@/lib/documents/vat-mode';
 import { formatDate } from '@/lib/utils/date-format';
 
 export const DOCUMENT_TYPES: DocumentType[] = ['purchase-order', 'quotation', 'tax-invoice', 'delivery-note', 'receipt', 'delivery-record'];
@@ -40,13 +41,18 @@ export type GeneratedDocument = {
  * Generates one PDF document. `id` is an order id for purchase-order /
  * quotation / tax-invoice / delivery-note / delivery-record and a receipt id for receipt.
  * The quotation prints the latest active quotation of the order.
+ * `vatMode` (purchase-order / quotation / tax-invoice) picks ราคาไม่รวมภาษี
+ * or ราคารวมภาษี for the item table and totals; when omitted the mode saved
+ * on the bill (`sale_orders.price_vat_mode`) is used.
  */
 export async function generateDocumentPdf(
   companyId: string,
   type: DocumentType,
   id: string,
-  options: { copy?: boolean } = {},
+  options: { copy?: boolean; vatMode?: VatMode } = {},
 ): Promise<GeneratedDocument | { error: string; status: number }> {
+  /** Explicit choice wins; otherwise the mode saved on the bill. */
+  const modeFor = (saved: VatMode | undefined): VatMode => options.vatMode ?? saved ?? DEFAULT_VAT_MODE;
   if (type === 'receipt') {
     const data = await loadReceiptDocumentData(companyId, id);
     if ('error' in data) return data;
@@ -66,7 +72,7 @@ export async function generateDocumentPdf(
   if (type === 'quotation') {
     const quote = await loadQuotationDocumentData(companyId, id);
     if ('error' in quote) return quote;
-    const buffer = await renderPdf(buildQuotationPdf(quote));
+    const buffer = await renderPdf(buildQuotationPdf(quote, modeFor(quote.price_vat_mode)));
     const { data: quoteCustomer } = await supabaseAdmin.from('sale_orders').select('customer_id').eq('id', id).maybeSingle();
     return {
       buffer,
@@ -85,7 +91,7 @@ export async function generateDocumentPdf(
 
   if (type === 'tax-invoice') {
     if (!data.invoice) return { error: 'ยังไม่ได้ออกใบกำกับภาษีสำหรับคำสั่งซื้อนี้', status: 409 };
-    const buffer = await renderPdf(buildTaxInvoicePdf(data, options.copy ? 'copy' : 'original'));
+    const buffer = await renderPdf(buildTaxInvoicePdf(data, options.copy ? 'copy' : 'original', modeFor(data.price_vat_mode)));
     return {
       buffer,
       filename: `${data.invoice.invoice_no}.pdf`,
@@ -125,7 +131,7 @@ export async function generateDocumentPdf(
     };
   }
 
-  const buffer = await renderPdf(buildPurchaseOrderPdf(data));
+  const buffer = await renderPdf(buildPurchaseOrderPdf(data, modeFor(data.price_vat_mode)));
   return {
     buffer,
     filename: `${data.order_no}.pdf`,
@@ -187,14 +193,16 @@ export function buildDocumentFlex(doc: GeneratedDocument, url: string, customerN
 /**
  * Generates, uploads and pushes a document to the customer's LINE (group when
  * linked, otherwise the user). Returns the public URL.
+ * `options.vatMode` picks ราคาไม่รวมภาษี / ราคารวมภาษี (default: the bill's saved mode).
  */
 export async function sendDocumentToLine(
   companyId: string,
   type: DocumentType,
   id: string,
   userId: string | null = null,
+  options: { vatMode?: VatMode } = {},
 ): Promise<{ url: string; recipient: string; docNo: string; order_status: string | null; status_advanced: boolean } | { error: string; status: number }> {
-  const doc = await generateDocumentPdf(companyId, type, id);
+  const doc = await generateDocumentPdf(companyId, type, id, { vatMode: options.vatMode });
   if ('error' in doc) return doc;
   if (!doc.customerId) return { error: 'ไม่พบลูกค้าของเอกสารนี้', status: 404 };
 
@@ -220,16 +228,17 @@ export async function sendDocumentToLine(
     recipientType: lineCustomer?.group_id ? 'GROUP' : 'USER',
     source: `document_${type}`,
   };
-  await pushLinePayload(recipient, [buildDocumentFlex(doc, uploaded.url, customer?.company_name || '')], context);
+  const flexMessage = buildDocumentFlex(doc, uploaded.url, customer?.company_name || '');
+  await pushLinePayload(recipient, [flexMessage], context);
 
-  await supabaseAdmin.from('line_messages').insert({
+  await logOutboundLineMessages([{
     company_id: companyId,
     line_customer_id: lineCustomer?.id ?? null,
     group_id: lineCustomer?.group_id || null,
-    direction: 'OUT',
     message_type: `document_${type}`,
     message_text: `${doc.title} ${doc.docNo}: ${uploaded.url}`,
-  });
+    message_payload: flexMessage,
+  }]);
 
   // Sending the PO / tax invoice is a lifecycle milestone: stamp it and advance the status when allowed.
   let orderStatus: string | null = null;

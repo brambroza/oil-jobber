@@ -43,6 +43,7 @@ import Link from 'next/link';
 import CustomerShell from '@/components/layout/CustomerShell';
 import { computeDeliveryFeeAmount, computeUnitPrice } from '@/lib/services/order-pricing';
 import { formatDate, formatDateTime } from '@/lib/utils/date-format';
+import { pickDefaultDepot } from '@/lib/utils/default-depot';
 
 type OrderRow = {
   id: string;
@@ -73,6 +74,8 @@ type PriceHome = {
   /** ค่าขนส่งเพิ่มส่วนกลาง บาท/ลิตร (บวกเมื่อจัดส่ง) */
   delivery_fee_surcharge_per_liter?: number;
   rounds: Array<{ id: string; refinery_id: string | null; refineries?: { name?: string } | null }>;
+  /** โรงกลั่น/คลังของออเดอร์ล่าสุด */
+  last_order_depot?: { refinery_id: string | null; depot_id: string } | null;
   allowedPaymentConditions?: Array<{
     id: string;
     code: string;
@@ -244,6 +247,7 @@ export default function CustomerOrdersPage() {
   const [editingOriginalAmount, setEditingOriginalAmount] = useState(0);
   const [depotChoicesByProduct, setDepotChoicesByProduct] = useState<Record<string, DepotChoice[]>>({});
   const [depotOptions, setDepotOptions] = useState<DepotOption[]>([]);
+  const [lastOrderDepot, setLastOrderDepot] = useState<PriceHome['last_order_depot']>(null);
   const [open, setOpen] = useState(false);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
@@ -401,6 +405,7 @@ export default function CustomerOrdersPage() {
     setUsedCredit(Number(data.credit?.used_credit || 0));
     setDepotTransportFees(data.access?.depot_transport_fees || {});
     setDeliveryFeeSurcharge(Number(data.delivery_fee_surcharge_per_liter || 0));
+    setLastOrderDepot(data.last_order_depot ?? null);
 
     const roundsById = new Map<string, { refinery_id: string | null; refinery_name: string }>(
       (data.rounds || []).map((r: any) => [r.id, { refinery_id: r.refinery_id ?? null, refinery_name: r.refineries?.name || '-' }]),
@@ -497,9 +502,14 @@ export default function CustomerOrdersPage() {
     const nextPaymentId = paymentOptions.some((p) => p.id === prefill?.paymentConditionId)
       ? String(prefill?.paymentConditionId)
       : paymentOptions[0]?.id || '';
+    // ลิงก์ที่ระบุคลังมาก่อน ไม่งั้นใช้คลังของออเดอร์ล่าสุด หรือคลังเดียวที่มีสิทธิ์
     const nextDepotId = depotOptions.some((d) => d.depot_id === prefill?.depotId)
       ? String(prefill?.depotId)
-      : '';
+      : pickDefaultDepot({
+        depots: depotOptions.map((d) => ({ depot_id: d.depot_id, refinery_id: d.refinery_id })),
+        refineryIds: depotOptions.map((d) => d.refinery_id || ''),
+        lastOrder: lastOrderDepot,
+      }).depot_id;
     const nextItems = nextDepotId
       ? recalcItemsByDepotAndPayment(
         choices.map((c) => ({ ...c, selected: false, liters: 0 })),

@@ -1,5 +1,21 @@
 import { TyphoonOCRResponse } from '@/types/dto';
 
+/** Upstream timeout; must stay below the route's maxDuration (60s). */
+const TYPHOON_TIMEOUT_MS = 55_000;
+
+/** Thrown when Typhoon OCR does not answer within TYPHOON_TIMEOUT_MS. */
+export class OcrTimeoutError extends Error {
+  constructor() {
+    super('OCR ใช้เวลานานเกินไป กรุณาลองใหม่อีกครั้ง');
+    this.name = 'OcrTimeoutError';
+  }
+}
+
+/**
+ * Send an image to Typhoon OCR and return the raw text.
+ * @param base64Image raw base64 JPEG or a data:image/... URL
+ * @throws OcrTimeoutError when the upstream call exceeds TYPHOON_TIMEOUT_MS
+ */
 export async function callTyphoonOCR(base64Image: string): Promise<TyphoonOCRResponse> {
   const url = process.env.TYPHOON_OCR_API_URL;
   const key = process.env.TYPHOON_OCR_API_KEY;
@@ -11,8 +27,11 @@ export async function callTyphoonOCR(base64Image: string): Promise<TyphoonOCRRes
     ? url
     : `${url.replace(/\/ocr$/, '').replace(/\/$/, '')}/chat/completions`;
 
-  const res = await fetch(endpoint, {
+  let res: Response;
+  try {
+    res = await fetch(endpoint, {
     method: 'POST',
+    signal: AbortSignal.timeout(TYPHOON_TIMEOUT_MS),
     headers: {
       'Content-Type': 'application/json',
       Authorization: `Bearer ${key}`,
@@ -43,7 +62,12 @@ export async function callTyphoonOCR(base64Image: string): Promise<TyphoonOCRRes
         },
       ],
     }),
-  });
+    });
+  } catch (e) {
+    const name = (e as Error)?.name;
+    if (name === 'TimeoutError' || name === 'AbortError') throw new OcrTimeoutError();
+    throw new Error(`เชื่อมต่อ Typhoon OCR ไม่สำเร็จ: ${(e as Error).message}`);
+  }
 
   const text = await res.text();
 

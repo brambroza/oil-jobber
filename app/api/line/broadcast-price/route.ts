@@ -1,8 +1,9 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { requireStaff } from '@/lib/auth/api-guard';
 import { supabaseAdmin } from '@/lib/supabase/server';
-import { pushLinePayload, type LinePushContext } from '@/lib/services/line';
+import { logOutboundLineMessages, pushLinePayload, type LinePushContext } from '@/lib/services/line';
 import { inCustomerScope, loadCustomerScope } from '@/lib/services/customer-scope';
+import { pickFlexMessage } from '@/lib/utils/line-flex';
 
 /**
  * Sends the price broadcast (Flex + text fallback) to selected LINE recipients.
@@ -58,14 +59,14 @@ export async function POST(req: NextRequest) {
       await pushLinePayload(lineRecipientId, messages.length ? messages : [{ type: 'text', text: message }], linePushContext);
 
       await supabaseAdmin.from('line_broadcast_recipients').insert({ company_id: companyId, line_broadcast_id: b.id, line_customer_id: lineCustomerId, sent_at: new Date().toISOString() });
-      await supabaseAdmin.from('line_messages').insert({
+      await logOutboundLineMessages([{
         company_id: companyId,
         line_customer_id: lineCustomerId,
         group_id: lineCustomer.group_id || null,
-        direction: 'OUT',
         message_type: 'price_broadcast',
         message_text: message,
-      });
+        message_payload: pickFlexMessage(messages),
+      }]);
     } catch (e) {
       failures.push({ lineCustomerId, lineRecipientId: 'unknown', error: (e as Error).message });
     }

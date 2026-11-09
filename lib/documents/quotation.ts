@@ -1,17 +1,19 @@
 import type { TDocumentDefinitions } from 'pdfmake/interfaces';
-import { baseDefinition, customerBlock, itemsTable, metaGrid, sellerBlock, signatures, totalsBlock, COLORS } from '@/lib/documents/pdf';
-import { dateTh, money, liters } from '@/lib/documents/format';
+import { baseDefinition, customerBlock, itemsTable, metaGrid, sellerBlock, signatures, totalsBlock, vatTotalsRows, COLORS } from '@/lib/documents/pdf';
+import { dateTh, liters } from '@/lib/documents/format';
 import { thaiBahtText } from '@/lib/utils/thai-baht-text';
 import type { QuotationDocumentData } from '@/lib/documents/types';
+import { DEFAULT_VAT_MODE, type VatMode } from '@/lib/documents/vat-mode';
 
 /**
- * ใบเสนอราคา: VAT-inclusive prices offered to the customer, from the snapshot
- * taken when the quotation was issued.
+ * ใบเสนอราคา: prices offered to the customer, from the snapshot taken when
+ * the quotation was issued.
  *
  * @param data - order context with quotation snapshot
+ * @param vatMode - show prices excl. VAT (default) or incl. VAT
  * @returns pdfmake document definition
  */
-export function buildQuotationPdf(data: QuotationDocumentData): TDocumentDefinitions {
+export function buildQuotationPdf(data: QuotationDocumentData, vatMode: VatMode = DEFAULT_VAT_MODE): TDocumentDefinitions {
   const t = data.totals;
   const q = data.quotation;
   return baseDefinition(`ใบเสนอราคา ${q.quotation_no}`, [
@@ -45,18 +47,10 @@ export function buildQuotationPdf(data: QuotationDocumentData): TDocumentDefinit
       ],
       columnGap: 14,
     },
-    itemsTable(data.items, t, 'incl'),
+    itemsTable(data.items, t, vatMode),
     totalsBlock([
       { label: 'รวมปริมาณ', value: `${liters(t.total_liters)} ลิตร` },
-      ...(t.discount_incl_vat > 0
-        ? [
-          { label: 'รวมรายการ (รวม VAT)', value: money(t.gross_before_discount) },
-          { label: `หัก ส่วนลดท้ายบิล${data.discount_note ? ` (${data.discount_note})` : ''}`, value: `-${money(t.discount_incl_vat)}` },
-        ]
-        : []),
-      { label: 'ยอดก่อน VAT', value: money(t.subtotal_ex_vat) },
-      { label: 'ภาษีมูลค่าเพิ่ม 7%', value: money(t.vat) },
-      { label: 'ยอดรวมสุทธิ', value: money(t.net_incl_vat), final: true },
+      ...vatTotalsRows(t, vatMode, { discountNote: data.discount_note }),
     ]),
     { text: `(${thaiBahtText(t.net_incl_vat)})`, bold: true, alignment: 'right', margin: [0, 4, 0, 10] },
     {

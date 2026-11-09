@@ -1,4 +1,5 @@
 import { supabaseAdmin } from '@/lib/supabase/server';
+import { isMissingPayloadColumnError } from '@/lib/utils/line-flex';
 
 type LinePushMessage = {
   type: string;
@@ -139,6 +140,34 @@ export async function pushLinePayload(lineUserId: string, messages: LinePushMess
 
 export async function pushLineMessage(lineUserId: string, text: string, context: LinePushContext = {}) {
   await pushLinePayload(lineUserId, [{ type: 'text', text }], context);
+}
+
+type OutboundLineMessage = {
+  company_id: string;
+  line_customer_id: string | null;
+  group_id: string | null;
+  message_type: string;
+  message_text: string;
+  message_payload?: unknown;
+};
+
+/**
+ * Records messages already pushed to LINE so they appear in the chat page.
+ * Falls back to text-only rows while the `message_payload` migration is not
+ * applied, because a lost log row would hide the message from staff.
+ *
+ * @param messages - rows to record; the direction is always `OUT`
+ */
+export async function logOutboundLineMessages(messages: OutboundLineMessage[]) {
+  const rows = messages.map((message) => ({ ...message, direction: 'OUT' }));
+  const { error } = await supabaseAdmin.from('line_messages').insert(rows);
+  if (isMissingPayloadColumnError(error)) {
+    const textRows = rows.map(({ message_payload: _payload, ...row }) => row);
+    const retry = await supabaseAdmin.from('line_messages').insert(textRows);
+    if (retry.error) console.error('บันทึกข้อความ LINE ไม่สำเร็จ:', retry.error.message);
+    return;
+  }
+  if (error) console.error('บันทึกข้อความ LINE ไม่สำเร็จ:', error.message);
 }
 
 export async function getLineProfile(lineUserId: string): Promise<{ displayName?: string; pictureUrl?: string } | null> {

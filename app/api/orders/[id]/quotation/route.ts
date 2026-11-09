@@ -19,8 +19,8 @@ export async function GET(_: NextRequest, { params }: { params: Promise<{ id: st
 }
 
 /**
- * Issues a quotation (QT-YYMMDD####) from the sale order. Returns 409 with the
- * existing quotation unless `reissue` is true.
+ * Issues a quotation (QT-YYMM####) from the sale order. Returns 409 with the
+ * existing quotation unless `reissue` or `only_if_changed` is true.
  */
 export async function POST(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   const guard = await requireStaff('orders');
@@ -36,6 +36,7 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
     valid_until: parsed.data.valid_until,
     note: parsed.data.note,
     reissue: parsed.data.reissue ?? false,
+    only_if_changed: parsed.data.only_if_changed ?? false,
   });
   if ('error' in result) {
     return NextResponse.json({ error: result.error, ...(result.quotation ? { quotation: result.quotation } : {}) }, { status: result.status });

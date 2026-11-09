@@ -44,6 +44,7 @@ function totals(net: number): DocumentTotals {
 function orderDoc(overrides: Partial<OrderDocumentData> = {}): OrderDocumentData {
   return {
     order_id: 'o1',
+    price_vat_mode: 'excl',
     order_no: 'SO-2610140001',
     order_date: '2026-10-14T03:00:00Z',
     due_date: null,

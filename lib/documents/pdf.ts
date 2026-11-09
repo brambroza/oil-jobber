@@ -5,6 +5,8 @@ import type { TDocumentDefinitions, Column, Content, TableCell } from 'pdfmake/i
 import { money, liters as formatLiters, phoneTh } from '@/lib/documents/format';
 import type { DocumentItem, DocumentTotals, SellerInfo, CustomerInfo } from '@/lib/documents/types';
 import { formatDateTime } from '@/lib/utils/date-format';
+import { round2, VAT_MULTIPLIER } from '@/lib/services/order-pricing';
+import type { VatMode } from '@/lib/documents/vat-mode';
 
 const FONT_DIR = path.join(process.cwd(), 'lib', 'documents', 'fonts');
 
@@ -120,9 +122,9 @@ function headerCell(text: string, alignment: 'left' | 'right' | 'center' = 'left
 
 /**
  * Item table. `mode` picks whether unit prices and amounts are shown
- * VAT-inclusive (purchase order) or VAT-exclusive (tax invoice).
+ * VAT-inclusive (ราคารวมภาษี) or VAT-exclusive (ราคาไม่รวมภาษี).
  */
-export function itemsTable(items: DocumentItem[], totals: DocumentTotals, mode: 'incl' | 'excl'): Content {
+export function itemsTable(items: DocumentItem[], totals: DocumentTotals, mode: VatMode): Content {
   const excl = mode === 'excl';
   const body: TableCell[][] = [[
     headerCell('#', 'center'),
@@ -145,7 +147,7 @@ export function itemsTable(items: DocumentItem[], totals: DocumentTotals, mode: 
       { text: String(items.length + 1), alignment: 'center', margin: [4, 3, 4, 3] },
       { text: `ค่าขนส่ง ${money(totals.delivery_fee_per_liter)} บาท/ลิตร × ${formatLiters(totals.total_liters)} ลิตร`, margin: [4, 3, 4, 3] },
       { text: formatLiters(totals.total_liters), alignment: 'right', margin: [4, 3, 4, 3] },
-      { text: money(excl ? totals.delivery_fee_per_liter / 1.07 : totals.delivery_fee_per_liter, excl ? 4 : 2), alignment: 'right', margin: [4, 3, 4, 3] },
+      { text: money(excl ? totals.delivery_fee_per_liter / VAT_MULTIPLIER : totals.delivery_fee_per_liter, excl ? 4 : 2), alignment: 'right', margin: [4, 3, 4, 3] },
       { text: money(excl ? totals.delivery_fee_ex_vat : totals.delivery_fee_incl_vat), alignment: 'right', margin: [4, 3, 4, 3] },
     ]);
   }
@@ -160,8 +162,54 @@ export function itemsTable(items: DocumentItem[], totals: DocumentTotals, mode: 
   };
 }
 
+export type TotalsRow = { label: string; value: string; final?: boolean };
+
+/**
+ * Money rows of the totals block, matching the item table's VAT mode.
+ * - `excl`: รวมเงิน (ก่อน VAT) → หักส่วนลด → ยอดหลังหักส่วนลด → VAT → ยอดรวม
+ * - `incl`: รวมรายการ (รวม VAT) → หักส่วนลด → ยอดก่อน VAT → VAT → ยอดรวม
+ *
+ * @param t - document totals
+ * @param mode - VAT display mode
+ * @param options - discount note and label of the final (grand total) row
+ * @returns rows for {@link totalsBlock}
+ */
+export function vatTotalsRows(
+  t: DocumentTotals,
+  mode: VatMode,
+  options: { discountNote?: string | null; finalLabel?: string } = {},
+): TotalsRow[] {
+  const finalLabel = options.finalLabel || 'ยอดรวมสุทธิ';
+  const discountLabel = `หัก ส่วนลดท้ายบิล${options.discountNote ? ` (${options.discountNote})` : ''}`;
+  const hasDiscount = t.discount_incl_vat > 0;
+  const vatRows: TotalsRow[] = [
+    { label: 'ภาษีมูลค่าเพิ่ม 7%', value: money(t.vat) },
+    { label: finalLabel, value: money(t.net_incl_vat), final: true },
+  ];
+  if (mode === 'excl') {
+    return hasDiscount
+      ? [
+        { label: 'รวมเงิน (ก่อน VAT)', value: money(round2(t.goods_ex_vat + t.delivery_fee_ex_vat)) },
+        { label: discountLabel, value: `-${money(t.discount_ex_vat)}` },
+        { label: 'ยอดหลังหักส่วนลด', value: money(t.subtotal_ex_vat) },
+        ...vatRows,
+      ]
+      : [{ label: 'รวมเงิน (ก่อน VAT)', value: money(t.subtotal_ex_vat) }, ...vatRows];
+  }
+  return [
+    ...(hasDiscount
+      ? [
+        { label: 'รวมรายการ (รวม VAT)', value: money(t.gross_before_discount) },
+        { label: discountLabel, value: `-${money(t.discount_incl_vat)}` },
+      ]
+      : []),
+    { label: 'ยอดก่อน VAT', value: money(t.subtotal_ex_vat) },
+    ...vatRows,
+  ];
+}
+
 /** Totals block aligned right. `final` row is highlighted. */
-export function totalsBlock(rows: Array<{ label: string; value: string; final?: boolean }>): Content {
+export function totalsBlock(rows: TotalsRow[]): Content {
   return {
     columns: [
       { width: '*', text: '' },

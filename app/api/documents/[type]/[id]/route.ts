@@ -4,6 +4,7 @@ import { supabaseAdmin } from '@/lib/supabase/server';
 import { canAccessOrder, customerForbidden, isScopedRole } from '@/lib/services/customer-scope';
 import { DOCUMENT_TYPES, generateDocumentPdf } from '@/lib/services/documents';
 import type { DocumentType } from '@/lib/documents/types';
+import { parseOptionalVatMode } from '@/lib/documents/vat-mode';
 
 export const runtime = 'nodejs';
 
@@ -17,7 +18,7 @@ async function canAccessDocument(ctx: StaffContext, type: DocumentType, id: stri
 
 /**
  * Streams a PDF document. `?download=1` forces a download, `?copy=1` prints
- * the tax invoice as สำเนา.
+ * the tax invoice as สำเนา, `?vat=excl|incl` overrides the bill's saved price mode.
  */
 export async function GET(req: NextRequest, { params }: { params: Promise<{ type: string; id: string }> }) {
   const guard = await requireStaff('orders');
@@ -28,7 +29,8 @@ export async function GET(req: NextRequest, { params }: { params: Promise<{ type
 
   const copy = req.nextUrl.searchParams.get('copy') === '1';
   const download = req.nextUrl.searchParams.get('download') === '1';
-  const doc = await generateDocumentPdf(guard.ctx.companyId, type as DocumentType, id, { copy });
+  const vatMode = parseOptionalVatMode(req.nextUrl.searchParams.get('vat'));
+  const doc = await generateDocumentPdf(guard.ctx.companyId, type as DocumentType, id, { copy, vatMode });
   if ('error' in doc) return NextResponse.json({ error: doc.error }, { status: doc.status });
 
   return new NextResponse(new Uint8Array(doc.buffer), {

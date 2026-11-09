@@ -1,11 +1,16 @@
 import type { TDocumentDefinitions } from 'pdfmake/interfaces';
-import { baseDefinition, customerBlock, itemsTable, metaGrid, sellerBlock, signatures, totalsBlock, COLORS } from '@/lib/documents/pdf';
-import { dateTh, money, liters, phoneTh } from '@/lib/documents/format';
+import { baseDefinition, customerBlock, itemsTable, metaGrid, sellerBlock, signatures, totalsBlock, vatTotalsRows, COLORS } from '@/lib/documents/pdf';
+import { dateTh, liters, phoneTh } from '@/lib/documents/format';
 import { thaiBahtText } from '@/lib/utils/thai-baht-text';
 import type { OrderDocumentData } from '@/lib/documents/types';
+import { DEFAULT_VAT_MODE, type VatMode } from '@/lib/documents/vat-mode';
 
-/** ใบสั่งขาย: VAT-inclusive prices as agreed with the customer. */
-export function buildPurchaseOrderPdf(data: OrderDocumentData): TDocumentDefinitions {
+/**
+ * ใบสั่งขาย.
+ * @param data - order document data
+ * @param vatMode - show prices excl. VAT (default) or incl. VAT
+ */
+export function buildPurchaseOrderPdf(data: OrderDocumentData, vatMode: VatMode = DEFAULT_VAT_MODE): TDocumentDefinitions {
   const t = data.totals;
   return baseDefinition(`ใบสั่งขาย ${data.order_no}`, [
     {
@@ -38,18 +43,10 @@ export function buildPurchaseOrderPdf(data: OrderDocumentData): TDocumentDefinit
       ],
       columnGap: 14,
     },
-    itemsTable(data.items, t, 'incl'),
+    itemsTable(data.items, t, vatMode),
     totalsBlock([
       { label: 'รวมปริมาณ', value: `${liters(t.total_liters)} ลิตร` },
-      ...(t.discount_incl_vat > 0
-        ? [
-          { label: 'รวมรายการ (รวม VAT)', value: money(t.gross_before_discount) },
-          { label: `หัก ส่วนลดท้ายบิล${data.discount_note ? ` (${data.discount_note})` : ''}`, value: `-${money(t.discount_incl_vat)}` },
-        ]
-        : []),
-      { label: 'ยอดก่อน VAT', value: money(t.subtotal_ex_vat) },
-      { label: 'ภาษีมูลค่าเพิ่ม 7%', value: money(t.vat) },
-      { label: 'ยอดรวมสุทธิ', value: money(t.net_incl_vat), final: true },
+      ...vatTotalsRows(t, vatMode, { discountNote: data.discount_note }),
     ]),
     { text: `(${thaiBahtText(t.net_incl_vat)})`, bold: true, alignment: 'right', margin: [0, 4, 0, 10] },
     {

@@ -1,6 +1,7 @@
 import { supabaseAdmin } from '@/lib/supabase/server';
 import { loadSalesUserNames, loadStaffSignatures } from '@/lib/services/order-items';
 import { round2, splitVat, VAT_MULTIPLIER } from '@/lib/services/order-pricing';
+import { parseVatMode } from '@/lib/documents/vat-mode';
 import { receiveMethodThai, sourceLabel } from '@/lib/documents/format';
 import { foldDeliveryFeeIntoItems } from '@/lib/documents/fold-delivery-fee';
 import type { OrderDocumentData, SellerInfo, DocumentItem, PaymentLine, ReceiptDocumentData } from '@/lib/documents/types';
@@ -163,6 +164,7 @@ export async function loadOrderDocumentData(companyId: string, orderId: string):
       delivery_fee_ex_vat: 0,
     },
     remark: order.remark ?? null,
+    price_vat_mode: parseVatMode(order.price_vat_mode),
     discount_note: order.discount_note ?? null,
     receive_method_label: receiveMethodThai(order.receive_method),
     delivery_location: order.delivery_location ?? null,

@@ -76,6 +76,20 @@ function isSameRun(a: ChatMessageLike | undefined, b: ChatMessageLike | undefine
 }
 
 /**
+ * Adds polled messages to the list; rows already held are skipped.
+ *
+ * @param current - messages in ascending time order
+ * @param incoming - messages from the latest poll
+ * @returns `current` itself when nothing is new, so React skips a re-render
+ */
+export function mergeMessages<T extends { id: string; created_at: string }>(current: T[], incoming: T[]): T[] {
+  const known = new Set(current.map((message) => message.id));
+  const fresh = incoming.filter((message) => !known.has(message.id));
+  if (!fresh.length) return current;
+  return [...current, ...fresh].sort((a, b) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime());
+}
+
+/**
  * Splits messages into day sections and marks runs of consecutive messages
  * from one side, so a run can share a single timestamp and avatar.
  *

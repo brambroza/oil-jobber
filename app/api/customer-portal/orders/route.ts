@@ -118,6 +118,8 @@ export async function GET() {
     .eq('company_id', ctx.companyId)
     .eq('customer_id', ctx.customerId)
     .eq('is_deleted', false)
+    // ใบเสนอราคาที่ยังไม่แปลง/ปิดแล้ว เป็นของฝั่งพนักงาน ไม่แสดงให้ลูกค้า
+    .or('quotation_stage.is.null,quotation_stage.eq.CONVERTED')
     .order('created_at', { ascending: false });
 
   if (error) return NextResponse.json({ error: error.message }, { status: 400 });

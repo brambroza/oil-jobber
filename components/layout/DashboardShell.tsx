@@ -35,6 +35,7 @@ import {
   PeopleOutline,
   PriceCheckOutlined,
   ReceiptLongOutlined,
+  DescriptionOutlined,
   RequestQuoteOutlined,
   ScannerOutlined,
   SettingsOutlined,
@@ -70,6 +71,7 @@ const menuGroups: MenuGroup[] = [
   {
     title: 'ปฏิบัติการ',
     items: [
+      { label: 'ใบเสนอราคา', href: '/dashboard/quotations', icon: <DescriptionOutlined fontSize='small' />, module: 'orders' },
       { label: 'ใบสั่งขาย', href: '/dashboard/orders', icon: <ReceiptLongOutlined fontSize='small' />, module: 'orders' },
       { label: 'ใบกำกับภาษี', href: '/dashboard/accounting/invoices', icon: <ReceiptOutlined fontSize='small' />, module: 'accounting' },
       { label: 'บัญชี', href: '/dashboard/accounting', icon: <RequestQuoteOutlined fontSize='small' />, module: 'accounting' },

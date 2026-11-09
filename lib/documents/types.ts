@@ -1,4 +1,5 @@
 import type { PaymentMethod } from '@/types/database';
+import type { VatMode } from '@/lib/documents/vat-mode';
 
 export type DocumentType = 'purchase-order' | 'quotation' | 'tax-invoice' | 'delivery-note' | 'receipt' | 'delivery-record';
 
@@ -72,6 +73,8 @@ export type DeliveryRecordInfo = {
 
 export type OrderDocumentData = {
   order_id: string;
+  /** รูปแบบราคาที่เลือกไว้บนบิล ใช้เป็นค่าเริ่มต้นของเอกสาร */
+  price_vat_mode: VatMode;
   order_no: string;
   order_date: string;
   due_date: string | null;

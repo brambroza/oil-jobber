@@ -1,5 +1,5 @@
 import { supabaseAdmin } from '@/lib/supabase/server';
-import { pushLinePayload } from '@/lib/services/line';
+import { logOutboundLineMessages, pushLinePayload } from '@/lib/services/line';
 
 type NewsBroadcast = {
   id: string;
@@ -144,24 +144,23 @@ export async function sendLineNewsBroadcast(newsId: string) {
         .from('line_news_broadcast_recipients')
         .update({ sent_at: sentAt, error_message: null })
         .eq('id', recipient.id);
-      await supabaseAdmin.from('line_messages').insert({
-        company_id: news.company_id,
-        line_customer_id: lineCustomerId,
-        group_id: groupId || null,
-        direction: 'OUT',
-        message_type: 'flex',
-        message_text: news.title,
-      });
-      if (imageReplyUrls.length) {
-        await supabaseAdmin.from('line_messages').insert(imageReplyUrls.map((url) => ({
+      await logOutboundLineMessages([
+        {
           company_id: news.company_id,
           line_customer_id: lineCustomerId,
           group_id: groupId || null,
-          direction: 'OUT',
+          message_type: 'flex',
+          message_text: news.title,
+          message_payload: flexMessage,
+        },
+        ...imageReplyUrls.map((url) => ({
+          company_id: news.company_id,
+          line_customer_id: lineCustomerId,
+          group_id: groupId || null,
           message_type: 'image',
           message_text: url,
-        })));
-      }
+        })),
+      ]);
     } catch (e) {
       const message = (e as Error).message;
       failures.push({ lineCustomerId, error: message });

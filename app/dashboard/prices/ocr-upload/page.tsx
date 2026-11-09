@@ -24,6 +24,7 @@ import { CameraAltOutlined, UploadFileOutlined } from '@mui/icons-material';
 import { PageScaffold } from '@/components/common/PageScaffold';
 import { parseCartex, type ParsedDepotPrice } from '@/lib/ocr/cartex';
 import { findDepotByFuzzyCode } from '@/lib/ocr/depot-match';
+import { compressImageForOcr } from '@/lib/utils/image-compress';
 
 type Depot = { id: string; code: string; name: string; refinery_id?: string | null };
 type OilProduct = { id: string; code: string; name: string; is_active: boolean };
@@ -37,17 +38,23 @@ type PriceRow = {
   price: number | string;
 };
 
-function fileToBase64(file: File): Promise<string> {
-  return new Promise((resolve, reject) => {
-    const reader = new FileReader();
-    reader.onload = () => {
-      const value = String(reader.result ?? '');
-      const base64 = value.includes(',') ? value.split(',')[1] : value;
-      resolve(base64);
-    };
-    reader.onerror = () => reject(new Error('อ่านไฟล์ไม่สำเร็จ'));
-    reader.readAsDataURL(file);
-  });
+/** Client-side timeout for the OCR request (server allows up to 60s). */
+const OCR_CLIENT_TIMEOUT_MS = 75_000;
+
+/**
+ * Map low-level fetch failures (Safari "Load failed", Chrome "Failed to fetch", abort)
+ * to a Thai message the user can act on.
+ * @param err caught error
+ */
+function toOcrErrorMessage(err: unknown): string {
+  const e = err as Error;
+  if (e?.name === 'AbortError' || e?.name === 'TimeoutError') {
+    return 'OCR ใช้เวลานานเกินไป กรุณาลองใหม่อีกครั้ง (ตรวจสอบสัญญาณอินเทอร์เน็ต)';
+  }
+  if (e instanceof TypeError && /load failed|failed to fetch|networkerror|network request failed/i.test(e.message)) {
+    return 'เชื่อมต่อเซิร์ฟเวอร์ไม่สำเร็จ (Load failed) กรุณาตรวจสอบอินเทอร์เน็ตแล้วลองใหม่';
+  }
+  return e?.message || 'ส่ง OCR ไม่สำเร็จ';
 }
 
 function todayDdMmYyyy(): string {
@@ -244,6 +251,7 @@ export default function OCRUploadPage() {
   const [base64Image, setBase64Image] = useState('');
   const [rawText, setRawText] = useState('');
   const [loading, setLoading] = useState(false);
+  const [preparing, setPreparing] = useState(false);
   const [error, setError] = useState('');
 
   const [openReview, setOpenReview] = useState(false);
@@ -254,7 +262,7 @@ export default function OCRUploadPage() {
   const [remark, setRemark] = useState('');
   const [rows, setRows] = useState<PriceRow[]>([]);
 
-  const canSubmit = useMemo(() => Boolean(base64Image && refineryId) && !loading, [base64Image, refineryId, loading]);
+  const canSubmit = useMemo(() => Boolean(base64Image && refineryId) && !loading && !preparing, [base64Image, refineryId, loading, preparing]);
 
   const loadMasters = async () => {
     if (!companyId) return;
@@ -271,17 +279,25 @@ export default function OCRUploadPage() {
 
   useEffect(() => { void loadMasters(); }, [companyId]);
 
+  // Release the preview object URL when it changes / on unmount.
+  useEffect(() => () => { if (previewUrl) URL.revokeObjectURL(previewUrl); }, [previewUrl]);
+
   const onSelectFile = async (e: ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
+    e.target.value = ''; // allow re-selecting the same file
     if (!file) return;
     setError('');
+    setBase64Image('');
     setFileName(file.name);
     setPreviewUrl(URL.createObjectURL(file));
+    setPreparing(true);
     try {
-      const base64 = await fileToBase64(file);
+      const { base64 } = await compressImageForOcr(file);
       setBase64Image(base64);
     } catch (err) {
-      setError((err as Error).message);
+      setError((err as Error).message || 'อ่านไฟล์ไม่สำเร็จ');
+    } finally {
+      setPreparing(false);
     }
   };
 
@@ -369,9 +385,14 @@ export default function OCRUploadPage() {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ base64Image }),
+        signal: AbortSignal.timeout(OCR_CLIENT_TIMEOUT_MS),
       });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error || 'ส่ง OCR ไม่สำเร็จ');
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        if (res.status === 413) throw new Error('ไฟล์ภาพใหญ่เกินไป กรุณาครอปหรือถ่ายใหม่');
+        if (res.status === 504) throw new Error('OCR ใช้เวลานานเกินไป กรุณาลองใหม่อีกครั้ง');
+        throw new Error(data.error || `ส่ง OCR ไม่สำเร็จ (${res.status})`);
+      }
 
       const text = String(data.rawText ?? '');
       setRawText(text);
@@ -380,7 +401,7 @@ export default function OCRUploadPage() {
       setRemark('');
       setOpenReview(true);
     } catch (err) {
-      setError((err as Error).message);
+      setError(toOcrErrorMessage(err));
     } finally {
       setLoading(false);
     }
@@ -440,7 +461,7 @@ export default function OCRUploadPage() {
         {previewUrl ? <Box sx={{ border: '1px solid', borderColor: 'divider', borderRadius: 2, p: 1, width: 'fit-content', maxWidth: '100%' }}><Box component='img' src={previewUrl} alt='OCR Preview' sx={{ width: '100%', maxWidth: 420, borderRadius: 1, display: 'block' }} /></Box> : null}
 
         <Button variant='contained' onClick={onSubmit} disabled={!canSubmit} sx={{ width: { xs: '100%', sm: 'auto' } }}>
-          {loading ? <><CircularProgress size={18} sx={{ mr: 1 }} />กำลังส่ง OCR...</> : 'อ่านไฟล์ภาพ และแมพราคา'}
+          {preparing ? <><CircularProgress size={18} sx={{ mr: 1 }} />กำลังเตรียมภาพ...</> : loading ? <><CircularProgress size={18} sx={{ mr: 1 }} />กำลังอ่านภาพ (อาจใช้เวลา 10-30 วินาที)...</> : 'อ่านไฟล์ภาพ และแมพราคา'}
         </Button>
 
         {error ? <Alert severity='error'>{error}</Alert> : null}

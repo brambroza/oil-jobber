@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
+import { loadLastOrderDepot } from '@/lib/services/last-order-depot';
 import { requireStaff } from '@/lib/auth/api-guard';
 import { supabaseAdmin } from '@/lib/supabase/server';
 import { loadDeliveryFeeSurcharge } from '@/lib/services/order-items';
@@ -37,7 +38,7 @@ export async function GET(req: NextRequest) {
   if (roundId && !isAdmin) return NextResponse.json({ error: 'เฉพาะผู้ดูแลระบบเท่านั้นที่เลือกรอบราคาได้' }, { status: 403 });
   if (!(await canAccessCustomer(guard.ctx, customerId))) return customerForbidden();
 
-  const [customerRes, accessRes, roundsRes, productsRes, surchargeRes] = await Promise.all([
+  const [customerRes, accessRes, roundsRes, productsRes, surchargeRes, lastOrderRes] = await Promise.all([
     supabaseAdmin
       .from('customers')
       .select('id, price_adjustment_per_liter, sales_fee_per_liter')
@@ -65,6 +66,7 @@ export async function GET(req: NextRequest) {
       .eq('company_id', companyId)
       .eq('is_deleted', false),
     loadDeliveryFeeSurcharge(companyId),
+    loadLastOrderDepot(companyId, customerId),
   ]);
 
   if (customerRes.error) return NextResponse.json({ error: customerRes.error.message }, { status: 400 });
@@ -171,5 +173,7 @@ export async function GET(req: NextRequest) {
     delivery_fee_surcharge_per_liter: deliveryFeeSurcharge,
     price_options: priceOptions,
     price_rounds: priceRounds,
+    /** โรงกลั่น/คลังของออเดอร์ล่าสุดของลูกค้า ใช้เป็นค่าเริ่มต้นของบิลใหม่ */
+    last_order_depot: lastOrderRes && !('error' in lastOrderRes) ? lastOrderRes : null,
   });
 }

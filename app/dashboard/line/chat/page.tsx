@@ -19,13 +19,16 @@ import {
   Tooltip,
   Typography,
 } from '@mui/material';
+import { FlexMessagePreview } from '@/components/line/FlexMessagePreview';
 import { formatDateTime } from '@/lib/utils/date-format';
 import {
   formatClockTime,
   formatConversationTime,
   groupMessagesByDay,
+  mergeMessages,
   sortConversations,
 } from '@/lib/utils/line-chat';
+import { extractFlexContainer, flexSafeUrl } from '@/lib/utils/line-flex';
 
 type LineCustomer = {
   id: string;
@@ -45,6 +48,7 @@ type LineMessage = {
   direction: 'IN' | 'OUT';
   message_type: string;
   message_text: string | null;
+  message_payload?: unknown;
   created_at: string;
 };
 
@@ -86,6 +90,50 @@ function EmptyPane({ title, hint }: { title: string; hint?: string }) {
   );
 }
 
+/** Message body: Flex as the customer saw it, then image, then the plain-text bubble. */
+function MessageContent({ message, out, startsRun }: { message: LineMessage; out: boolean; startsRun: boolean }) {
+  const flex = extractFlexContainer(message.message_payload);
+  const imageUrl = message.message_type === 'image' ? flexSafeUrl(message.message_text) : null;
+  const sentAt = formatDateTime(message.created_at);
+
+  if (flex) {
+    return <Box title={sentAt} sx={{ minWidth: 0, maxWidth: { xs: '85%', md: '65%' } }}><FlexMessagePreview container={flex} /></Box>;
+  }
+  if (imageUrl) {
+    return (
+      <Box
+        component='a'
+        href={imageUrl}
+        target='_blank'
+        rel='noopener noreferrer'
+        title={sentAt}
+        sx={{ display: 'block', maxWidth: { xs: '70%', md: 280 }, overflow: 'hidden', borderRadius: '14px', border: '1px solid', borderColor: 'divider' }}
+      >
+        <Box component='img' src={imageUrl} alt='' loading='lazy' sx={{ display: 'block', width: '100%' }} />
+      </Box>
+    );
+  }
+  return (
+    <Box
+      title={sentAt}
+      sx={{
+        maxWidth: { xs: '78%', md: '65%' },
+        px: 1.5,
+        py: 0.875,
+        borderRadius: '14px',
+        ...(startsRun ? (out ? { borderTopRightRadius: 4 } : { borderTopLeftRadius: 4 }) : {}),
+        bgcolor: out ? OUT_BUBBLE_COLOR : '#ffffff',
+        border: out ? 'none' : '1px solid',
+        borderColor: 'divider',
+      }}
+    >
+      <Typography variant='body2' sx={{ whiteSpace: 'pre-wrap', overflowWrap: 'anywhere' }}>
+        {message.message_text || '-'}
+      </Typography>
+    </Box>
+  );
+}
+
 export default function LineChatPage() {
   const [companyId] = useState(process.env.NEXT_PUBLIC_DEFAULT_COMPANY_ID ?? '');
 
@@ -106,6 +154,7 @@ export default function LineChatPage() {
   const messagesRef = useRef<HTMLDivElement | null>(null);
   const messagesRequestRef = useRef(0);
   const stickToBottomRef = useRef(true);
+  const latestMessageAtRef = useRef('');
 
   const selectedCustomer = useMemo(
     () => customers.find((c) => c.id === selectedCustomerId) ?? null,
@@ -160,14 +209,17 @@ export default function LineChatPage() {
     // Only the latest request may write: a slow reply must not fill another room.
     const requestId = ++messagesRequestRef.current;
     if (!silent) setLoadingMessages(true);
+    const after = silent ? latestMessageAtRef.current : '';
 
     try {
-      const res = await fetch(`/api/line/messages?company_id=${companyId}&line_customer_id=${lineCustomerId}&limit=300`);
+      const params = new URLSearchParams({ company_id: companyId, line_customer_id: lineCustomerId, limit: '300' });
+      if (after) params.set('after', after);
+      const res = await fetch(`/api/line/messages?${params}`);
       const data = await res.json();
       if (requestId !== messagesRequestRef.current) return;
 
       if (res.ok) {
-        setMessages(data || []);
+        setMessages((current) => (after ? mergeMessages(current, data || []) : data || []));
       } else if (!silent) {
         setError(data.error || 'โหลดข้อความไม่สำเร็จ');
       }
@@ -189,6 +241,7 @@ export default function LineChatPage() {
     // A half-typed reply must not carry over and reach the wrong customer.
     setDraft('');
     setMessages([]);
+    latestMessageAtRef.current = '';
     setSelectedCustomerId(id);
   };
 
@@ -217,6 +270,7 @@ export default function LineChatPage() {
   }, [selectedCustomerId, companyId]);
 
   useEffect(() => {
+    latestMessageAtRef.current = messages[messages.length - 1]?.created_at ?? '';
     if (!messagesRef.current || !stickToBottomRef.current) return;
     messagesRef.current.scrollTop = messagesRef.current.scrollHeight;
   }, [messages, mobilePane]);
@@ -440,23 +494,7 @@ export default function LineChatPage() {
                               {startsRun ? <RoomAvatar customer={selectedCustomer} size={28} /> : null}
                             </Box>
                           ) : null}
-                          <Box
-                            title={formatDateTime(m.created_at)}
-                            sx={{
-                              maxWidth: { xs: '78%', md: '65%' },
-                              px: 1.5,
-                              py: 0.875,
-                              borderRadius: '14px',
-                              ...(startsRun ? (out ? { borderTopRightRadius: 4 } : { borderTopLeftRadius: 4 }) : {}),
-                              bgcolor: out ? OUT_BUBBLE_COLOR : '#ffffff',
-                              border: out ? 'none' : '1px solid',
-                              borderColor: 'divider',
-                            }}
-                          >
-                            <Typography variant='body2' sx={{ whiteSpace: 'pre-wrap', overflowWrap: 'anywhere' }}>
-                              {m.message_text || '-'}
-                            </Typography>
-                          </Box>
+                          <MessageContent message={m} out={out} startsRun={startsRun} />
                           {endsRun ? (
                             <Typography variant='caption' color='text.secondary' sx={{ flexShrink: 0, fontSize: 10.5 }}>
                               {formatClockTime(m.created_at)}

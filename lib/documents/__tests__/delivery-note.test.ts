@@ -6,6 +6,7 @@ import type { OrderDocumentData } from '../types';
 function sampleData(overrides: Partial<OrderDocumentData> = {}): OrderDocumentData {
   return {
     order_id: 'o1',
+    price_vat_mode: 'excl',
     order_no: 'SO-2610140001',
     order_date: '2026-10-14',
     due_date: null,

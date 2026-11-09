@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import { dateYmd, optionalText, optionalUuid, uuid } from '@/lib/validation/common';
+import { QUOTATION_DECISIONS } from '@/lib/utils/quotation-status';
 
 export const ORDER_STATUSES = [
   'DRAFT', 'SUBMITTED', 'ADMIN_REVIEW', 'CONFIRMED', 'PO_SENT', 'REFINERY_BOOKED', 'WAITING_PAYMENT',
@@ -46,7 +47,17 @@ export const orderBodySchema = z.object({
   /** ส่วนลดท้ายบิล บาท (รวม VAT) */
   discount_amount: z.coerce.number().nonnegative('ส่วนลดต้องไม่ติดลบ').optional(),
   discount_note: optionalText(300),
+  /** แสดง/กรอกราคาแบบ ไม่รวมภาษี (excl) หรือ รวมภาษี (incl); ราคาที่เก็บยังรวม VAT เสมอ */
+  price_vat_mode: z.enum(['excl', 'incl']).optional(),
   items: z.array(orderItemSchema).min(1, 'กรุณาเพิ่มรายการน้ำมันอย่างน้อย 1 รายการ'),
+});
+
+/**
+ * Create payload. `as_quotation` creates a quotation-first order (เมนูใบเสนอราคา):
+ * kept in DRAFT with quotation_stage PENDING until the customer accepts.
+ */
+export const orderCreateSchema = orderBodySchema.extend({
+  as_quotation: z.boolean().optional(),
 });
 
 /** Partial payload for update; every field optional, items may be omitted. */
@@ -72,6 +83,12 @@ export const deliveryRecordSchema = z.object({
 
 export type DeliveryRecordInput = z.infer<typeof deliveryRecordSchema>;
 
+/** POST /api/quotations/[orderId]/decision */
+export const quotationDecisionSchema = z.object({
+  action: z.enum(QUOTATION_DECISIONS, { errorMap: () => ({ message: 'การดำเนินการไม่ถูกต้อง' }) }),
+  note: optionalText(500),
+});
+
 /** POST /api/orders/[id]/quotation */
 export const issueQuotationSchema = z.object({
   valid_until: z.union([dateYmd, z.literal(''), z.null()])
@@ -80,4 +97,6 @@ export const issueQuotationSchema = z.object({
   note: optionalText(1000),
   /** ออกใหม่: ยกเลิกใบเสนอราคาเดิมของใบสั่งขายนี้แล้วออกเลขใหม่ */
   reissue: z.boolean().optional(),
+  /** เมนูใบเสนอราคา (บันทึกแล้วออกทันที): ใช้ใบเดิมถ้ายอดไม่เปลี่ยนและยังไม่หมดอายุ ไม่งั้นออกเลขใหม่ */
+  only_if_changed: z.boolean().optional(),
 });

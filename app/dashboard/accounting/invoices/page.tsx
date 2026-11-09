@@ -1,16 +1,18 @@
 'use client';
 
 import { Fragment, useEffect, useMemo, useState } from 'react';
-import { Add, Cancel, ContentCopy, PictureAsPdf } from '@mui/icons-material';
+import { Add, Cancel, ContentCopy, EditCalendar, Payments, PictureAsPdf } from '@mui/icons-material';
 import {
   Alert, Autocomplete, Box, Button, Chip, Dialog, DialogActions, DialogContent, DialogTitle, IconButton, Stack,
   Table, TableBody, TableCell, TableHead, TableRow, TextField, Tooltip, Typography,
 } from '@mui/material';
 import { PdfPreviewDialog, type PdfPreviewTarget } from '@/components/documents/PdfPreviewDialog';
 import { ActionSnackbar, type ActionSnackbarSeverity } from '@/components/common/ActionSnackbar';
+import { PaymentDialog, type PaymentDialogOrder } from '@/components/accounting/PaymentDialog';
 import { canIssueTaxInvoice, statusColor, statusThai } from '@/lib/utils/order-status';
 import { groupInvoiceRowsByStatus } from '@/lib/utils/invoice-groups';
 import { formatDate } from '@/lib/utils/date-format';
+import { validateInvoiceIssueDate } from '@/lib/utils/invoice-dates';
 
 type InvoiceRow = {
   id: string;
@@ -27,7 +29,25 @@ type InvoiceRow = {
 };
 type OrderOption = { id: string; order_no: string | null; customer_name: string; total_amount: number; order_status: string };
 
+/** Today's date in Asia/Bangkok as `YYYY-MM-DD`. */
+function todayBangkok(): string {
+  return new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Bangkok', year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date());
+}
+
 const money = (value: number) => Number(value || 0).toLocaleString('th-TH', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+/** Order statuses that can no longer take a payment (not started, cancelled or fully paid). */
+const NON_PAYABLE_ORDER_STATUSES = ['DRAFT', 'CANCELLED', 'PAID', 'COMPLETED'];
+
+/**
+ * Whether the รับชำระเงิน button shows for a row: the order still owes money
+ * and its active tax invoice (if any) is not marked paid yet.
+ * @param orderStatus - `sale_orders.order_status`
+ * @param invoiceStatus - status of the order's latest invoice, if any
+ */
+function canReceivePayment(orderStatus: string, invoiceStatus?: InvoiceRow['status'] | null): boolean {
+  return !NON_PAYABLE_ORDER_STATUSES.includes(orderStatus) && invoiceStatus !== 'PAID';
+}
+
 const statusLabel: Record<InvoiceRow['status'], { label: string; color: 'success' | 'warning' | 'default' }> = {
   ISSUED: { label: 'ออกแล้ว รอชำระ', color: 'warning' },
   PAID: { label: 'ชำระแล้ว', color: 'success' },
@@ -46,6 +66,12 @@ export default function InvoicesPage() {
   const [issuing, setIssuing] = useState(false);
   const [cancelId, setCancelId] = useState<string | null>(null);
   const [pdfTarget, setPdfTarget] = useState<PdfPreviewTarget>(null);
+  const [paymentOrder, setPaymentOrder] = useState<PaymentDialogOrder | null>(null);
+  /** วันที่ออกใบกำกับใน dialog ออกใบกำกับ */
+  const [issueDate, setIssueDate] = useState(todayBangkok());
+  /** ใบกำกับที่กำลังแก้วันที่ */
+  const [dateEdit, setDateEdit] = useState<{ id: string; invoice_no: string; issued_at: string; due_date: string } | null>(null);
+  const [savingDates, setSavingDates] = useState(false);
   const [snack, setSnack] = useState<{ open: boolean; message: string; severity: ActionSnackbarSeverity }>({ open: false, message: '', severity: 'info' });
   const showSnack = (message: string, severity: ActionSnackbarSeverity) => setSnack({ open: true, message, severity });
 
@@ -94,11 +120,20 @@ export default function InvoicesPage() {
   }, [orders, rows, search]);
   const visibleCount = groups.reduce((sum, g) => sum + g.rows.length, 0);
 
-  const issue = async (target: OrderOption | null = issueOrder) => {
+  /**
+   * Issues a tax invoice from an order.
+   * @param target - order to invoice (defaults to the one picked in the dialog)
+   * @param issuedAt - issue date `YYYY-MM-DD` (defaults to today)
+   */
+  const issue = async (target: OrderOption | null = issueOrder, issuedAt: string = todayBangkok()) => {
     if (!target) return;
     setIssuing(true);
     try {
-      const res = await fetch(`/api/accounting/invoice/from-order/${target.id}`, { method: 'POST' });
+      const res = await fetch(`/api/accounting/invoice/from-order/${target.id}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ issued_at: issuedAt }),
+      });
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || 'ออกใบกำกับภาษีไม่สำเร็จ');
       setIssueOpen(false);
@@ -110,6 +145,33 @@ export default function InvoicesPage() {
       showSnack((e as Error).message, 'error');
     } finally {
       setIssuing(false);
+    }
+  };
+
+  const issueDateError = issueOpen ? validateInvoiceIssueDate(issueDate, { today: todayBangkok() }) : null;
+  const dateEditError = dateEdit
+    ? validateInvoiceIssueDate(dateEdit.issued_at, { today: todayBangkok(), invoiceNo: dateEdit.invoice_no, dueDate: dateEdit.due_date || null })
+    : null;
+
+  /** Saves the issue date / due date of an issued invoice. */
+  const saveDates = async () => {
+    if (!dateEdit || dateEditError) return;
+    setSavingDates(true);
+    try {
+      const res = await fetch(`/api/accounting/invoice/${dateEdit.id}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ issued_at: dateEdit.issued_at, due_date: dateEdit.due_date }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || 'แก้ไขวันที่ไม่สำเร็จ');
+      showSnack(`แก้ไขวันที่ใบกำกับ ${dateEdit.invoice_no} แล้ว`, 'success');
+      setDateEdit(null);
+      await load();
+    } catch (e) {
+      showSnack((e as Error).message, 'error');
+    } finally {
+      setSavingDates(false);
     }
   };
 
@@ -135,7 +197,7 @@ export default function InvoicesPage() {
       <Stack direction={{ xs: 'column', sm: 'row' }} spacing={1}>
         <TextField id='invoice-search' size='small' label='ค้นหา เลขที่ / คำสั่งซื้อ / ลูกค้า' value={search} onChange={(e) => setSearch(e.target.value)} sx={{ minWidth: 280 }} />
         <Button variant='outlined' onClick={() => void load()}>รีเฟรช</Button>
-        <Button variant='contained' startIcon={<Add />} onClick={() => setIssueOpen(true)}>ออกใบกำกับจากใบสั่งขาย</Button>
+        <Button variant='contained' startIcon={<Add />} onClick={() => { setIssueDate(todayBangkok()); setIssueOpen(true); }}>ออกใบกำกับจากใบสั่งขาย</Button>
       </Stack>
 
       {error ? <Alert severity='error'>{error}</Alert> : null}
@@ -186,11 +248,30 @@ export default function InvoicesPage() {
                         {r ? <Chip size='small' label={statusLabel[r.status]?.label ?? r.status} color={statusLabel[r.status]?.color ?? 'default'} /> : <Chip size='small' variant='outlined' label='ยังไม่ออก' />}
                       </TableCell>
                       <TableCell align='right' sx={{ whiteSpace: 'nowrap' }}>
+                        {canReceivePayment(o.order_status, active?.status) ? (
+                          <Tooltip title='รับชำระเงิน'>
+                            <IconButton
+                              size='small'
+                              color='success'
+                              onClick={() => setPaymentOrder({ sale_order_id: o.id, order_no: o.order_no, customer_name: o.customer_name, total_amount: active ? active.total_amount : o.total_amount })}
+                            >
+                              <Payments fontSize='small' />
+                            </IconButton>
+                          </Tooltip>
+                        ) : null}
                         {active ? (
                           <>
                             <Tooltip title='ใบแจ้งหนี้/ใบกำกับภาษี (ต้นฉบับ) · พิมพ์ / ส่ง LINE'>
                               <IconButton size='small' color='primary' onClick={() => setPdfTarget({ type: 'tax-invoice', id: o.id, title: `ใบแจ้งหนี้/ใบกำกับภาษี · ${active.invoice_no}` })}>
                                 <PictureAsPdf fontSize='small' />
+                              </IconButton>
+                            </Tooltip>
+                            <Tooltip title='แก้ไขวันที่ออก / วันครบกำหนด'>
+                              <IconButton
+                                size='small'
+                                onClick={() => setDateEdit({ id: active.id, invoice_no: active.invoice_no, issued_at: String(active.issued_at || '').slice(0, 10), due_date: String(active.due_date || '').slice(0, 10) })}
+                              >
+                                <EditCalendar fontSize='small' />
                               </IconButton>
                             </Tooltip>
                             <Tooltip title='สำเนาใบกำกับภาษี'>
@@ -231,12 +312,54 @@ export default function InvoicesPage() {
               noOptionsText='ไม่มีคำสั่งซื้อที่ยังไม่ได้ออกใบกำกับ'
               renderInput={(params) => <TextField {...params} label='เลือกคำสั่งซื้อ' autoFocus />}
             />
+            <TextField
+              type='date'
+              size='small'
+              label='วันที่ออกใบกำกับภาษี'
+              value={issueDate}
+              onChange={(e) => setIssueDate(e.target.value)}
+              error={Boolean(issueDateError)}
+              helperText={issueDateError || 'แก้ย้อนหลังได้ภายในปีเดียวกัน'}
+              slotProps={{ inputLabel: { shrink: true }, htmlInput: { max: todayBangkok() } }}
+            />
             <Alert severity='info'>ระบบจะคัดลอกรายการ ยอดเงิน ค่าขนส่ง และข้อมูลลูกค้า ณ วันที่ออก และกำหนดเลขที่ให้อัตโนมัติ</Alert>
           </Stack>
         </DialogContent>
         <DialogActions>
           <Button onClick={() => setIssueOpen(false)}>ยกเลิก</Button>
-          <Button variant='contained' disabled={!issueOrder || issuing} onClick={() => void issue()}>{issuing ? 'กำลังออก...' : 'ออกใบกำกับ'}</Button>
+          <Button variant='contained' disabled={!issueOrder || issuing || Boolean(issueDateError)} onClick={() => void issue(issueOrder, issueDate)}>{issuing ? 'กำลังออก...' : 'ออกใบกำกับ'}</Button>
+        </DialogActions>
+      </Dialog>
+
+      <Dialog open={Boolean(dateEdit)} onClose={savingDates ? undefined : () => setDateEdit(null)} fullWidth maxWidth='xs'>
+        <DialogTitle>แก้ไขวันที่ใบกำกับ {dateEdit?.invoice_no}</DialogTitle>
+        <DialogContent>
+          <Stack spacing={2} sx={{ pt: 1 }}>
+            <TextField
+              type='date'
+              size='small'
+              label='วันที่ออกใบกำกับภาษี'
+              value={dateEdit?.issued_at ?? ''}
+              onChange={(e) => setDateEdit((p) => (p ? { ...p, issued_at: e.target.value } : p))}
+              error={Boolean(dateEditError)}
+              helperText={dateEditError || 'วันที่นี้พิมพ์บนใบแจ้งหนี้/ใบกำกับภาษี และใบส่งของ'}
+              slotProps={{ inputLabel: { shrink: true }, htmlInput: { max: todayBangkok() } }}
+            />
+            <TextField
+              type='date'
+              size='small'
+              label='วันครบกำหนดชำระ'
+              value={dateEdit?.due_date ?? ''}
+              onChange={(e) => setDateEdit((p) => (p ? { ...p, due_date: e.target.value } : p))}
+              slotProps={{ inputLabel: { shrink: true }, htmlInput: { min: dateEdit?.issued_at || undefined } }}
+            />
+          </Stack>
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={() => setDateEdit(null)} disabled={savingDates}>ปิด</Button>
+          <Button variant='contained' onClick={() => void saveDates()} disabled={savingDates || Boolean(dateEditError)}>
+            {savingDates ? 'กำลังบันทึก...' : 'บันทึก'}
+          </Button>
         </DialogActions>
       </Dialog>
 
@@ -249,6 +372,15 @@ export default function InvoicesPage() {
         </DialogActions>
       </Dialog>
 
+      <PaymentDialog
+        order={paymentOrder}
+        onClose={() => setPaymentOrder(null)}
+        onSaved={(result) => {
+          showSnack(result.receipt_no ? `บันทึกรับชำระแล้ว ออกใบเสร็จ ${result.receipt_no}` : 'อัปเดตการรับชำระแล้ว', 'success');
+          void load();
+        }}
+        onPrintReceipt={(receiptId, receiptNo) => setPdfTarget({ type: 'receipt', id: receiptId, title: `ใบเสร็จรับเงิน · ${receiptNo}` })}
+      />
       <PdfPreviewDialog target={pdfTarget} onClose={() => setPdfTarget(null)} onNotify={showSnack} />
       <ActionSnackbar open={snack.open} message={snack.message} severity={snack.severity} onClose={() => setSnack((p) => ({ ...p, open: false }))} />
     </Stack>
