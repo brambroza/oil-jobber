@@ -57,6 +57,7 @@ import DeliveryRecordDialog, { type DeliveryRecordDialogOrder } from '@/componen
 import { DELIVERY_RECORDABLE_STATUSES, ORDER_STATUS_ORDER, canIssueTaxInvoice, statusColor, statusThai } from '@/lib/utils/order-status';
 import { formatDate, formatDateTime } from '@/lib/utils/date-format';
 import { pickDefaultDepot } from '@/lib/utils/default-depot';
+import { priceRoundLabel } from '@/lib/utils/price-round-label';
 import QuotationDecisionDialog, { type QuotationDecisionTarget } from '@/components/orders/QuotationDecisionDialog';
 import {
   QUOTATION_STATUS_COLORS,
@@ -165,25 +166,6 @@ type PriceRound = {
   expires_at: string | null;
   is_current: boolean;
 };
-
-/**
- * Label for a price round option: effective date/time, expiry and a
- * "current" marker.
- *
- * @param round - price round
- * @returns Thai display label
- */
-function priceRoundLabel(round: PriceRound): string {
-  const formatPart = (date: string | null, time: string | null) => {
-    if (!date) return '';
-    const day = formatDate(date);
-    const hhmm = String(time || '').slice(0, 5);
-    return hhmm ? `${day} ${hhmm} น.` : day;
-  };
-  const from = formatPart(round.effective_date, round.effective_at);
-  const to = formatPart(round.expires_date, round.expires_at);
-  return `${from}${to ? ` – ${to}` : ''}${round.is_current ? ' (ล่าสุด)' : ''}`;
-}
 
 type OrderItemForm = {
   refinery_id: string;

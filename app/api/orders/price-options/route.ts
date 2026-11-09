@@ -131,6 +131,7 @@ export async function GET(req: NextRequest) {
       delivery_fee_surcharge_per_liter: deliveryFeeSurcharge,
       price_options: [],
       price_rounds: priceRounds,
+      last_order_depot: lastOrderRes && !('error' in lastOrderRes) ? lastOrderRes : null,
     });
   }
 
