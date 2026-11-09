@@ -15,6 +15,8 @@ import { logOutboundLineMessages, pushLinePayload, type LinePushContext } from '
 import type { DocumentType } from '@/lib/documents/types';
 import { DEFAULT_VAT_MODE, type VatMode } from '@/lib/documents/vat-mode';
 import { formatDate } from '@/lib/utils/date-format';
+import { applyInvoiceContent } from '@/lib/utils/invoice-content';
+import { loadInvoiceContentRow } from '@/lib/services/invoice-content';
 
 export const DOCUMENT_TYPES: DocumentType[] = ['purchase-order', 'quotation', 'tax-invoice', 'delivery-note', 'receipt', 'delivery-record'];
 
@@ -91,7 +93,9 @@ export async function generateDocumentPdf(
 
   if (type === 'tax-invoice') {
     if (!data.invoice) return { error: 'ยังไม่ได้ออกใบกำกับภาษีสำหรับคำสั่งซื้อนี้', status: 409 };
-    const buffer = await renderPdf(buildTaxInvoicePdf(data, options.copy ? 'copy' : 'original', modeFor(data.price_vat_mode)));
+    // ใบกำกับที่แก้ไขแล้ว: พิมพ์ข้อมูลที่เก็บในใบกำกับแทนใบสั่งขาย
+    const invoiceData = applyInvoiceContent(data, await loadInvoiceContentRow(companyId, id));
+    const buffer = await renderPdf(buildTaxInvoicePdf(invoiceData, options.copy ? 'copy' : 'original', modeFor(data.price_vat_mode)));
     return {
       buffer,
       filename: `${data.invoice.invoice_no}.pdf`,
@@ -99,7 +103,7 @@ export async function generateDocumentPdf(
       docNo: data.invoice.invoice_no,
       orderId: data.order_id,
       customerId: customerRow?.customer_id ?? null,
-      summary: `ยอดรวม ${money(data.totals.net_incl_vat)} บาท ครบกำหนด ${formatDate(data.invoice.due_date || data.due_date)}`,
+      summary: `ยอดรวม ${money(invoiceData.totals.net_incl_vat)} บาท ครบกำหนด ${formatDate(data.invoice.due_date || data.due_date)}`,
     };
   }
 

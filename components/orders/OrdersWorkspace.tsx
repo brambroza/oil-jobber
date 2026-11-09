@@ -56,7 +56,6 @@ import QuotationDialog, { type QuotationDialogOrder } from '@/components/orders/
 import DeliveryRecordDialog, { type DeliveryRecordDialogOrder } from '@/components/orders/DeliveryRecordDialog';
 import { DELIVERY_RECORDABLE_STATUSES, ORDER_STATUS_ORDER, canIssueTaxInvoice, statusColor, statusThai } from '@/lib/utils/order-status';
 import { formatDate, formatDateTime } from '@/lib/utils/date-format';
-import { paymentDueLabel, paymentDueStatus } from '@/lib/utils/payment-due';
 import { pickDefaultDepot } from '@/lib/utils/default-depot';
 import QuotationDecisionDialog, { type QuotationDecisionTarget } from '@/components/orders/QuotationDecisionDialog';
 import {
@@ -1417,7 +1416,6 @@ export default function OrdersWorkspace({ mode = 'order' }: { mode?: OrdersWorks
               <TableCell sx={{ minWidth: 120 }}>เลขใบกำกับ</TableCell>
               <TableCell sx={{ display: { xs: 'none', md: 'table-cell' } }}>วันครบกำหนด</TableCell>
               <TableCell align="right">รวมยอด</TableCell>
-              <TableCell>สถานะชำระ</TableCell>
               <TableCell sx={{ minWidth: 130, color: 'text.secondary' }}>PO</TableCell>
               <TableCell>ลูกค้า</TableCell>
               {/*     <TableCell sx={{ display: { xs: 'none', md: 'table-cell' } }}>โรงกลั่น</TableCell> */}
@@ -1509,7 +1507,6 @@ export default function OrdersWorkspace({ mode = 'order' }: { mode?: OrdersWorks
             }) : null}
             {!isQuotationMode && pagedRows.map((r) => {
               const dueDate = r.invoice?.due_date ?? r.due_date;
-              const dueChip = paymentDueLabel(paymentDueStatus({ order_status: r.order_status, due_date: dueDate, outstanding_amount: r.outstanding_amount }, today));
               return (
               <TableRow
                 key={r.id}
@@ -1529,9 +1526,6 @@ export default function OrdersWorkspace({ mode = 'order' }: { mode?: OrdersWorks
                   <Tooltip title={`น้ำมัน ${money(Number(r.goods_amount || 0))} + ค่าขนส่ง ${money(Number(r.delivery_fee_amount || 0))}${Number(r.paid_amount || 0) > 0 ? ` · ชำระแล้ว ${money(Number(r.paid_amount || 0))} · ค้าง ${money(Number(r.outstanding_amount || 0))}` : ''}`}>
                     <span>{money(Number(r.total_amount || 0))}</span>
                   </Tooltip>
-                </TableCell>
-                <TableCell>
-                  {dueChip ? <Chip size="small" label={dueChip.label} color={dueChip.color} variant={dueChip.color === 'default' ? 'outlined' : 'filled'} /> : '-'}
                 </TableCell>
                 <TableCell sx={{ color: 'text.secondary' }}>{r.order_no || '-'}</TableCell>
                 <TableCell sx={{ maxWidth: 200, overflow: 'hidden', textOverflow: 'ellipsis' }}>{r.customers?.company_name || r.customer_id}</TableCell>
@@ -1569,7 +1563,7 @@ export default function OrdersWorkspace({ mode = 'order' }: { mode?: OrdersWorks
             })}
             {!filteredRows.length && !loading ? (
               <TableRow>
-                <TableCell colSpan={16} align="center" sx={{ py: 5, color: 'text.secondary' }}>
+                <TableCell colSpan={15} align="center" sx={{ py: 5, color: 'text.secondary' }}>
                   ไม่มีข้อมูล{docLabel}
                 </TableCell>
               </TableRow>

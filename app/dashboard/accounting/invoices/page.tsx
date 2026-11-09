@@ -1,7 +1,7 @@
 'use client';
 
 import { Fragment, useEffect, useMemo, useState } from 'react';
-import { Add, Cancel, ContentCopy, EditCalendar, Payments, PictureAsPdf } from '@mui/icons-material';
+import { Add, Cancel, ContentCopy, Edit, Payments, PictureAsPdf } from '@mui/icons-material';
 import {
   Alert, Autocomplete, Box, Button, Chip, Dialog, DialogActions, DialogContent, DialogTitle, IconButton, Stack,
   Table, TableBody, TableCell, TableHead, TableRow, TextField, Tooltip, Typography,
@@ -13,6 +13,9 @@ import { canIssueTaxInvoice, statusColor, statusThai } from '@/lib/utils/order-s
 import { groupInvoiceRowsByStatus } from '@/lib/utils/invoice-groups';
 import { formatDate } from '@/lib/utils/date-format';
 import { validateInvoiceIssueDate } from '@/lib/utils/invoice-dates';
+import { parseVatMode, type VatMode } from '@/lib/documents/vat-mode';
+import InvoiceEditDialog, { type InvoiceEditTarget } from '@/components/accounting/InvoiceEditDialog';
+import { paymentDueLabel, paymentDueStatus } from '@/lib/utils/payment-due';
 
 type InvoiceRow = {
   id: string;
@@ -27,7 +30,19 @@ type InvoiceRow = {
   subtotal_amount: number | null;
   vat_amount: number | null;
 };
-type OrderOption = { id: string; order_no: string | null; customer_name: string; total_amount: number; order_status: string };
+type OrderOption = {
+  id: string;
+  order_no: string | null;
+  customer_name: string;
+  total_amount: number;
+  order_status: string;
+  /** Order's own due date (fallback when no invoice yet). */
+  due_date: string | null;
+  /** Total minus recorded payments (from `/api/orders`). */
+  outstanding_amount: number;
+  /** ประเภทภาษีของบิล (ราคาไม่รวม/รวมภาษี) */
+  price_vat_mode: VatMode;
+};
 
 /** Today's date in Asia/Bangkok as `YYYY-MM-DD`. */
 function todayBangkok(): string {
@@ -70,8 +85,8 @@ export default function InvoicesPage() {
   /** วันที่ออกใบกำกับใน dialog ออกใบกำกับ */
   const [issueDate, setIssueDate] = useState(todayBangkok());
   /** ใบกำกับที่กำลังแก้วันที่ */
-  const [dateEdit, setDateEdit] = useState<{ id: string; invoice_no: string; issued_at: string; due_date: string } | null>(null);
-  const [savingDates, setSavingDates] = useState(false);
+  /** ใบกำกับที่กำลังแก้ไข */
+  const [editTarget, setEditTarget] = useState<InvoiceEditTarget>(null);
   const [snack, setSnack] = useState<{ open: boolean; message: string; severity: ActionSnackbarSeverity }>({ open: false, message: '', severity: 'info' });
   const showSnack = (message: string, severity: ActionSnackbarSeverity) => setSnack({ open: true, message, severity });
 
@@ -93,6 +108,9 @@ export default function InvoicesPage() {
         customer_name: o.customers?.company_name || '-',
         total_amount: Number(o.total_amount || 0),
         order_status: String(o.order_status || ''),
+        due_date: o.due_date ? String(o.due_date) : null,
+        outstanding_amount: Number(o.outstanding_amount ?? o.total_amount ?? 0),
+        price_vat_mode: parseVatMode(o.price_vat_mode),
       })));
     } catch (e) {
       setError((e as Error).message);
@@ -149,32 +167,6 @@ export default function InvoicesPage() {
   };
 
   const issueDateError = issueOpen ? validateInvoiceIssueDate(issueDate, { today: todayBangkok() }) : null;
-  const dateEditError = dateEdit
-    ? validateInvoiceIssueDate(dateEdit.issued_at, { today: todayBangkok(), invoiceNo: dateEdit.invoice_no, dueDate: dateEdit.due_date || null })
-    : null;
-
-  /** Saves the issue date / due date of an issued invoice. */
-  const saveDates = async () => {
-    if (!dateEdit || dateEditError) return;
-    setSavingDates(true);
-    try {
-      const res = await fetch(`/api/accounting/invoice/${dateEdit.id}`, {
-        method: 'PATCH',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ issued_at: dateEdit.issued_at, due_date: dateEdit.due_date }),
-      });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error || 'แก้ไขวันที่ไม่สำเร็จ');
-      showSnack(`แก้ไขวันที่ใบกำกับ ${dateEdit.invoice_no} แล้ว`, 'success');
-      setDateEdit(null);
-      await load();
-    } catch (e) {
-      showSnack((e as Error).message, 'error');
-    } finally {
-      setSavingDates(false);
-    }
-  };
-
   const cancelInvoice = async () => {
     if (!cancelId) return;
     const res = await fetch(`/api/accounting/invoice/${cancelId}`, {
@@ -207,15 +199,15 @@ export default function InvoicesPage() {
         <Table size='small'>
           <TableHead>
             <TableRow>
-              <TableCell>คำสั่งซื้อ</TableCell>
-              <TableCell>ลูกค้า</TableCell>
+              <TableCell>วันที่ใบกำกับ</TableCell>
               <TableCell>เลขที่ใบกำกับ</TableCell>
-              <TableCell>วันที่ออก</TableCell>
+              <TableCell>ลูกค้า</TableCell>
               <TableCell>ครบกำหนด</TableCell>
               <TableCell align='right'>ก่อน VAT</TableCell>
               <TableCell align='right'>VAT</TableCell>
               <TableCell align='right'>รวมทั้งสิ้น</TableCell>
               <TableCell>สถานะใบกำกับ</TableCell>
+              <TableCell>สถานะชำระ</TableCell>
               <TableCell align='right'>จัดการ</TableCell>
             </TableRow>
           </TableHead>
@@ -234,18 +226,29 @@ export default function InvoicesPage() {
                 </TableRow>
                 {group.rows.map(({ order: o, invoice: r }) => {
                   const active = r && r.status !== 'CANCELLED' ? r : null;
+                  const dueChip = paymentDueLabel(paymentDueStatus({
+                    order_status: o.order_status,
+                    due_date: active?.due_date ?? o.due_date,
+                    outstanding_amount: active?.status === 'PAID' ? 0 : o.outstanding_amount,
+                  }, todayBangkok()));
                   return (
                     <TableRow key={o.id} hover>
-                      <TableCell>{o.order_no || o.id.slice(0, 8)}</TableCell>
-                      <TableCell>{o.customer_name}</TableCell>
-                      <TableCell sx={{ fontWeight: 800, color: active ? 'text.primary' : 'text.disabled' }}>{r?.invoice_no || '-'}</TableCell>
                       <TableCell>{formatDate(active?.issued_at)}</TableCell>
-                      <TableCell>{formatDate(active?.due_date)}</TableCell>
+                      <TableCell sx={{ fontWeight: 800, color: active ? 'text.primary' : 'text.disabled' }}>
+                        <Tooltip title={`ใบสั่งขาย ${o.order_no || o.id.slice(0, 8)}`}>
+                          <span>{r?.invoice_no || '-'}</span>
+                        </Tooltip>
+                      </TableCell>
+                      <TableCell>{o.customer_name}</TableCell>
+                      <TableCell>{formatDate(active?.due_date ?? o.due_date)}</TableCell>
                       <TableCell align='right'>{active?.subtotal_amount != null ? money(active.subtotal_amount) : '-'}</TableCell>
                       <TableCell align='right'>{active?.vat_amount != null ? money(active.vat_amount) : '-'}</TableCell>
                       <TableCell align='right' sx={{ fontWeight: 900 }}>{money(active ? active.total_amount : o.total_amount)}</TableCell>
                       <TableCell>
                         {r ? <Chip size='small' label={statusLabel[r.status]?.label ?? r.status} color={statusLabel[r.status]?.color ?? 'default'} /> : <Chip size='small' variant='outlined' label='ยังไม่ออก' />}
+                      </TableCell>
+                      <TableCell>
+                        {dueChip ? <Chip size='small' label={dueChip.label} color={dueChip.color} variant={dueChip.color === 'default' ? 'outlined' : 'filled'} /> : '-'}
                       </TableCell>
                       <TableCell align='right' sx={{ whiteSpace: 'nowrap' }}>
                         {canReceivePayment(o.order_status, active?.status) ? (
@@ -266,12 +269,12 @@ export default function InvoicesPage() {
                                 <PictureAsPdf fontSize='small' />
                               </IconButton>
                             </Tooltip>
-                            <Tooltip title='แก้ไขวันที่ออก / วันครบกำหนด'>
+                            <Tooltip title='แก้ไขใบกำกับภาษี'>
                               <IconButton
                                 size='small'
-                                onClick={() => setDateEdit({ id: active.id, invoice_no: active.invoice_no, issued_at: String(active.issued_at || '').slice(0, 10), due_date: String(active.due_date || '').slice(0, 10) })}
+                                onClick={() => setEditTarget({ id: active.id, invoice_no: active.invoice_no })}
                               >
-                                <EditCalendar fontSize='small' />
+                                <Edit fontSize='small' />
                               </IconButton>
                             </Tooltip>
                             <Tooltip title='สำเนาใบกำกับภาษี'>
@@ -331,37 +334,12 @@ export default function InvoicesPage() {
         </DialogActions>
       </Dialog>
 
-      <Dialog open={Boolean(dateEdit)} onClose={savingDates ? undefined : () => setDateEdit(null)} fullWidth maxWidth='xs'>
-        <DialogTitle>แก้ไขวันที่ใบกำกับ {dateEdit?.invoice_no}</DialogTitle>
-        <DialogContent>
-          <Stack spacing={2} sx={{ pt: 1 }}>
-            <TextField
-              type='date'
-              size='small'
-              label='วันที่ออกใบกำกับภาษี'
-              value={dateEdit?.issued_at ?? ''}
-              onChange={(e) => setDateEdit((p) => (p ? { ...p, issued_at: e.target.value } : p))}
-              error={Boolean(dateEditError)}
-              helperText={dateEditError || 'วันที่นี้พิมพ์บนใบแจ้งหนี้/ใบกำกับภาษี และใบส่งของ'}
-              slotProps={{ inputLabel: { shrink: true }, htmlInput: { max: todayBangkok() } }}
-            />
-            <TextField
-              type='date'
-              size='small'
-              label='วันครบกำหนดชำระ'
-              value={dateEdit?.due_date ?? ''}
-              onChange={(e) => setDateEdit((p) => (p ? { ...p, due_date: e.target.value } : p))}
-              slotProps={{ inputLabel: { shrink: true }, htmlInput: { min: dateEdit?.issued_at || undefined } }}
-            />
-          </Stack>
-        </DialogContent>
-        <DialogActions>
-          <Button onClick={() => setDateEdit(null)} disabled={savingDates}>ปิด</Button>
-          <Button variant='contained' onClick={() => void saveDates()} disabled={savingDates || Boolean(dateEditError)}>
-            {savingDates ? 'กำลังบันทึก...' : 'บันทึก'}
-          </Button>
-        </DialogActions>
-      </Dialog>
+      <InvoiceEditDialog
+        target={editTarget}
+        onClose={() => setEditTarget(null)}
+        onSaved={() => { void load(); }}
+        onNotify={showSnack}
+      />
 
       <Dialog open={Boolean(cancelId)} onClose={() => setCancelId(null)}>
         <DialogTitle>ยกเลิกใบกำกับภาษี</DialogTitle>

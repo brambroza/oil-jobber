@@ -15,12 +15,36 @@ export const recordPaymentSchema = z.object({
   issue_receipt: z.boolean().default(true),
 });
 
+/** One printed line of an edited tax invoice (unit price incl. VAT, delivery fee folded in). */
+export const invoiceContentItemSchema = z.object({
+  product_code: z.string().trim().min(1, 'กรุณาระบุรหัสสินค้า').max(50),
+  product_name: z.string().trim().min(1, 'กรุณาระบุชื่อสินค้า').max(200),
+  depot_label: optionalText(200),
+  liters: z.number({ invalid_type_error: 'จำนวนลิตรต้องเป็นตัวเลข' }).positive('จำนวนลิตรต้องมากกว่า 0').max(10_000_000),
+  unit_price_incl_vat: z.number({ invalid_type_error: 'ราคาต้องเป็นตัวเลข' }).min(0, 'ราคาต้องไม่ติดลบ').max(100_000),
+});
+
+/** Edited content of a tax invoice: customer block, lines, discount and note. */
+export const invoiceContentSchema = z.object({
+  customer_name: z.string().trim().min(1, 'กรุณาระบุชื่อลูกค้า').max(300),
+  customer_tax_id: optionalText(20),
+  customer_address: optionalText(1000),
+  customer_phone: optionalText(50),
+  note: optionalText(1000),
+  discount_amount: z.number({ invalid_type_error: 'ส่วนลดต้องเป็นตัวเลข' }).min(0, 'ส่วนลดต้องไม่ติดลบ').max(100_000_000),
+  items: z.array(invoiceContentItemSchema).min(1, 'ต้องมีรายการอย่างน้อย 1 รายการ').max(50, 'รายการเกิน 50 รายการ'),
+});
+
 /** PATCH /api/accounting/invoice/[id] */
 export const invoicePatchSchema = z.object({
   status: z.enum(['CANCELLED']).optional(),
   due_date: z.preprocess((v) => (v === '' ? null : v), dateYmd.nullable().optional()),
   /** วันที่ออกใบกำกับภาษี (แก้ย้อนหลังได้ ภายในปีเดียวกับเลขใบกำกับ) */
   issued_at: dateYmd.optional(),
+  /** ประเภทภาษีของบิล: excl = ราคาไม่รวมภาษี, incl = ราคารวมภาษี (บันทึกที่ใบสั่งขาย) */
+  price_vat_mode: z.enum(['excl', 'incl'], { errorMap: () => ({ message: 'ประเภทภาษีไม่ถูกต้อง' }) }).optional(),
+  /** แก้ข้อมูลที่พิมพ์บนใบกำกับ (ลูกค้า รายการ ส่วนลด หมายเหตุ) */
+  content: invoiceContentSchema.optional(),
 });
 
 /** POST /api/accounting/invoice/from-order/[orderId] */
