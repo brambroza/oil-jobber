@@ -1,21 +1,21 @@
 'use client';
 
-import { Fragment, useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { Add, Cancel, ContentCopy, Edit, Payments, PictureAsPdf } from '@mui/icons-material';
 import {
-  Alert, Autocomplete, Box, Button, Chip, Dialog, DialogActions, DialogContent, DialogTitle, IconButton, Stack,
-  Table, TableBody, TableCell, TableHead, TableRow, TextField, Tooltip, Typography,
+  Alert, Autocomplete, Avatar, Box, Button, Dialog, DialogActions, DialogContent, DialogTitle, IconButton, Paper, Stack,
+  Table, TableBody, TableCell, TableContainer, TableHead, TablePagination, TableRow, TextField, Tooltip, Typography,
 } from '@mui/material';
 import { PdfPreviewDialog, type PdfPreviewTarget } from '@/components/documents/PdfPreviewDialog';
 import { ActionSnackbar, type ActionSnackbarSeverity } from '@/components/common/ActionSnackbar';
 import { PaymentDialog, type PaymentDialogOrder } from '@/components/accounting/PaymentDialog';
-import { canIssueTaxInvoice, statusColor, statusThai } from '@/lib/utils/order-status';
+import { canIssueTaxInvoice } from '@/lib/utils/order-status';
 import { groupInvoiceRowsByStatus } from '@/lib/utils/invoice-groups';
 import { formatDate } from '@/lib/utils/date-format';
 import { validateInvoiceIssueDate } from '@/lib/utils/invoice-dates';
 import { parseVatMode, type VatMode } from '@/lib/documents/vat-mode';
 import InvoiceEditDialog, { type InvoiceEditTarget } from '@/components/accounting/InvoiceEditDialog';
-import { paymentDueLabel, paymentDueStatus } from '@/lib/utils/payment-due';
+import { invoiceDocStatus, invoiceDocView, paymentView, type StatusTone, type StatusView } from '@/lib/utils/invoice-status-view';
 
 type InvoiceRow = {
   id: string;
@@ -49,6 +49,19 @@ function todayBangkok(): string {
   return new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Bangkok', year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date());
 }
 
+/**
+ * First visible character of a customer name for the avatar, skipping common
+ * Thai/English company prefixes such as "บริษัท" or "หจก.".
+ * @param name - customer company name
+ */
+function customerInitial(name: string): string {
+  const cleaned = String(name || '')
+    .replace(/^(บริษัท|บจก\.?|หจก\.?|ห้างหุ้นส่วนจำกัด|ห้างหุ้นส่วนสามัญ|ร้าน)\s*/u, '')
+    .trim();
+  const ch = Array.from(cleaned.replace(/^[\u0E30-\u0E4E\s]+/u, ''))[0];
+  return ch ? ch.toUpperCase() : '?';
+}
+
 const money = (value: number) => Number(value || 0).toLocaleString('th-TH', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 /** Order statuses that can no longer take a payment (not started, cancelled or fully paid). */
 const NON_PAYABLE_ORDER_STATUSES = ['DRAFT', 'CANCELLED', 'PAID', 'COMPLETED'];
@@ -63,11 +76,74 @@ function canReceivePayment(orderStatus: string, invoiceStatus?: InvoiceRow['stat
   return !NON_PAYABLE_ORDER_STATUSES.includes(orderStatus) && invoiceStatus !== 'PAID';
 }
 
-const statusLabel: Record<InvoiceRow['status'], { label: string; color: 'success' | 'warning' | 'default' }> = {
-  ISSUED: { label: 'ออกแล้ว รอชำระ', color: 'warning' },
-  PAID: { label: 'ชำระแล้ว', color: 'success' },
-  CANCELLED: { label: 'ยกเลิก', color: 'default' },
+/**
+ * Amount block: grand total on top, then a small before-VAT / VAT breakdown.
+ * @param total - grand total incl. VAT
+ * @param subtotal - amount before VAT (null when no invoice yet)
+ * @param vat - VAT amount (null when no invoice yet)
+ * @param fromOrder - true when no active invoice; the total comes from the sale order
+ */
+function AmountCell({ total, subtotal, vat, fromOrder }: { total: number; subtotal: number | null; vat: number | null; fromOrder: boolean }) {
+  const hasBreakdown = subtotal != null && vat != null;
+  return (
+    <Stack spacing={0.25} alignItems='flex-end'>
+      <Typography sx={{ fontWeight: 800, fontSize: 15, lineHeight: 1.3, fontVariantNumeric: 'tabular-nums', color: fromOrder ? 'text.secondary' : 'text.primary' }}>
+        {money(total)}
+      </Typography>
+      {hasBreakdown ? (
+        <Box
+          sx={{
+            display: 'grid', gridTemplateColumns: 'auto auto', columnGap: 1, rowGap: 0,
+            fontSize: 11.5, lineHeight: 1.45, color: 'text.secondary', fontVariantNumeric: 'tabular-nums',
+            '& > :nth-of-type(odd)': { textAlign: 'left', color: 'text.disabled' },
+            '& > :nth-of-type(even)': { textAlign: 'right' },
+          }}
+        >
+          <span>ก่อน VAT</span><span>{money(subtotal)}</span>
+          <span>VAT</span><span>{money(vat)}</span>
+        </Box>
+      ) : (
+        <Typography variant='caption' color='text.disabled' sx={{ fontSize: 11.5 }}>
+          {fromOrder ? 'ยอดตามใบสั่งขาย' : 'รวม VAT'}
+        </Typography>
+      )}
+    </Stack>
+  );
+}
+
+/** Text / background / dot colors per status tone. */
+const TONE_COLORS: Record<StatusTone, { fg: string; bg: string; dot: string }> = {
+  neutral: { fg: '#475569', bg: '#f1f5f9', dot: '#94a3b8' },
+  info: { fg: '#1d4ed8', bg: '#eff6ff', dot: '#3b82f6' },
+  success: { fg: '#047857', bg: '#ecfdf5', dot: '#10b981' },
+  warning: { fg: '#b45309', bg: '#fffbeb', dot: '#f59e0b' },
+  error: { fg: '#b91c1c', bg: '#fef2f2', dot: '#ef4444' },
 };
+
+/**
+ * Soft pill with a colored dot plus an optional caption line under it.
+ * @param view - label, detail and tone from `lib/utils/invoice-status-view`
+ * @param strike - strike through the label (cancelled documents)
+ */
+function StatusPill({ view, strike }: { view: StatusView; strike?: boolean }) {
+  const c = TONE_COLORS[view.tone];
+  return (
+    <Stack spacing={0.25} alignItems='flex-start'>
+      <Box
+        component='span'
+        sx={{
+          display: 'inline-flex', alignItems: 'center', gap: 0.75, px: 1, py: 0.25, borderRadius: 999,
+          bgcolor: c.bg, color: c.fg, fontSize: 12.5, fontWeight: 700, whiteSpace: 'nowrap',
+          textDecoration: strike ? 'line-through' : 'none',
+        }}
+      >
+        <Box component='span' sx={{ width: 7, height: 7, borderRadius: '50%', bgcolor: c.dot, flexShrink: 0 }} />
+        {view.label}
+      </Box>
+      {view.detail ? <Typography variant='caption' color='text.secondary' sx={{ whiteSpace: 'nowrap', pl: 0.5 }}>{view.detail}</Typography> : null}
+    </Stack>
+  );
+}
 
 /** Tax invoices issued from orders; manual typing is gone. */
 export default function InvoicesPage() {
@@ -87,6 +163,10 @@ export default function InvoicesPage() {
   /** ใบกำกับที่กำลังแก้วันที่ */
   /** ใบกำกับที่กำลังแก้ไข */
   const [editTarget, setEditTarget] = useState<InvoiceEditTarget>(null);
+  /** หน้าปัจจุบันของตาราง (เริ่มที่ 0) */
+  const [page, setPage] = useState(0);
+  /** จำนวนแถวต่อหน้า; -1 = ทั้งหมด */
+  const [rowsPerPage, setRowsPerPage] = useState(10);
   const [snack, setSnack] = useState<{ open: boolean; message: string; severity: ActionSnackbarSeverity }>({ open: false, message: '', severity: 'info' });
   const showSnack = (message: string, severity: ActionSnackbarSeverity) => setSnack({ open: true, message, severity });
 
@@ -126,17 +206,43 @@ export default function InvoicesPage() {
     () => orders.filter((o) => !invoicedOrderIds.has(o.id) && canIssueTaxInvoice(o.order_status)),
     [orders, invoicedOrderIds],
   );
-  /** Orders CONFIRMED onwards grouped by order status, filtered by the search box. */
-  const groups = useMemo(() => {
+  /**
+   * Orders CONFIRMED onwards paired with their invoice, filtered by the search box,
+   * sorted by invoice issue date then invoice number (newest first); orders without
+   * an active invoice go last.
+   */
+  const tableRows = useMemo(() => {
     const q = search.trim().toLowerCase();
     const matches = (o: OrderOption) => {
       if (!q) return true;
       const inv = rows.filter((r) => r.sale_order_id === o.id).map((r) => r.invoice_no);
       return [o.order_no, o.customer_name, ...inv].some((v) => String(v || '').toLowerCase().includes(q));
     };
-    return groupInvoiceRowsByStatus(orders.filter(matches), rows);
+    const activeOf = (r: InvoiceRow | null) => (r && r.status !== 'CANCELLED' ? r : null);
+    return groupInvoiceRowsByStatus(orders.filter(matches), rows)
+      .flatMap((g) => g.rows)
+      .sort((a, b) => {
+        const ia = activeOf(a.invoice);
+        const ib = activeOf(b.invoice);
+        if (!ia || !ib) return ia ? -1 : ib ? 1 : 0;
+        const byDate = String(ib.issued_at || '').localeCompare(String(ia.issued_at || ''));
+        if (byDate) return byDate;
+        return ib.invoice_no.localeCompare(ia.invoice_no, undefined, { numeric: true });
+      });
   }, [orders, rows, search]);
-  const visibleCount = groups.reduce((sum, g) => sum + g.rows.length, 0);
+
+  /** Rows on the current page (`rowsPerPage === -1` shows every row). */
+  const pagedRows = useMemo(
+    () => (rowsPerPage === -1 ? tableRows : tableRows.slice(page * rowsPerPage, page * rowsPerPage + rowsPerPage)),
+    [tableRows, page, rowsPerPage],
+  );
+  // Back to the first page when the search changes; clamp when rows shrink below the current page.
+  useEffect(() => { setPage(0); }, [search]);
+  useEffect(() => {
+    if (rowsPerPage === -1) return;
+    const lastPage = Math.max(0, Math.ceil(tableRows.length / rowsPerPage) - 1);
+    if (page > lastPage) setPage(lastPage);
+  }, [tableRows.length, rowsPerPage, page]);
 
   /**
    * Issues a tax invoice from an order.
@@ -186,51 +292,43 @@ export default function InvoicesPage() {
       <Box>
         <Typography variant='h4'>ใบกำกับภาษี</Typography>
         </Box>
-      <Stack direction={{ xs: 'column', sm: 'row' }} spacing={1}>
-        <TextField id='invoice-search' size='small' label='ค้นหา เลขที่ / คำสั่งซื้อ / ลูกค้า' value={search} onChange={(e) => setSearch(e.target.value)} sx={{ minWidth: 280 }} />
-        <Button variant='outlined' onClick={() => void load()}>รีเฟรช</Button>
-        <Button variant='contained' startIcon={<Add />} onClick={() => { setIssueDate(todayBangkok()); setIssueOpen(true); }}>ออกใบกำกับจากใบสั่งขาย</Button>
-      </Stack>
+      <Paper variant='outlined' sx={{ p: 1.5, position: 'relative', zIndex: 0 }}>
+        <Stack direction={{ xs: 'column', sm: 'row' }} spacing={1} alignItems={{ sm: 'center' }}>
+          <TextField id='invoice-search' size='small' label='ค้นหา เลขที่ / คำสั่งซื้อ / ลูกค้า' value={search} onChange={(e) => setSearch(e.target.value)} sx={{ minWidth: 280, flex: { sm: 1 }, maxWidth: { sm: 420 } }} />
+          <Button variant='outlined' onClick={() => void load()}>รีเฟรช</Button>
+          <Box sx={{ flex: 1, display: { xs: 'none', sm: 'block' } }} />
+          <Button variant='contained' startIcon={<Add />} onClick={() => { setIssueDate(todayBangkok()); setIssueOpen(true); }}>ออกใบกำกับจากใบสั่งขาย</Button>
+        </Stack>
+      </Paper>
 
       {error ? <Alert severity='error'>{error}</Alert> : null}
       {loading ? <Alert severity='info'>กำลังโหลด...</Alert> : null}
 
-      <Box sx={{ overflowX: 'auto', bgcolor: 'background.paper', borderRadius: 1 }}>
-        <Table size='small'>
+      <TableContainer component={Paper} variant='outlined' sx={{ maxHeight: 'calc(100vh - 260px)', overflow: 'auto' }}>
+        <Table size='small' stickyHeader sx={{ minWidth: 1280 }}>
           <TableHead>
-            <TableRow>
+            <TableRow sx={{ '& th': { whiteSpace: 'nowrap', fontWeight: 800, bgcolor: '#f8fafc', zIndex: 2 } }}>
               <TableCell>วันที่ใบกำกับ</TableCell>
               <TableCell>เลขที่ใบกำกับ</TableCell>
               <TableCell>ลูกค้า</TableCell>
               <TableCell>ครบกำหนด</TableCell>
-              <TableCell align='right'>ก่อน VAT</TableCell>
-              <TableCell align='right'>VAT</TableCell>
-              <TableCell align='right'>รวมทั้งสิ้น</TableCell>
+              <TableCell align='right'>ยอดเงิน (บาท)</TableCell>
               <TableCell>สถานะใบกำกับ</TableCell>
               <TableCell>สถานะชำระ</TableCell>
               <TableCell align='right'>จัดการ</TableCell>
             </TableRow>
           </TableHead>
           <TableBody>
-            {groups.map((group) => (
-              <Fragment key={group.status}>
-                <TableRow sx={{ bgcolor: 'action.hover' }}>
-                  <TableCell colSpan={10} sx={{ py: 0.75 }}>
-                    <Stack direction='row' spacing={1} alignItems='center'>
-                      <Chip size='small' label={statusThai(group.status)} color={statusColor(group.status)} />
-                      <Typography variant='body2' color='text.secondary'>
-                        {group.rows.length} รายการ · ออกใบกำกับแล้ว {group.rows.filter((r) => r.invoice && r.invoice.status !== 'CANCELLED').length}
-                      </Typography>
-                    </Stack>
-                  </TableCell>
-                </TableRow>
-                {group.rows.map(({ order: o, invoice: r }) => {
+            {pagedRows.map(({ order: o, invoice: r }) => {
                   const active = r && r.status !== 'CANCELLED' ? r : null;
-                  const dueChip = paymentDueLabel(paymentDueStatus({
+                  const docStatus = invoiceDocStatus(r?.status);
+                  const payView = paymentView({
                     order_status: o.order_status,
                     due_date: active?.due_date ?? o.due_date,
-                    outstanding_amount: active?.status === 'PAID' ? 0 : o.outstanding_amount,
-                  }, todayBangkok()));
+                    total_amount: active ? active.total_amount : o.total_amount,
+                    outstanding_amount: o.outstanding_amount,
+                    invoice_paid: active?.status === 'PAID',
+                  }, todayBangkok());
                   return (
                     <TableRow key={o.id} hover>
                       <TableCell>{formatDate(active?.issued_at)}</TableCell>
@@ -239,16 +337,35 @@ export default function InvoicesPage() {
                           <span>{r?.invoice_no || '-'}</span>
                         </Tooltip>
                       </TableCell>
-                      <TableCell>{o.customer_name}</TableCell>
+                      <TableCell sx={{ minWidth: 220 }}>
+                        <Stack direction='row' spacing={1.25} alignItems='center'>
+                          <Avatar sx={{ width: 32, height: 32, fontSize: 14, fontWeight: 800, bgcolor: '#e0e7ff', color: '#3730a3' }}>
+                            {customerInitial(o.customer_name)}
+                          </Avatar>
+                          <Box sx={{ minWidth: 0 }}>
+                            <Typography variant='body2' sx={{ fontWeight: 700, lineHeight: 1.3, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: 260 }} title={o.customer_name}>
+                              {o.customer_name}
+                            </Typography>
+                            <Typography variant='caption' color='text.secondary' sx={{ lineHeight: 1.2 }}>
+                              ใบสั่งขาย {o.order_no || o.id.slice(0, 8)}
+                            </Typography>
+                          </Box>
+                        </Stack>
+                      </TableCell>
                       <TableCell>{formatDate(active?.due_date ?? o.due_date)}</TableCell>
-                      <TableCell align='right'>{active?.subtotal_amount != null ? money(active.subtotal_amount) : '-'}</TableCell>
-                      <TableCell align='right'>{active?.vat_amount != null ? money(active.vat_amount) : '-'}</TableCell>
-                      <TableCell align='right' sx={{ fontWeight: 900 }}>{money(active ? active.total_amount : o.total_amount)}</TableCell>
-                      <TableCell>
-                        {r ? <Chip size='small' label={statusLabel[r.status]?.label ?? r.status} color={statusLabel[r.status]?.color ?? 'default'} /> : <Chip size='small' variant='outlined' label='ยังไม่ออก' />}
+                      <TableCell align='right' sx={{ minWidth: 190 }}>
+                        <AmountCell
+                          total={active ? active.total_amount : o.total_amount}
+                          subtotal={active?.subtotal_amount ?? null}
+                          vat={active?.vat_amount ?? null}
+                          fromOrder={!active}
+                        />
                       </TableCell>
                       <TableCell>
-                        {dueChip ? <Chip size='small' label={dueChip.label} color={dueChip.color} variant={dueChip.color === 'default' ? 'outlined' : 'filled'} /> : '-'}
+                        <StatusPill view={invoiceDocView(docStatus)} />
+                      </TableCell>
+                      <TableCell>
+                        {payView ? <StatusPill view={payView} /> : '-'}
                       </TableCell>
                       <TableCell align='right' sx={{ whiteSpace: 'nowrap' }}>
                         {canReceivePayment(o.order_status, active?.status) ? (
@@ -295,12 +412,22 @@ export default function InvoicesPage() {
                     </TableRow>
                   );
                 })}
-              </Fragment>
-            ))}
-            {!visibleCount && !loading ? <TableRow><TableCell colSpan={10} align='center'>ไม่มีใบสั่งขายที่ยืนยันแล้ว</TableCell></TableRow> : null}
+            {!tableRows.length && !loading ? <TableRow><TableCell colSpan={8} align='center'>ไม่มีใบสั่งขายที่ยืนยันแล้ว</TableCell></TableRow> : null}
           </TableBody>
         </Table>
-      </Box>
+      </TableContainer>
+      <TablePagination
+        component='div'
+        count={tableRows.length}
+        page={page}
+        onPageChange={(_, next) => setPage(next)}
+        rowsPerPage={rowsPerPage}
+        onRowsPerPageChange={(e) => { setRowsPerPage(Number(e.target.value)); setPage(0); }}
+        rowsPerPageOptions={[10, 15, 20, { label: 'ทั้งหมด', value: -1 }]}
+        labelRowsPerPage='แถวต่อหน้า'
+        labelDisplayedRows={({ from, to, count }) => `${from}–${to} จาก ${count}`}
+        sx={{ mt: '0 !important', bgcolor: 'background.paper', border: 1, borderColor: 'divider', borderTop: 0, borderRadius: '0 0 4px 4px' }}
+      />
 
       <Dialog open={issueOpen} onClose={() => setIssueOpen(false)} fullWidth maxWidth='sm'>
         <DialogTitle>ออกใบกำกับภาษีจากใบสั่งขาย</DialogTitle>
