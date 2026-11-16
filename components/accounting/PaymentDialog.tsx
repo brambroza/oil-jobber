@@ -9,6 +9,7 @@ import { DeleteOutline, PictureAsPdf } from '@mui/icons-material';
 import { PAYMENT_METHOD_LABELS } from '@/lib/documents/format';
 import { useCurrentUser } from '@/components/layout/CurrentUserProvider';
 import { formatDate } from '@/lib/utils/date-format';
+import { PaymentLinkPanel, PaymentSlipList } from '@/components/accounting/PaymentSlipPanel';
 
 export type PaymentDialogOrder = {
   sale_order_id: string;
@@ -49,6 +50,7 @@ export function PaymentDialog({ order, onClose, onSaved, onPrintReceipt }: {
   const [loading, setLoading] = useState(false);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
+  const [notice, setNotice] = useState<{ message: string; severity: 'success' | 'error' | 'info' } | null>(null);
   const [form, setForm] = useState({ paid_at: today(), amount: 0, payment_method: 'TRANSFER', reference_no: '', note: '' });
 
   const paid = useMemo(() => history.reduce((sum, row) => sum + Number(row.amount || 0), 0), [history]);
@@ -81,6 +83,7 @@ export function PaymentDialog({ order, onClose, onSaved, onPrintReceipt }: {
   useEffect(() => {
     if (!order) return;
     setForm({ paid_at: today(), amount: 0, payment_method: 'TRANSFER', reference_no: '', note: '' });
+    setNotice(null);
     void load(order.sale_order_id);
   }, [order?.sale_order_id]);
 
@@ -128,6 +131,7 @@ export function PaymentDialog({ order, onClose, onSaved, onPrintReceipt }: {
       <DialogContent>
         <Stack spacing={2} sx={{ pt: 1 }}>
           {error ? <Alert severity='error' onClose={() => setError('')}>{error}</Alert> : null}
+          {notice ? <Alert severity={notice.severity} onClose={() => setNotice(null)}>{notice.message}</Alert> : null}
           <Stack direction={{ xs: 'column', sm: 'row' }} spacing={1.5}>
             {[
               { label: 'ยอดบิล', value: total, color: 'text.primary' },
@@ -170,6 +174,20 @@ export function PaymentDialog({ order, onClose, onSaved, onPrintReceipt }: {
           ) : (
             <Alert severity='success'>บิลนี้ชำระครบแล้ว</Alert>
           )}
+
+          {order && outstanding > 0 && !loading ? (
+            <PaymentLinkPanel orderId={order.sale_order_id} onNotify={(message, severity) => setNotice({ message, severity })} />
+          ) : null}
+          {order ? (
+            <PaymentSlipList
+              orderId={order.sale_order_id}
+              onPrintReceipt={onPrintReceipt}
+              onChanged={() => {
+                void load(order.sale_order_id);
+                onSaved?.({ outstanding_after: outstanding, order_status: '' });
+              }}
+            />
+          ) : null}
 
           <Box>
             <Typography fontWeight={800} sx={{ mb: 0.5 }}>ประวัติการรับชำระ</Typography>

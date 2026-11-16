@@ -17,6 +17,7 @@ import {
 } from '@/lib/services/order-items';
 import { canAccessCustomer, canAccessOrder, customerForbidden } from '@/lib/services/customer-scope';
 import { canApproveOrders } from '@/lib/auth/permissions';
+import { voidInvoicesForOrder } from '@/lib/services/invoice-void';
 
 const ORDER_SELECT = '*, customers(company_name, tax_id, address, phone), payment_conditions(name, payment_type, credit_days), sale_order_items(*, refineries(id, name), depots(id, code, name))';
 
@@ -192,6 +193,12 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
       })),
     );
     if (itemErr) return NextResponse.json({ error: itemErr.message }, { status: 400 });
+  }
+
+  // ยกเลิกใบสั่งขาย: ยกเลิกใบกำกับภาษีที่ยัง active ด้วย ไม่ให้ค้างเป็น "รอชำระ" ในหน้าบัญชี
+  if (orderPayload.order_status === 'CANCELLED' && currentOrder.order_status !== 'CANCELLED') {
+    const voided = await voidInvoicesForOrder(ctx.companyId, id, ctx.userId);
+    if ('error' in voided) return NextResponse.json({ error: `ยกเลิกใบสั่งขายแล้ว แต่ยกเลิกใบกำกับภาษีไม่สำเร็จ: ${voided.error}` }, { status: 400 });
   }
 
   const profit = await recomputeOrderProfit(ctx.companyId, id);

@@ -15,7 +15,7 @@ import { formatDate } from '@/lib/utils/date-format';
 import { validateInvoiceIssueDate } from '@/lib/utils/invoice-dates';
 import { parseVatMode, type VatMode } from '@/lib/documents/vat-mode';
 import InvoiceEditDialog, { type InvoiceEditTarget } from '@/components/accounting/InvoiceEditDialog';
-import { invoiceDocStatus, invoiceDocView, paymentView, type StatusTone, type StatusView } from '@/lib/utils/invoice-status-view';
+import { invoiceDocStatus, invoiceDocView, paymentView, type InvoiceDocStatus, type PaymentKind, type StatusTone, type StatusView } from '@/lib/utils/invoice-status-view';
 
 type InvoiceRow = {
   id: string;
@@ -74,6 +74,82 @@ const NON_PAYABLE_ORDER_STATUSES = ['DRAFT', 'CANCELLED', 'PAID', 'COMPLETED'];
  */
 function canReceivePayment(orderStatus: string, invoiceStatus?: InvoiceRow['status'] | null): boolean {
   return !NON_PAYABLE_ORDER_STATUSES.includes(orderStatus) && invoiceStatus !== 'PAID';
+}
+
+type DocFilter = 'ALL' | InvoiceDocStatus;
+type PayFilter = 'ALL' | 'UNPAID' | PaymentKind;
+type FilterOption<T extends string> = { value: T; label: string; tone: StatusTone };
+
+const DOC_FILTERS: FilterOption<DocFilter>[] = [
+  { value: 'ALL', label: 'ทั้งหมด', tone: 'neutral' },
+  { value: 'NOT_ISSUED', label: 'ยังไม่ออก', tone: 'neutral' },
+  { value: 'ISSUED', label: 'ออกแล้ว', tone: 'info' },
+  { value: 'CANCELLED', label: 'ยกเลิกแล้ว', tone: 'neutral' },
+];
+
+const PAY_FILTERS: FilterOption<PayFilter>[] = [
+  { value: 'ALL', label: 'ทั้งหมด', tone: 'neutral' },
+  { value: 'UNPAID', label: 'ค้างชำระทั้งหมด', tone: 'warning' },
+  { value: 'OVERDUE', label: 'เกินกำหนด', tone: 'error' },
+  { value: 'DUE_TODAY', label: 'ครบกำหนดวันนี้', tone: 'warning' },
+  { value: 'PENDING', label: 'รอชำระ', tone: 'neutral' },
+  { value: 'PARTIAL', label: 'ชำระบางส่วน', tone: 'info' },
+  { value: 'PAID', label: 'ชำระครบ', tone: 'success' },
+];
+
+/**
+ * One labelled row of selectable filter pills with a count badge each.
+ * @param label - row caption
+ * @param options - filter options in display order
+ * @param value - selected option
+ * @param counts - rows per option value
+ * @param onChange - called with the picked option
+ */
+function FilterRow<T extends string>({ label, options, value, counts, onChange }: {
+  label: string;
+  options: FilterOption<T>[];
+  value: T;
+  counts: Record<string, number>;
+  onChange: (next: T) => void;
+}) {
+  return (
+    <Stack direction={{ xs: 'column', md: 'row' }} spacing={{ xs: 0.5, md: 1.5 }} alignItems={{ md: 'center' }}>
+      <Typography variant='caption' sx={{ fontWeight: 800, color: 'text.secondary', minWidth: 92 }}>{label}</Typography>
+      <Stack direction='row' spacing={0.75} useFlexGap flexWrap='wrap'>
+        {options.map((opt) => {
+          const selected = opt.value === value;
+          const c = TONE_COLORS[opt.tone];
+          const count = counts[opt.value] ?? 0;
+          return (
+            <Box
+              key={opt.value}
+              component='button'
+              type='button'
+              onClick={() => onChange(opt.value)}
+              aria-pressed={selected}
+              sx={{
+                display: 'inline-flex', alignItems: 'center', gap: 0.75, px: 1.25, py: 0.5, borderRadius: 999,
+                border: '1px solid', cursor: 'pointer', font: 'inherit', fontSize: 13, fontWeight: 700,
+                borderColor: selected ? c.dot : 'divider',
+                bgcolor: selected ? c.bg : 'background.paper',
+                color: selected ? c.fg : 'text.secondary',
+                opacity: count || selected ? 1 : 0.55,
+                transition: 'all .15s',
+                '&:hover': { borderColor: c.dot, color: c.fg },
+                '&:focus-visible': { outline: `2px solid ${c.dot}`, outlineOffset: 1 },
+              }}
+            >
+              {opt.value !== 'ALL' ? <Box component='span' sx={{ width: 7, height: 7, borderRadius: '50%', bgcolor: c.dot }} /> : null}
+              {opt.label}
+              <Box component='span' sx={{ minWidth: 20, px: 0.6, borderRadius: 999, fontSize: 11.5, lineHeight: '18px', textAlign: 'center', bgcolor: selected ? '#fff' : '#f1f5f9', color: selected ? c.fg : 'text.secondary' }}>
+                {count}
+              </Box>
+            </Box>
+          );
+        })}
+      </Stack>
+    </Stack>
+  );
 }
 
 /**
@@ -163,6 +239,10 @@ export default function InvoicesPage() {
   /** ใบกำกับที่กำลังแก้วันที่ */
   /** ใบกำกับที่กำลังแก้ไข */
   const [editTarget, setEditTarget] = useState<InvoiceEditTarget>(null);
+  /** ตัวกรองสถานะใบกำกับ */
+  const [docFilter, setDocFilter] = useState<DocFilter>('ALL');
+  /** ตัวกรองสถานะชำระ */
+  const [payFilter, setPayFilter] = useState<PayFilter>('ALL');
   /** หน้าปัจจุบันของตาราง (เริ่มที่ 0) */
   const [page, setPage] = useState(0);
   /** จำนวนแถวต่อหน้า; -1 = ทั้งหมด */
@@ -211,7 +291,7 @@ export default function InvoicesPage() {
    * sorted by invoice issue date then invoice number (newest first); orders without
    * an active invoice go last.
    */
-  const tableRows = useMemo(() => {
+  const searchedRows = useMemo(() => {
     const q = search.trim().toLowerCase();
     const matches = (o: OrderOption) => {
       if (!q) return true;
@@ -228,8 +308,46 @@ export default function InvoicesPage() {
         const byDate = String(ib.issued_at || '').localeCompare(String(ia.issued_at || ''));
         if (byDate) return byDate;
         return ib.invoice_no.localeCompare(ia.invoice_no, undefined, { numeric: true });
+      })
+      .map(({ order, invoice }) => {
+        const active = activeOf(invoice);
+        return {
+          order,
+          invoice,
+          docStatus: invoiceDocStatus(invoice?.status),
+          payView: paymentView({
+            order_status: order.order_status,
+            due_date: active?.due_date ?? order.due_date,
+            total_amount: active ? active.total_amount : order.total_amount,
+            outstanding_amount: order.outstanding_amount,
+            invoice_paid: active?.status === 'PAID',
+          }, todayBangkok()),
+        };
       });
   }, [orders, rows, search]);
+
+  /** Row counts per filter option, after the search box but before the status filters. */
+  const filterCounts = useMemo(() => {
+    const doc: Record<string, number> = { ALL: searchedRows.length };
+    const pay: Record<string, number> = { ALL: searchedRows.length };
+    for (const row of searchedRows) {
+      doc[row.docStatus] = (doc[row.docStatus] ?? 0) + 1;
+      if (row.payView) pay[row.payView.kind] = (pay[row.payView.kind] ?? 0) + 1;
+      if (row.payView && row.payView.kind !== 'PAID') pay.UNPAID = (pay.UNPAID ?? 0) + 1;
+    }
+    return { doc, pay };
+  }, [searchedRows]);
+
+  /** Rows after the search box and both status filters. */
+  const tableRows = useMemo(
+    () => searchedRows.filter((row) => {
+      if (docFilter !== 'ALL' && row.docStatus !== docFilter) return false;
+      if (payFilter === 'ALL') return true;
+      if (!row.payView) return false;
+      return payFilter === 'UNPAID' ? row.payView.kind !== 'PAID' : row.payView.kind === payFilter;
+    }),
+    [searchedRows, docFilter, payFilter],
+  );
 
   /** Rows on the current page (`rowsPerPage === -1` shows every row). */
   const pagedRows = useMemo(
@@ -237,7 +355,7 @@ export default function InvoicesPage() {
     [tableRows, page, rowsPerPage],
   );
   // Back to the first page when the search changes; clamp when rows shrink below the current page.
-  useEffect(() => { setPage(0); }, [search]);
+  useEffect(() => { setPage(0); }, [search, docFilter, payFilter]);
   useEffect(() => {
     if (rowsPerPage === -1) return;
     const lastPage = Math.max(0, Math.ceil(tableRows.length / rowsPerPage) - 1);
@@ -299,12 +417,16 @@ export default function InvoicesPage() {
           <Box sx={{ flex: 1, display: { xs: 'none', sm: 'block' } }} />
           <Button variant='contained' startIcon={<Add />} onClick={() => { setIssueDate(todayBangkok()); setIssueOpen(true); }}>ออกใบกำกับจากใบสั่งขาย</Button>
         </Stack>
+        <Stack spacing={1} sx={{ mt: 1.5, pt: 1.5, borderTop: '1px dashed', borderColor: 'divider' }}>
+          <FilterRow label='สถานะใบกำกับ' options={DOC_FILTERS} value={docFilter} counts={filterCounts.doc} onChange={setDocFilter} />
+          <FilterRow label='สถานะชำระ' options={PAY_FILTERS} value={payFilter} counts={filterCounts.pay} onChange={setPayFilter} />
+        </Stack>
       </Paper>
 
       {error ? <Alert severity='error'>{error}</Alert> : null}
       {loading ? <Alert severity='info'>กำลังโหลด...</Alert> : null}
 
-      <TableContainer component={Paper} variant='outlined' sx={{ maxHeight: 'calc(100vh - 260px)', overflow: 'auto' }}>
+      <TableContainer component={Paper} variant='outlined' sx={{ maxHeight: 'calc(100vh - 340px)', minHeight: 320, overflow: 'auto' }}>
         <Table size='small' stickyHeader sx={{ minWidth: 1280 }}>
           <TableHead>
             <TableRow sx={{ '& th': { whiteSpace: 'nowrap', fontWeight: 800, bgcolor: '#f8fafc', zIndex: 2 } }}>
@@ -319,16 +441,8 @@ export default function InvoicesPage() {
             </TableRow>
           </TableHead>
           <TableBody>
-            {pagedRows.map(({ order: o, invoice: r }) => {
+            {pagedRows.map(({ order: o, invoice: r, docStatus, payView }) => {
                   const active = r && r.status !== 'CANCELLED' ? r : null;
-                  const docStatus = invoiceDocStatus(r?.status);
-                  const payView = paymentView({
-                    order_status: o.order_status,
-                    due_date: active?.due_date ?? o.due_date,
-                    total_amount: active ? active.total_amount : o.total_amount,
-                    outstanding_amount: o.outstanding_amount,
-                    invoice_paid: active?.status === 'PAID',
-                  }, todayBangkok());
                   return (
                     <TableRow key={o.id} hover>
                       <TableCell>{formatDate(active?.issued_at)}</TableCell>
@@ -412,7 +526,15 @@ export default function InvoicesPage() {
                     </TableRow>
                   );
                 })}
-            {!tableRows.length && !loading ? <TableRow><TableCell colSpan={8} align='center'>ไม่มีใบสั่งขายที่ยืนยันแล้ว</TableCell></TableRow> : null}
+            {!tableRows.length && !loading ? (
+              <TableRow>
+                <TableCell colSpan={8} align='center' sx={{ py: 4, color: 'text.secondary' }}>
+                  {searchedRows.length ? (
+                    <>ไม่มีรายการตามตัวกรองที่เลือก · <Button size='small' onClick={() => { setDocFilter('ALL'); setPayFilter('ALL'); }}>ล้างตัวกรอง</Button></>
+                  ) : 'ไม่มีใบสั่งขายที่ยืนยันแล้ว'}
+                </TableCell>
+              </TableRow>
+            ) : null}
           </TableBody>
         </Table>
       </TableContainer>

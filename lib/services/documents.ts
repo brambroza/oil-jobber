@@ -195,6 +195,25 @@ export function buildDocumentFlex(doc: GeneratedDocument, url: string, customerN
 }
 
 /**
+ * LINE recipient of a customer: the linked group when there is one, otherwise the user.
+ * @param companyId tenant
+ * @param customerId customer
+ * @returns line_customers row or null when the customer has not linked LINE
+ */
+export async function findCustomerLineRecipient(companyId: string, customerId: string) {
+  const { data } = await supabaseAdmin
+    .from('line_customers')
+    .select('id, line_user_id, group_id')
+    .eq('company_id', companyId)
+    .eq('customer_id', customerId)
+    .eq('is_deleted', false)
+    .order('group_id', { ascending: false, nullsFirst: false })
+    .limit(1)
+    .maybeSingle();
+  return data as { id: string; line_user_id: string | null; group_id: string | null } | null;
+}
+
+/**
  * Generates, uploads and pushes a document to the customer's LINE (group when
  * linked, otherwise the user). Returns the public URL.
  * `options.vatMode` picks ราคาไม่รวมภาษี / ราคารวมภาษี (default: the bill's saved mode).
@@ -210,15 +229,7 @@ export async function sendDocumentToLine(
   if ('error' in doc) return doc;
   if (!doc.customerId) return { error: 'ไม่พบลูกค้าของเอกสารนี้', status: 404 };
 
-  const { data: lineCustomer } = await supabaseAdmin
-    .from('line_customers')
-    .select('id, line_user_id, group_id')
-    .eq('company_id', companyId)
-    .eq('customer_id', doc.customerId)
-    .eq('is_deleted', false)
-    .order('group_id', { ascending: false, nullsFirst: false })
-    .limit(1)
-    .maybeSingle();
+  const lineCustomer = await findCustomerLineRecipient(companyId, doc.customerId);
   const recipient = lineCustomer?.group_id || lineCustomer?.line_user_id;
   if (!recipient) return { error: 'ลูกค้ารายนี้ยังไม่ได้เชื่อม LINE', status: 422 };
 

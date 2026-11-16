@@ -15,6 +15,11 @@ export type StatusView = {
   tone: StatusTone;
 };
 
+/** Payment bucket used for filtering the invoice table. */
+export type PaymentKind = 'OVERDUE' | 'DUE_TODAY' | 'PENDING' | 'PARTIAL' | 'PAID';
+
+export type PaymentStatusView = StatusView & { kind: PaymentKind };
+
 export type InvoiceDocStatus = 'NOT_ISSUED' | 'ISSUED' | 'CANCELLED';
 
 /**
@@ -64,25 +69,25 @@ export function paymentView(
     invoice_paid?: boolean;
   },
   today: string,
-): StatusView | null {
+): PaymentStatusView | null {
   const outstanding = input.invoice_paid ? 0 : Math.max(0, Number(input.outstanding_amount || 0));
   const due = paymentDueStatus({ order_status: input.order_status, due_date: input.due_date, outstanding_amount: outstanding }, today);
   if (due.status === 'NONE') return null;
-  if (due.status === 'PAID') return { label: 'ชำระครบ', tone: 'success' };
+  if (due.status === 'PAID') return { kind: 'PAID', label: 'ชำระครบ', tone: 'success' };
 
   const partial = outstanding < Number(input.total_amount || 0) - 0.005;
   const owed = `${partial ? 'ค้าง' : 'ยอด'} ${money(outstanding)} บาท`;
 
   switch (due.status) {
     case 'OVERDUE':
-      return { label: `เกินกำหนด ${due.daysOverdue} วัน`, detail: owed, tone: 'error' };
+      return { kind: 'OVERDUE', label: `เกินกำหนด ${due.daysOverdue} วัน`, detail: owed, tone: 'error' };
     case 'DUE_TODAY':
-      return { label: 'ครบกำหนดวันนี้', detail: owed, tone: 'warning' };
+      return { kind: 'DUE_TODAY', label: 'ครบกำหนดวันนี้', detail: owed, tone: 'warning' };
     case 'NOT_DUE': {
       const daysLeft = daysBetween(today, String(input.due_date));
-      return { label: partial ? 'ชำระบางส่วน' : 'รอชำระ', detail: `${owed} · อีก ${daysLeft} วัน`, tone: partial ? 'info' : 'neutral' };
+      return { kind: partial ? 'PARTIAL' : 'PENDING', label: partial ? 'ชำระบางส่วน' : 'รอชำระ', detail: `${owed} · อีก ${daysLeft} วัน`, tone: partial ? 'info' : 'neutral' };
     }
     default:
-      return { label: partial ? 'ชำระบางส่วน' : 'รอชำระ', detail: `${owed} · ไม่มีกำหนด`, tone: partial ? 'info' : 'neutral' };
+      return { kind: partial ? 'PARTIAL' : 'PENDING', label: partial ? 'ชำระบางส่วน' : 'รอชำระ', detail: `${owed} · ไม่มีกำหนด`, tone: partial ? 'info' : 'neutral' };
   }
 }

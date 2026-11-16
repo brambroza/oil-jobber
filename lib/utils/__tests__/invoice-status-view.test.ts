@@ -31,7 +31,7 @@ describe('paymentView', () => {
 
   it('flags overdue with days and amount', () => {
     const v = paymentView({ ...base, due_date: '2026-11-09' }, TODAY);
-    expect(v).toMatchObject({ label: 'เกินกำหนด 3 วัน', tone: 'error' });
+    expect(v).toMatchObject({ kind: 'OVERDUE', label: 'เกินกำหนด 3 วัน', tone: 'error' });
     expect(v?.detail).toContain('1,000.00');
   });
 
@@ -41,13 +41,13 @@ describe('paymentView', () => {
 
   it('shows days left before the due date', () => {
     const v = paymentView({ ...base, due_date: '2026-11-20' }, TODAY);
-    expect(v).toMatchObject({ label: 'รอชำระ', tone: 'neutral' });
+    expect(v).toMatchObject({ kind: 'PENDING', label: 'รอชำระ', tone: 'neutral' });
     expect(v?.detail).toContain('อีก 8 วัน');
   });
 
   it('marks partial payments and shows the remaining amount', () => {
     const v = paymentView({ ...base, outstanding_amount: 400, due_date: '2026-11-20' }, TODAY);
-    expect(v).toMatchObject({ label: 'ชำระบางส่วน', tone: 'info' });
+    expect(v).toMatchObject({ kind: 'PARTIAL', label: 'ชำระบางส่วน', tone: 'info' });
     expect(v?.detail).toContain('ค้าง 400.00');
   });
 

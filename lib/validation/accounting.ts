@@ -71,3 +71,39 @@ export const companyPatchSchema = z.object({
     .max(100, 'ค่าขนส่งเพิ่มต้องไม่เกิน 100 บาท/ลิตร')
     .optional(),
 });
+
+/** POST /api/accounting/payment-link */
+export const paymentLinkCreateSchema = z.object({
+  sale_order_id: uuid,
+  /** ส่งลิงก์ให้ลูกค้าทาง LINE ทันทีหลังสร้าง */
+  send_line: z.boolean().default(false),
+});
+
+/** GET /api/accounting/payment-slip */
+export const paymentSlipListQuerySchema = z.object({
+  status: z.enum(['PENDING', 'APPROVED', 'REJECTED', 'ALL']).default('PENDING'),
+  sale_order_id: z.union([uuid, z.literal('')]).optional().transform((v) => v || undefined),
+});
+
+/** POST /api/accounting/payment-slip/[id]/approve — staff confirm the real amount received. */
+export const paymentSlipApproveSchema = z.object({
+  amount: z.coerce.number().positive('จำนวนเงินต้องมากกว่า 0'),
+  paid_at: dateYmd,
+  payment_method: z.enum(PAYMENT_METHODS).default('TRANSFER'),
+  reference_no: optionalText(100),
+  note: optionalText(1000),
+});
+
+/** POST /api/accounting/payment-slip/[id]/reject */
+export const paymentSlipRejectSchema = z.object({
+  reason: z.string().trim().min(1, 'กรุณาระบุเหตุผล').max(500),
+});
+
+/** Customer form fields of POST /api/public/payment-slip/[token] (multipart, file checked separately). */
+export const publicSlipSubmitSchema = z.object({
+  amount: z.coerce.number({ invalid_type_error: 'จำนวนเงินต้องเป็นตัวเลข' }).positive('จำนวนเงินต้องมากกว่า 0').max(100_000_000),
+  transferred_at: dateYmd,
+  reference_no: optionalText(100),
+  payer_name: optionalText(200),
+  note: optionalText(500),
+});

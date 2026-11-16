@@ -7,6 +7,7 @@ import { PdfPreviewDialog, type PdfPreviewTarget } from '@/components/documents/
 import { ActionSnackbar, type ActionSnackbarSeverity } from '@/components/common/ActionSnackbar';
 import { PAYMENT_METHOD_LABELS } from '@/lib/documents/format';
 import { formatDate } from '@/lib/utils/date-format';
+import { PaymentSlipList } from '@/components/accounting/PaymentSlipPanel';
 
 type ReceiptRow = {
   id: string;
@@ -22,12 +23,13 @@ type ReceiptRow = {
 
 const money = (value: number) => Number(value || 0).toLocaleString('th-TH', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 
-/** Receipts issued by the payment flow; print or send via LINE. */
+/** Receipts issued by the payment flow (print or send via LINE) plus the queue of customer slips awaiting review. */
 export default function ReceiptsPage() {
   const [rows, setRows] = useState<ReceiptRow[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
   const [search, setSearch] = useState('');
+  const [slipRefresh, setSlipRefresh] = useState(0);
   const [pdfTarget, setPdfTarget] = useState<PdfPreviewTarget>(null);
   const [snack, setSnack] = useState<{ open: boolean; message: string; severity: ActionSnackbarSeverity }>({ open: false, message: '', severity: 'info' });
 
@@ -54,9 +56,24 @@ export default function ReceiptsPage() {
         <Typography variant='h4'>ใบเสร็จรับเงิน</Typography>
         <Typography variant='body2' color='text.secondary'>ออกอัตโนมัติทุกครั้งที่บันทึกรับชำระ เลขที่ RC-YYMMDD####</Typography>
       </Box>
+      <Box>
+        <Typography variant='h6' fontWeight={800}>สลิปจากลูกค้ารอตรวจสอบ</Typography>
+        <Typography variant='body2' color='text.secondary' sx={{ mb: 1 }}>
+          ลูกค้าแนบสลิปผ่านลิงก์ (สร้างลิงก์ได้ที่ปุ่มรับชำระในหน้าใบแจ้งหนี้ / ค้างชำระ) · ยืนยันแล้วระบบบันทึกรับชำระและออกใบเสร็จให้อัตโนมัติ
+        </Typography>
+        <PaymentSlipList
+          refreshKey={slipRefresh}
+          onChanged={() => { void load(); }}
+          onPrintReceipt={(receiptId, receiptNo) => {
+            setSnack({ open: true, message: `บันทึกรับชำระแล้ว ออกใบเสร็จ ${receiptNo}`, severity: 'success' });
+            setPdfTarget({ type: 'receipt', id: receiptId, title: `ใบเสร็จรับเงิน · ${receiptNo}` });
+          }}
+        />
+      </Box>
+      <Typography variant='h6' fontWeight={800}>ใบเสร็จที่ออกแล้ว</Typography>
       <Stack direction={{ xs: 'column', sm: 'row' }} spacing={1}>
         <TextField id='receipt-search' size='small' label='ค้นหา' value={search} onChange={(e) => setSearch(e.target.value)} sx={{ minWidth: 280 }} />
-        <Button variant='outlined' onClick={() => void load()}>รีเฟรช</Button>
+        <Button variant='outlined' onClick={() => { void load(); setSlipRefresh((n) => n + 1); }}>รีเฟรช</Button>
       </Stack>
       {error ? <Alert severity='error'>{error}</Alert> : null}
       {loading ? <Alert severity='info'>กำลังโหลด...</Alert> : null}
