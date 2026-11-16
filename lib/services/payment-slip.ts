@@ -112,22 +112,25 @@ export async function findLinkByToken(token: string): Promise<LinkRow | null> {
  * Exposes only bill numbers, customer name, amounts and this order's slip statuses.
  */
 export async function loadPublicPaymentView(link: LinkRow): Promise<PublicPaymentView> {
-  const [orderRes, companyRes, invoiceRes, subsRes, outstanding] = await Promise.all([
-    supabaseAdmin.from('sale_orders').select('order_no, order_status, total_amount, customer_id, is_deleted').eq('id', link.sale_order_id).maybeSingle(),
+  // sale_orders has no total column: the bill total comes from the same RPC the outstanding balance uses.
+  const [orderRes, companyRes, invoiceRes, subsRes, outstanding, totalRes] = await Promise.all([
+    supabaseAdmin.from('sale_orders').select('order_no, order_status, customer_id, is_deleted').eq('id', link.sale_order_id).maybeSingle(),
     supabaseAdmin.from('companies').select('name').eq('id', link.company_id).maybeSingle(),
     supabaseAdmin.from('invoices').select('invoice_no').eq('sale_order_id', link.sale_order_id).eq('is_deleted', false)
       .neq('status', 'CANCELLED').order('created_at', { ascending: false }).limit(1).maybeSingle(),
     supabaseAdmin.from('payment_slip_submissions').select('id, created_at, amount, transferred_at, status, reject_reason')
       .eq('sale_order_id', link.sale_order_id).order('created_at', { ascending: false }).limit(20),
     loadOrderOutstanding(link.sale_order_id),
+    supabaseAdmin.rpc('get_order_total_amount', { p_order: link.sale_order_id }),
   ]);
+  if (orderRes.error) console.error('โหลดคำสั่งซื้อของลิงก์แนบสลิปไม่สำเร็จ:', orderRes.error.message);
   const order = orderRes.data;
   let customerName: string | null = null;
   if (order?.customer_id) {
     const { data: customer } = await supabaseAdmin.from('customers').select('company_name').eq('id', order.customer_id).maybeSingle();
     customerName = customer?.company_name ?? null;
   }
-  const total = Number(order?.total_amount || 0);
+  const total = Number(totalRes.data || 0);
   return {
     state: resolvePaymentLinkState({
       expiresAt: link.expires_at,
