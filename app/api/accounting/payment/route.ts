@@ -5,6 +5,8 @@ import { parseBody } from '@/lib/validation/common';
 import { recordPaymentSchema } from '@/lib/validation/accounting';
 import { loadSalesUserNames } from '@/lib/services/order-items';
 import { canAccessOrder, customerForbidden } from '@/lib/services/customer-scope';
+import { signedSlipUrl } from '@/lib/services/payment-slip';
+import { classifySlipUrl } from '@/lib/utils/slip-link';
 
 /** Payments of one order (`?sale_order_id=`) with receipt numbers and receiver names. */
 export async function GET(req: NextRequest) {
@@ -32,8 +34,17 @@ export async function GET(req: NextRequest) {
   ]);
   const receiptNo = new Map((receiptsRes.data ?? []).map((r) => [r.id, r.receipt_no]));
 
-  return NextResponse.json((data ?? []).map((p) => ({
+  // ลิงก์ที่เปิดดูสลิปได้: ลิงก์ภายนอก (Drive ฯลฯ) ใช้ตรง ๆ, สลิปที่ลูกค้าอัปโหลดใช้ signed URL อายุสั้น
+  const slipViewUrls = await Promise.all((data ?? []).map(async (p) => {
+    const slip = classifySlipUrl(p.slip_url);
+    if (slip.kind === 'external') return slip.url;
+    if (slip.kind === 'stored') return signedSlipUrl(slip.path, 600);
+    return null;
+  }));
+
+  return NextResponse.json((data ?? []).map((p, index) => ({
     ...p,
+    slip_view_url: slipViewUrls[index],
     receipt_no: p.receipt_id ? receiptNo.get(p.receipt_id) ?? null : null,
     received_by_name: p.received_by ? names.get(p.received_by) ?? null : null,
   })));

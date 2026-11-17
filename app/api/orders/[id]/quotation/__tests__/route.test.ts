@@ -3,6 +3,7 @@ import { NextRequest } from 'next/server';
 
 const issueQuotation = vi.fn();
 const loadActiveQuotation = vi.fn();
+const updateQuotationDates = vi.fn();
 const canAccessOrder = vi.fn();
 
 vi.mock('@/lib/auth/api-guard', () => ({
@@ -15,9 +16,10 @@ vi.mock('@/lib/services/customer-scope', () => ({
 vi.mock('@/lib/services/quotations', () => ({
   issueQuotation: (...args: unknown[]) => issueQuotation(...args),
   loadActiveQuotation: (...args: unknown[]) => loadActiveQuotation(...args),
+  updateQuotationDates: (...args: unknown[]) => updateQuotationDates(...args),
 }));
 
-import { GET, POST } from '../route';
+import { GET, PATCH, POST } from '../route';
 
 const ORDER_ID = '7f1c2d3e-4b5a-4c6d-8e9f-0a1b2c3d4e5f';
 
@@ -30,6 +32,7 @@ function post(id: string, body: unknown) {
 beforeEach(() => {
   issueQuotation.mockReset();
   loadActiveQuotation.mockReset();
+  updateQuotationDates.mockReset();
   canAccessOrder.mockReset().mockResolvedValue(true);
 });
 
@@ -67,6 +70,19 @@ describe('POST /api/orders/[id]/quotation', () => {
     expect(await res.json()).toEqual({ quotation: { quotation_no: 'QT-26110001' }, unchanged: true });
   });
 
+  it('passes a chosen document date through', async () => {
+    issueQuotation.mockResolvedValue({ quotation: { quotation_no: 'QT-26110002', issued_at: '2026-11-10' } });
+    const res = await post(ORDER_ID, { issued_at: '2026-11-10', valid_until: '2026-11-17' });
+    expect(res.status).toBe(200);
+    expect(issueQuotation).toHaveBeenCalledWith('c1', 'u1', ORDER_ID, expect.objectContaining({ issued_at: '2026-11-10', valid_until: '2026-11-17' }));
+  });
+
+  it('rejects an invalid document date', async () => {
+    const res = await post(ORDER_ID, { issued_at: '10/11/2026' });
+    expect(res.status).toBe(422);
+    expect(issueQuotation).not.toHaveBeenCalled();
+  });
+
   it('rejects a non-boolean only_if_changed', async () => {
     const res = await post(ORDER_ID, { only_if_changed: 'yes' });
     expect(res.status).toBe(422);
@@ -77,6 +93,49 @@ describe('POST /api/orders/[id]/quotation', () => {
     const res = await post(ORDER_ID, { reissue: false });
     expect(res.status).toBe(409);
     expect(await res.json()).toMatchObject({ quotation: { quotation_no: 'QT-2610130002' } });
+  });
+});
+
+/** Calls PATCH with a JSON body. */
+function patch(id: string, body: unknown) {
+  const req = new NextRequest(`http://localhost/api/orders/${id}/quotation`, { method: 'PATCH', body: JSON.stringify(body) });
+  return PATCH(req, { params: Promise.resolve({ id }) });
+}
+
+describe('PATCH /api/orders/[id]/quotation', () => {
+  it('rejects a non-UUID order id', async () => {
+    const res = await patch('abc', { issued_at: '2026-11-10' });
+    expect(res.status).toBe(422);
+    expect(updateQuotationDates).not.toHaveBeenCalled();
+  });
+
+  it('rejects orders outside the salesperson scope', async () => {
+    canAccessOrder.mockResolvedValue(false);
+    const res = await patch(ORDER_ID, { issued_at: '2026-11-10' });
+    expect(res.status).toBe(403);
+    expect(updateQuotationDates).not.toHaveBeenCalled();
+  });
+
+  it('requires a valid document date', async () => {
+    expect((await patch(ORDER_ID, {})).status).toBe(422);
+    expect((await patch(ORDER_ID, { issued_at: '' })).status).toBe(422);
+    expect((await patch(ORDER_ID, { issued_at: '2026-11-10', valid_until: 'tomorrow' })).status).toBe(422);
+    expect(updateQuotationDates).not.toHaveBeenCalled();
+  });
+
+  it('updates the dates (empty validity → null)', async () => {
+    updateQuotationDates.mockResolvedValue({ quotation: { quotation_no: 'QT-26110001', issued_at: '2026-11-10', valid_until: null } });
+    const res = await patch(ORDER_ID, { issued_at: '2026-11-10', valid_until: '' });
+    expect(res.status).toBe(200);
+    expect(updateQuotationDates).toHaveBeenCalledWith('c1', 'u1', ORDER_ID, { issued_at: '2026-11-10', valid_until: null });
+    expect(await res.json()).toEqual({ quotation: { quotation_no: 'QT-26110001', issued_at: '2026-11-10', valid_until: null } });
+  });
+
+  it('returns the service error status', async () => {
+    updateQuotationDates.mockResolvedValue({ error: 'วันที่ยืนราคาต้องไม่ก่อนวันที่ออกเอกสาร', status: 422 });
+    const res = await patch(ORDER_ID, { issued_at: '2026-11-10', valid_until: '2026-11-01' });
+    expect(res.status).toBe(422);
+    expect(await res.json()).toEqual({ error: 'วันที่ยืนราคาต้องไม่ก่อนวันที่ออกเอกสาร' });
   });
 });
 

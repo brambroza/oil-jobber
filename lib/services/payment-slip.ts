@@ -7,6 +7,7 @@ import { formatDate } from '@/lib/utils/date-format';
 import {
   buildPaymentLinkUrl,
   isPlausibleLinkToken,
+  LINK_TOKEN_BYTES,
   paymentLinkExpiry,
   resolvePaymentLinkState,
   type PaymentLinkState,
@@ -67,7 +68,7 @@ export async function createPaymentLink(companyId: string, orderId: string, user
     .eq('sale_order_id', orderId)
     .is('revoked_at', null);
 
-  const token = randomBytes(24).toString('base64url');
+  const token = randomBytes(LINK_TOKEN_BYTES).toString('base64url');
   const expiresAt = paymentLinkExpiry(new Date()).toISOString();
   const { data, error } = await supabaseAdmin
     .from('payment_slip_links')

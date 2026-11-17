@@ -25,6 +25,8 @@ export const orderItemSchema = z.object({
 /** Full order payload for create. */
 export const orderBodySchema = z.object({
   customer_id: uuid,
+  /** วันที่เอกสารใบสั่งขาย (ไม่ส่ง/ว่าง = วันนี้ตอนสร้าง, คงเดิมตอนแก้ไข) */
+  order_date: nullableDate,
   order_status: z.enum(ORDER_STATUSES).optional(),
   payment_condition_id: optionalUuid,
   due_date: nullableDate,
@@ -91,6 +93,8 @@ export const quotationDecisionSchema = z.object({
 
 /** POST /api/orders/[id]/quotation */
 export const issueQuotationSchema = z.object({
+  /** วันที่เอกสารใบเสนอราคา (ไม่ส่ง = วันนี้) */
+  issued_at: dateYmd.optional(),
   valid_until: z.union([dateYmd, z.literal(''), z.null()])
     .optional()
     .transform((value): string | null | undefined => (value === '' ? null : value)),
@@ -99,4 +103,12 @@ export const issueQuotationSchema = z.object({
   reissue: z.boolean().optional(),
   /** เมนูใบเสนอราคา (บันทึกแล้วออกทันที): ใช้ใบเดิมถ้ายอดไม่เปลี่ยนและยังไม่หมดอายุ ไม่งั้นออกเลขใหม่ */
   only_if_changed: z.boolean().optional(),
+});
+
+/** PATCH /api/orders/[id]/quotation: แก้วันที่ของใบเสนอราคาปัจจุบันโดยไม่ออกเลขใหม่ */
+export const updateQuotationDatesSchema = z.object({
+  issued_at: dateYmd,
+  valid_until: z.union([dateYmd, z.literal(''), z.null()])
+    .optional()
+    .transform((value): string | null | undefined => (value === '' ? null : value)),
 });

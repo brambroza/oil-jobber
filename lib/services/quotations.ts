@@ -167,13 +167,13 @@ export async function loadQuotationDocumentData(companyId: string, orderId: stri
  * @param companyId - tenant scope
  * @param userId - issuing staff user
  * @param orderId - sale order id
- * @param input - validity date, note and reissue flag
+ * @param input - document date (default today), validity date, note and reissue flag
  */
 export async function issueQuotation(
   companyId: string,
   userId: string,
   orderId: string,
-  input: { valid_until?: string | null; note?: string | null; reissue: boolean; only_if_changed?: boolean },
+  input: { issued_at?: string; valid_until?: string | null; note?: string | null; reissue: boolean; only_if_changed?: boolean },
 ): Promise<{ quotation: QuotationRow; unchanged?: boolean } | { error: string; status: number; quotation?: QuotationRow }> {
   const { data: order, error: orderError } = await supabaseAdmin
     .from('sale_orders')
@@ -187,7 +187,8 @@ export async function issueQuotation(
   if (order.quotation_stage === 'CLOSED') return { error: 'ใบเสนอราคานี้ปิดแล้ว (ลูกค้าปฏิเสธ/ยกเลิก)', status: 422 };
   if (order.order_status === 'CANCELLED') return { error: 'ใบสั่งขายถูกยกเลิกแล้ว ออกใบเสนอราคาไม่ได้', status: 422 };
 
-  const issuedAt = todayBangkok();
+  const today = todayBangkok();
+  const issuedAt = input.issued_at || today;
   if (input.valid_until && input.valid_until < issuedAt) {
     return { error: 'วันที่ยืนราคาต้องไม่ก่อนวันที่ออกเอกสาร', status: 422 };
   }
@@ -207,8 +208,19 @@ export async function issueQuotation(
     && input.only_if_changed
     && !input.reissue
     && quotationMatchesOrder(active.quotation.total_amount, doc.totals.net_incl_vat)
-    && !isQuotationExpired(active.quotation.valid_until, issuedAt)
+    && !isQuotationExpired(active.quotation.valid_until, today)
   ) {
+    // ยอดเดิม: คงเลขเดิมไว้ แต่ถ้าผู้ใช้ระบุวันที่เอกสารใหม่ ให้แก้วันที่บนใบเดิม
+    if (input.issued_at && input.issued_at !== active.quotation.issued_at) {
+      const updated = await updateQuotationDates(companyId, userId, orderId, {
+        issued_at: input.issued_at,
+        valid_until: active.quotation.valid_until && active.quotation.valid_until < input.issued_at
+          ? input.issued_at
+          : active.quotation.valid_until,
+      });
+      if ('error' in updated) return updated;
+      return { quotation: updated.quotation, unchanged: true };
+    }
     return { quotation: active.quotation, unchanged: true };
   }
 
@@ -236,6 +248,42 @@ export async function issueQuotation(
       created_by: userId,
       updated_by: userId,
     })
+    .select(QUOTATION_COLUMNS)
+    .single();
+  if (error) return { error: error.message, status: 400 };
+  return { quotation: data as QuotationRow };
+}
+
+/**
+ * Changes the document date (and optionally the validity date) of the
+ * order's current quotation without issuing a new number. The QT number
+ * keeps the month it was issued in.
+ *
+ * @param companyId - tenant scope
+ * @param userId - editing staff user
+ * @param orderId - sale order id
+ * @param input - new `issued_at`; `valid_until` undefined = keep, null = clear
+ */
+export async function updateQuotationDates(
+  companyId: string,
+  userId: string,
+  orderId: string,
+  input: { issued_at: string; valid_until?: string | null },
+): Promise<{ quotation: QuotationRow } | { error: string; status: number }> {
+  const active = await loadActiveQuotation(companyId, orderId);
+  if ('error' in active) return { error: active.error, status: 400 };
+  if (!active.quotation) return { error: 'ยังไม่ได้ออกใบเสนอราคาสำหรับใบสั่งขายนี้', status: 404 };
+
+  const validUntil = input.valid_until === undefined ? active.quotation.valid_until : input.valid_until;
+  if (validUntil && validUntil < input.issued_at) {
+    return { error: 'วันที่ยืนราคาต้องไม่ก่อนวันที่ออกเอกสาร', status: 422 };
+  }
+
+  const { data, error } = await supabaseAdmin
+    .from('quotations')
+    .update({ issued_at: input.issued_at, valid_until: validUntil, updated_by: userId, updated_at: new Date().toISOString() })
+    .eq('id', active.quotation.id)
+    .eq('company_id', companyId)
     .select(QUOTATION_COLUMNS)
     .single();
   if (error) return { error: error.message, status: 400 };

@@ -128,7 +128,7 @@ export async function loadOrderDocumentData(companyId: string, orderId: string):
   return {
     order_id: order.id,
     order_no: order.order_no || order.id.slice(0, 8),
-    order_date: order.created_at,
+    order_date: order.order_date || order.created_at,
     due_date: order.due_date,
     requested_delivery_date: order.requested_delivery_date,
     credit_label: creditLabel,

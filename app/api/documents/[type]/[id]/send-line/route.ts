@@ -5,6 +5,7 @@ import { canAccessOrder, customerForbidden, isScopedRole } from '@/lib/services/
 import { DOCUMENT_TYPES, sendDocumentToLine } from '@/lib/services/documents';
 import type { DocumentType } from '@/lib/documents/types';
 import { parseOptionalVatMode } from '@/lib/documents/vat-mode';
+import { resolveSiteOrigin } from '@/lib/services/payment-slip';
 
 export const runtime = 'nodejs';
 
@@ -31,7 +32,7 @@ export async function POST(req: Request, { params }: { params: Promise<{ type: s
   const vatMode = parseOptionalVatMode(body?.vat_mode);
 
   try {
-    const result = await sendDocumentToLine(guard.ctx.companyId, type as DocumentType, id, guard.ctx.userId, { vatMode });
+    const result = await sendDocumentToLine(guard.ctx.companyId, type as DocumentType, id, guard.ctx.userId, { vatMode, origin: resolveSiteOrigin(new URL(req.url).origin) });
     if ('error' in result) return NextResponse.json({ error: result.error }, { status: result.status });
     return NextResponse.json({ ok: true, ...result });
   } catch (error) {

@@ -1,8 +1,8 @@
 'use client';
 
 import { useEffect, useState } from 'react';
-import { Alert, Button, Dialog, DialogActions, DialogContent, DialogTitle, IconButton, Stack, ToggleButton, ToggleButtonGroup } from '@mui/material';
-import { Close, OpenInNew, Send } from '@mui/icons-material';
+import { Alert, Box, Button, Dialog, DialogActions, DialogContent, DialogTitle, IconButton, Stack, ToggleButton, ToggleButtonGroup } from '@mui/material';
+import { Close, ContentCopy, Link as LinkIcon, OpenInNew, Send } from '@mui/icons-material';
 import type { DocumentType } from '@/lib/documents/types';
 import { DEFAULT_VAT_MODE, parseVatMode, supportsVatMode, VAT_MODE_OPTIONS, type VatMode } from '@/lib/documents/vat-mode';
 
@@ -39,7 +39,10 @@ export function PdfPreviewDialog({ target, onClose, onNotify, onSent }: {
   onSent?: (target: NonNullable<PdfPreviewTarget>, result: PdfSentResult) => void;
 }) {
   const [sending, setSending] = useState(false);
+  const [copying, setCopying] = useState(false);
   const [error, setError] = useState('');
+  /** ลิงก์ล่าสุดที่ส่ง LINE หรือสร้างให้คัดลอก (แสดงให้พนักงานดู/คัดลอก) */
+  const [sentLink, setSentLink] = useState<{ docNo: string; url: string; sent: boolean } | null>(null);
   /** null while the bill's saved mode is being looked up. */
   const [vatMode, setVatMode] = useState<VatMode | null>(DEFAULT_VAT_MODE);
   const showVatMode = Boolean(target && supportsVatMode(target.type));
@@ -47,6 +50,7 @@ export function PdfPreviewDialog({ target, onClose, onNotify, onSent }: {
   // Each newly opened document starts at the price mode saved on the bill.
   useEffect(() => {
     setError('');
+    setSentLink(null);
     if (!target || !supportsVatMode(target.type)) { setVatMode(DEFAULT_VAT_MODE); return; }
     if (target.vatMode) { setVatMode(target.vatMode); return; }
     let active = true;
@@ -62,6 +66,7 @@ export function PdfPreviewDialog({ target, onClose, onNotify, onSent }: {
     if (!target) return;
     setSending(true);
     setError('');
+    setSentLink(null);
     try {
       const res = await fetch(`/api/documents/${target.type}/${target.id}/send-line`, {
         method: 'POST',
@@ -71,6 +76,7 @@ export function PdfPreviewDialog({ target, onClose, onNotify, onSent }: {
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || 'ส่ง LINE ไม่สำเร็จ');
       onNotify?.(`ส่ง ${target.title} ${data.docNo} ทาง LINE แล้ว`, 'success');
+      if (data.url) setSentLink({ docNo: String(data.docNo || ''), url: String(data.url), sent: true });
       onSent?.(target, {
         docNo: String(data.docNo || ''),
         url: String(data.url || ''),
@@ -83,6 +89,49 @@ export function PdfPreviewDialog({ target, onClose, onNotify, onSent }: {
       onNotify?.(message, 'error');
     } finally {
       setSending(false);
+    }
+  };
+
+  /** Copies a link to the clipboard. */
+  const copyToClipboard = async (url: string) => {
+    try {
+      await navigator.clipboard.writeText(url);
+      onNotify?.('คัดลอกลิงก์แล้ว', 'success');
+    } catch {
+      onNotify?.('คัดลอกไม่สำเร็จ กรุณาคัดลอกจากข้อความลิงก์ด้านบน', 'info');
+    }
+  };
+
+  /** Copies the shown link again. */
+  const copySentLink = async () => {
+    if (sentLink) await copyToClipboard(sentLink.url);
+  };
+
+  /**
+   * Creates the same customer link the LINE send uses (no LINE message, no
+   * status change) and copies it.
+   */
+  const copyLink = async () => {
+    if (!target) return;
+    setCopying(true);
+    setError('');
+    try {
+      const res = await fetch(`/api/documents/${target.type}/${target.id}/link`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(vatMode ? { vat_mode: vatMode } : {}),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || 'สร้างลิงก์ไม่สำเร็จ');
+      const url = String(data.url || '');
+      setSentLink({ docNo: String(data.docNo || ''), url, sent: false });
+      await copyToClipboard(url);
+    } catch (e) {
+      const message = (e as Error).message;
+      setError(message);
+      onNotify?.(message, 'error');
+    } finally {
+      setCopying(false);
     }
   };
 
@@ -101,6 +150,22 @@ export function PdfPreviewDialog({ target, onClose, onNotify, onSent }: {
       </DialogTitle>
       <DialogContent sx={{ p: 0, height: { xs: '74vh', md: '82vh' }, bgcolor: '#e5e7eb' }}>
         {error ? <Alert severity='error' sx={{ m: 1 }}>{error}</Alert> : null}
+        {sentLink ? (
+          <Alert
+            severity='success'
+            sx={{ m: 1, '& .MuiAlert-message': { minWidth: 0, flex: 1 } }}
+            onClose={() => setSentLink(null)}
+            action={(
+              <Stack direction='row' spacing={0.5} alignItems='center'>
+                <IconButton size='small' aria-label='คัดลอกลิงก์' onClick={() => void copySentLink()}><ContentCopy fontSize='small' /></IconButton>
+                <IconButton size='small' aria-label='เปิดลิงก์' component='a' href={sentLink.url} target='_blank' rel='noopener noreferrer'><OpenInNew fontSize='small' /></IconButton>
+              </Stack>
+            )}
+          >
+            {sentLink.sent ? `ส่ง ${sentLink.docNo} ทาง LINE แล้ว · ลิงก์ที่ลูกค้าได้รับ:` : `คัดลอกลิงก์ ${sentLink.docNo} แล้ว:`}{' '}
+            <Box component='span' sx={{ fontFamily: 'monospace', wordBreak: 'break-all' }}>{sentLink.url}</Box>
+          </Alert>
+        ) : null}
         {target && vatMode ? (
           <iframe
             key={`${target.type}-${target.id}-${target.copy ? 'copy' : 'orig'}-${vatMode}`}
@@ -137,8 +202,11 @@ export function PdfPreviewDialog({ target, onClose, onNotify, onSent }: {
               ดาวน์โหลด PDF
             </Button>
           ) : null}
-          <Button variant='contained' color='success' startIcon={<Send />} onClick={() => void sendLine()} disabled={!target || sending}>
+          <Button variant='contained' color='success' startIcon={<Send />} onClick={() => void sendLine()} disabled={!target || sending || copying}>
             {sending ? 'กำลังส่ง...' : 'ส่งไฟล์ให้ลูกค้าทาง LINE'}
+          </Button>
+          <Button variant='outlined' color='success' startIcon={<LinkIcon />} onClick={() => void copyLink()} disabled={!target || !vatMode || sending || copying}>
+            {copying ? 'กำลังสร้างลิงก์...' : 'คัดลอกลิงก์'}
           </Button>
         </Stack>
         <Button variant='outlined' color='error' startIcon={<Close />} onClick={onClose}>ปิด</Button>

@@ -85,10 +85,13 @@ describe('defaultApproveAmount', () => {
 
 describe('link url + token', () => {
   it('joins origin and token', () => {
-    expect(buildPaymentLinkUrl('https://a.com/', 'abc')).toBe('https://a.com/pay/abc');
+    expect(buildPaymentLinkUrl('https://a.com/', 'abc')).toBe('https://a.com/p/abc');
   });
-  it('checks token shape', () => {
+  it('checks token shape (new 12-char and legacy 32-char)', () => {
+    expect(isPlausibleLinkToken('A'.repeat(12))).toBe(true);
     expect(isPlausibleLinkToken('A'.repeat(32))).toBe(true);
+    expect(isPlausibleLinkToken('A'.repeat(13))).toBe(false);
+    expect(isPlausibleLinkToken('../'.padEnd(12, 'a'))).toBe(false);
     expect(isPlausibleLinkToken('abc')).toBe(false);
     expect(isPlausibleLinkToken('../'.padEnd(32, 'a'))).toBe(false);
   });

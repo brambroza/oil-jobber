@@ -202,6 +202,8 @@ type OrderForm = {
   selected_refinery_id: string;
   selected_depot_id: string;
   customer_id: string;
+  /** วันที่เอกสาร (YYYY-MM-DD) พิมพ์บนใบสั่งขาย / ใบเสนอราคา */
+  order_date: string;
   order_status: OrderStatus;
   delivery_location: string;
   refinery_booking_number: string;
@@ -271,6 +273,7 @@ const emptyItem: OrderItemForm = {
 
 const emptyForm: OrderForm = {
   customer_id: '',
+  order_date: '',
   order_status: 'SUBMITTED',
   delivery_location: '',
   refinery_booking_number: '',
@@ -904,6 +907,7 @@ export default function OrdersWorkspace({ mode = 'order' }: { mode?: OrdersWorks
       delivery_order_no: form.delivery_order_no || null,
       delivery_order_file_url: form.delivery_order_file_url || null,
       payment_condition_id: form.payment_condition_id || null,
+      order_date: form.order_date || null,
       due_date: form.due_date || null,
       receive_method: form.receive_method,
       requested_delivery_date: form.requested_delivery_date || null,
@@ -940,6 +944,7 @@ export default function OrdersWorkspace({ mode = 'order' }: { mode?: OrdersWorks
         ? await issueQuotationNow(savedId, {
           showPdf: !options.keepOpen || Boolean(options.showQuotationPdf),
           notify: false,
+          issuedAt: form.order_date || undefined,
         })
         : null;
       if (options.keepOpen && data.id) {
@@ -994,14 +999,18 @@ export default function OrdersWorkspace({ mode = 'order' }: { mode?: OrdersWorks
    */
   const issueQuotationNow = async (
     orderId: string,
-    options: { showPdf: boolean; notify: boolean },
+    options: { showPdf: boolean; notify: boolean; issuedAt?: string },
   ): Promise<{ quotationNo: string; unchanged: boolean } | { error: string }> => {
     setIssuingQuotation(true);
     try {
+      const today = todayBangkok();
+      const issuedAt = options.issuedAt || undefined;
+      // ยืนราคาถึงวันนี้ (หรือวันที่เอกสาร ถ้าลงวันที่ล่วงหน้า)
+      const validUntil = issuedAt && issuedAt > today ? issuedAt : today;
       const res = await fetch(`/api/orders/${orderId}/quotation`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ valid_until: todayBangkok(), note: '', reissue: false, only_if_changed: true }),
+        body: JSON.stringify({ issued_at: issuedAt, valid_until: validUntil, note: '', reissue: false, only_if_changed: true }),
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || 'ออกใบเสนอราคาไม่สำเร็จ');
@@ -1124,6 +1133,7 @@ export default function OrdersWorkspace({ mode = 'order' }: { mode?: OrdersWorks
           ),
         ).join(', '),
         customer_id: data.customer_id,
+        order_date: String(data.order_date || '').slice(0, 10),
         order_status: data.order_status,
         delivery_location: data.delivery_location || '',
         refinery_booking_number: data.refinery_booking_number || '',
@@ -1313,7 +1323,7 @@ export default function OrdersWorkspace({ mode = 'order' }: { mode?: OrdersWorks
             startIcon={<Add />}
             onClick={() => {
               depotDefaultsAppliedRef.current = '';
-              setForm({ ...emptyForm, sales_user_id: me?.userId ?? '', ...(isQuotationMode ? { order_status: 'DRAFT' as OrderStatus, quotation_stage: 'PENDING' as QuotationStage } : {}) });
+              setForm({ ...emptyForm, order_date: todayBangkok(), sales_user_id: me?.userId ?? '', ...(isQuotationMode ? { order_status: 'DRAFT' as OrderStatus, quotation_stage: 'PENDING' as QuotationStage } : {}) });
               setSelectedRoundId('');
               setOpen(true);
               showSnack(`พร้อมเพิ่ม${docLabel}ใหม่`, 'info');
@@ -1706,6 +1716,15 @@ export default function OrdersWorkspace({ mode = 'order' }: { mode?: OrdersWorks
                       ))}
                   </TextField>
                   )}
+                  <TextField
+                    size="small"
+                    label={formIsPendingQuotation ? 'วันที่ใบเสนอราคา' : 'วันที่เอกสาร'}
+                    type="date"
+                    value={form.order_date}
+                    onChange={(e) => setForm((p) => ({ ...p, order_date: e.target.value }))}
+                    InputLabelProps={{ shrink: true }}
+                    fullWidth
+                  />
                   <TextField
                     size="small"
                     label="กำหนดชำระ"

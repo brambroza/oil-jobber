@@ -200,6 +200,8 @@ export async function POST(req: NextRequest) {
     .insert({
       company_id: ctx.companyId,
       ...order,
+      // ว่าง = ให้ DB ใส่วันนี้ (Asia/Bangkok) เป็นวันที่เอกสาร
+      order_date: order.order_date ?? undefined,
       receive_method: receiveMethod,
       order_status: as_quotation ? 'DRAFT' : order.order_status ?? 'SUBMITTED',
       quotation_stage: as_quotation ? 'PENDING' : null,

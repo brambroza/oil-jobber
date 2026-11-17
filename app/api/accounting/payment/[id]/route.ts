@@ -1,6 +1,10 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { requireStaff } from '@/lib/auth/api-guard';
 import { supabaseAdmin } from '@/lib/supabase/server';
+import { parseBody, uuid } from '@/lib/validation/common';
+import { updatePaymentSlipLinkSchema } from '@/lib/validation/accounting';
+import { canAccessOrder, customerForbidden } from '@/lib/services/customer-scope';
+import { classifySlipUrl } from '@/lib/utils/slip-link';
 
 /**
  * Voids a payment (soft delete) and its receipt. If the order was PAID and now
@@ -52,4 +56,43 @@ export async function DELETE(_: NextRequest, { params }: { params: Promise<{ id:
   }
 
   return NextResponse.json({ ok: true, outstanding_after: Number(outstanding || 0) });
+}
+
+/**
+ * Attaches, changes or clears the slip link (e.g. Google Drive) of a payment so
+ * the sales team can open the slip. Slips uploaded by the customer through the
+ * payment link cannot be replaced here.
+ */
+export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
+  const guard = await requireStaff('accounting');
+  if (guard.response) return guard.response;
+  const { ctx } = guard;
+  const { id } = await params;
+  if (!uuid.safeParse(id).success) return NextResponse.json({ error: 'รหัสรายการรับชำระไม่ถูกต้อง' }, { status: 422 });
+
+  const parsed = parseBody(updatePaymentSlipLinkSchema, await req.json().catch(() => ({})));
+  if (parsed.response) return parsed.response;
+
+  const { data: payment, error } = await supabaseAdmin
+    .from('payment_transactions')
+    .select('id, sale_order_id, slip_url')
+    .eq('id', id)
+    .eq('company_id', ctx.companyId)
+    .eq('is_deleted', false)
+    .maybeSingle();
+  if (error) return NextResponse.json({ error: error.message }, { status: 400 });
+  if (!payment) return NextResponse.json({ error: 'ไม่พบรายการรับชำระ' }, { status: 404 });
+  if (!(await canAccessOrder(ctx, payment.sale_order_id))) return customerForbidden();
+  if (classifySlipUrl(payment.slip_url).kind === 'stored') {
+    return NextResponse.json({ error: 'รายการนี้มีสลิปที่ลูกค้าอัปโหลดผ่านลิงก์แจ้งชำระแล้ว แก้ลิงก์ไม่ได้' }, { status: 422 });
+  }
+
+  const slipUrl = parsed.data.slip_url ?? null;
+  const { error: updateError } = await supabaseAdmin
+    .from('payment_transactions')
+    .update({ slip_url: slipUrl, updated_by: ctx.userId })
+    .eq('id', id)
+    .eq('company_id', ctx.companyId);
+  if (updateError) return NextResponse.json({ error: updateError.message }, { status: 400 });
+  return NextResponse.json({ id, slip_url: slipUrl });
 }

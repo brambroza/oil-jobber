@@ -44,6 +44,7 @@ export default function QuotationDialog({
   const [loading, setLoading] = useState(false);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
+  const [issuedAt, setIssuedAt] = useState('');
   const [validUntil, setValidUntil] = useState('');
   const [note, setNote] = useState('');
 
@@ -52,6 +53,7 @@ export default function QuotationDialog({
     let active = true;
     setExisting(null);
     setError('');
+    setIssuedAt(todayBangkok());
     setValidUntil(todayBangkok());
     setNote('');
     setLoading(true);
@@ -59,7 +61,13 @@ export default function QuotationDialog({
       .then(async (res) => {
         const data = await res.json();
         if (!res.ok) throw new Error(data.error || 'โหลดใบเสนอราคาไม่สำเร็จ');
-        if (active) setExisting(data.quotation ?? null);
+        if (!active) return;
+        const current: ActiveQuotation | null = data.quotation ?? null;
+        setExisting(current);
+        if (current) {
+          setIssuedAt(current.issued_at);
+          setValidUntil(current.valid_until ?? '');
+        }
       })
       .catch((caught) => { if (active) setError((caught as Error).message); })
       .finally(() => { if (active) setLoading(false); });
@@ -74,7 +82,7 @@ export default function QuotationDialog({
       const res = await fetch(`/api/orders/${order.id}/quotation`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ valid_until: validUntil, note, reissue }),
+        body: JSON.stringify({ issued_at: issuedAt || undefined, valid_until: validUntil, note, reissue }),
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || 'ออกใบเสนอราคาไม่สำเร็จ');
@@ -91,6 +99,38 @@ export default function QuotationDialog({
     }
   };
 
+  /** Saves the edited document / validity dates on the current quotation (same number). */
+  const saveDates = async () => {
+    if (!order || !existing) return;
+    if (!issuedAt) {
+      setError('กรุณาระบุวันที่ใบเสนอราคา');
+      return;
+    }
+    setSaving(true);
+    setError('');
+    try {
+      const res = await fetch(`/api/orders/${order.id}/quotation`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ issued_at: issuedAt, valid_until: validUntil }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || 'แก้ไขวันที่ไม่สำเร็จ');
+      onNotify(`แก้ไขวันที่ใบเสนอราคา ${existing.quotation_no} แล้ว`, 'success');
+      onClose();
+      onView(order.id, existing.quotation_no);
+    } catch (caught) {
+      const message = (caught as Error).message;
+      setError(message);
+      onNotify(message, 'error');
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const datesChanged = Boolean(existing)
+    && (issuedAt !== existing?.issued_at || (validUntil || null) !== (existing?.valid_until ?? null));
+
   return (
     <Dialog open={Boolean(order)} onClose={saving ? undefined : onClose} fullWidth maxWidth="xs">
       <DialogTitle>ใบเสนอราคา {order?.orderNo ? `· ${order.orderNo}` : ''}</DialogTitle>
@@ -105,17 +145,30 @@ export default function QuotationDialog({
                 มีใบเสนอราคา <b>{existing.quotation_no}</b> ลงวันที่ {dateThai(existing.issued_at)}
                 {existing.valid_until ? ` ยืนราคาถึง ${dateThai(existing.valid_until)}` : ''} แล้ว
                 <Typography variant="caption" component="div" sx={{ mt: 0.5 }}>
-                  กด &quot;ออกใหม่&quot; เพื่อยกเลิกเลขเดิมและออกเลขใหม่ด้วยราคาปัจจุบันของใบสั่งขาย
+                  แก้วันที่แล้วกด &quot;บันทึกวันที่&quot; เพื่อใช้เลขเดิม หรือกด &quot;ออกใหม่&quot; เพื่อยกเลิกเลขเดิมและออกเลขใหม่ด้วยราคาปัจจุบันของใบสั่งขาย
                 </Typography>
               </Alert>
             ) : null}
             <TextField
               size="small"
               type="date"
+              label="วันที่ใบเสนอราคา"
+              value={issuedAt}
+              onChange={(e) => {
+                const next = e.target.value;
+                setIssuedAt(next);
+                if (next && validUntil && validUntil < next) setValidUntil(next);
+              }}
+              slotProps={{ inputLabel: { shrink: true } }}
+              fullWidth
+            />
+            <TextField
+              size="small"
+              type="date"
               label="ยืนราคาถึงวันที่"
               value={validUntil}
               onChange={(e) => setValidUntil(e.target.value)}
-              slotProps={{ inputLabel: { shrink: true }, htmlInput: { min: todayBangkok() } }}
+              slotProps={{ inputLabel: { shrink: true }, htmlInput: { min: issuedAt || undefined } }}
               fullWidth
             />
             <TextField
@@ -137,6 +190,9 @@ export default function QuotationDialog({
           <>
             <Button variant="outlined" onClick={() => { if (order) { onClose(); onView(order.id, existing.quotation_no); } }} disabled={saving}>
               ดู PDF
+            </Button>
+            <Button variant="contained" onClick={() => void saveDates()} disabled={saving || loading || !datesChanged}>
+              บันทึกวันที่
             </Button>
             <Button variant="contained" color="warning" onClick={() => void issue(true)} disabled={saving || loading}>
               ออกใหม่

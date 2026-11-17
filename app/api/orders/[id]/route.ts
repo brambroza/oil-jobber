@@ -109,6 +109,8 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
   }
 
   const effectivePayload: Record<string, unknown> = { ...orderPayload, updated_by: ctx.userId };
+  // order_date เป็น NOT NULL: ค่าว่างหมายถึงไม่แก้วันที่เอกสาร
+  if (effectivePayload.order_date == null) delete effectivePayload.order_date;
   // Approver changing the status to CONFIRMED through the form still gets recorded as the approver.
   if (orderPayload.order_status === 'CONFIRMED' && currentOrder.order_status !== 'CONFIRMED' && !currentOrder.approved_by) {
     effectivePayload.approved_by = ctx.userId;

@@ -103,16 +103,20 @@ export function defaultApproveAmount(submitted: number, outstanding: number): nu
  * @returns absolute URL
  */
 export function buildPaymentLinkUrl(origin: string, token: string): string {
-  return `${origin.replace(/\/+$/, '')}/pay/${encodeURIComponent(token)}`;
+  return `${origin.replace(/\/+$/, '')}/p/${encodeURIComponent(token)}`;
 }
 
+/** Random bytes per new link token: 9 bytes = 12 base64url chars (72 bits). */
+export const LINK_TOKEN_BYTES = 9;
+
 /**
- * Cheap shape check on a raw token before hitting the DB (base64url, 32 chars).
+ * Cheap shape check on a raw token before hitting the DB (base64url).
+ * New links use 12 chars; links sent before 2026-11-17 use 32 chars and keep working.
  * @param token value from the URL
  * @returns true when it looks like a token we issued
  */
 export function isPlausibleLinkToken(token: string): boolean {
-  return /^[A-Za-z0-9_-]{32}$/.test(token);
+  return /^[A-Za-z0-9_-]{12}$/.test(token) || /^[A-Za-z0-9_-]{32}$/.test(token);
 }
 
 /**

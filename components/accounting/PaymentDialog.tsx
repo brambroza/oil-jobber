@@ -5,10 +5,11 @@ import {
   Alert, Box, Button, Dialog, DialogActions, DialogContent, DialogTitle, IconButton, MenuItem, Stack,
   Table, TableBody, TableCell, TableHead, TableRow, TextField, Tooltip, Typography,
 } from '@mui/material';
-import { DeleteOutline, PictureAsPdf } from '@mui/icons-material';
+import { AddLink, DeleteOutline, OpenInNew, PictureAsPdf } from '@mui/icons-material';
 import { PAYMENT_METHOD_LABELS } from '@/lib/documents/format';
 import { useCurrentUser } from '@/components/layout/CurrentUserProvider';
 import { formatDate } from '@/lib/utils/date-format';
+import { classifySlipUrl, isHttpUrl } from '@/lib/utils/slip-link';
 import { PaymentLinkPanel, PaymentSlipList } from '@/components/accounting/PaymentSlipPanel';
 
 export type PaymentDialogOrder = {
@@ -24,6 +25,10 @@ type PaymentRow = {
   amount: number;
   payment_method: string;
   reference_no: string | null;
+  /** ค่าที่เก็บ: ลิงก์ภายนอก (Drive ฯลฯ) หรือ payment-slips/<path> */
+  slip_url: string | null;
+  /** ลิงก์ที่เปิดดูสลิปได้ (signed URL สำหรับสลิปที่ลูกค้าอัปโหลด) */
+  slip_view_url: string | null;
   note: string | null;
   receipt_id: string | null;
   receipt_no: string | null;
@@ -51,7 +56,11 @@ export function PaymentDialog({ order, onClose, onSaved, onPrintReceipt }: {
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
   const [notice, setNotice] = useState<{ message: string; severity: 'success' | 'error' | 'info' } | null>(null);
-  const [form, setForm] = useState({ paid_at: today(), amount: 0, payment_method: 'TRANSFER', reference_no: '', note: '' });
+  const [form, setForm] = useState({ paid_at: today(), amount: 0, payment_method: 'TRANSFER', reference_no: '', slip_url: '', note: '' });
+  /** รายการที่กำลังแนบ/แก้ลิงก์สลิป */
+  const [linkEdit, setLinkEdit] = useState<{ id: string; value: string } | null>(null);
+  const [linkSaving, setLinkSaving] = useState(false);
+  const slipLinkInvalid = Boolean(form.slip_url.trim()) && !isHttpUrl(form.slip_url);
 
   const paid = useMemo(() => history.reduce((sum, row) => sum + Number(row.amount || 0), 0), [history]);
   const outstanding = useMemo(() => Math.max(0, Math.round((total - paid) * 100) / 100), [total, paid]);
@@ -82,7 +91,7 @@ export function PaymentDialog({ order, onClose, onSaved, onPrintReceipt }: {
 
   useEffect(() => {
     if (!order) return;
-    setForm({ paid_at: today(), amount: 0, payment_method: 'TRANSFER', reference_no: '', note: '' });
+    setForm({ paid_at: today(), amount: 0, payment_method: 'TRANSFER', reference_no: '', slip_url: '', note: '' });
     setNotice(null);
     void load(order.sale_order_id);
   }, [order?.sale_order_id]);
@@ -106,6 +115,29 @@ export function PaymentDialog({ order, onClose, onSaved, onPrintReceipt }: {
       setError((e as Error).message);
     } finally {
       setSaving(false);
+    }
+  };
+
+  /** Saves the slip link of a recorded payment ('' clears it). */
+  const saveSlipLink = async () => {
+    if (!order || !linkEdit) return;
+    setLinkSaving(true);
+    setError('');
+    try {
+      const res = await fetch(`/api/accounting/payment/${linkEdit.id}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ slip_url: linkEdit.value.trim() }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || 'บันทึกลิงก์สลิปไม่สำเร็จ');
+      setLinkEdit(null);
+      setNotice({ message: 'บันทึกลิงก์สลิปแล้ว', severity: 'success' });
+      await load(order.sale_order_id);
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setLinkSaving(false);
     }
   };
 
@@ -169,6 +201,18 @@ export function PaymentDialog({ order, onClose, onSaved, onPrintReceipt }: {
                 </TextField>
                 <TextField id='payment-reference' size='small' label='เลขอ้างอิง (เลขที่โอน / เลขเช็ค)' value={form.reference_no} onChange={(e) => setForm((p) => ({ ...p, reference_no: e.target.value }))} fullWidth />
               </Stack>
+              <TextField
+                id='payment-slip-url'
+                size='small'
+                label='ลิงก์สลิป '
+                placeholder='...'
+                value={form.slip_url}
+                onChange={(e) => setForm((p) => ({ ...p, slip_url: e.target.value }))}
+                error={slipLinkInvalid}
+                helperText={slipLinkInvalid ? 'ลิงก์ต้องขึ้นต้นด้วย https://' : 'ทีมขายเปิดดูสลิปได้จากประวัติการรับชำระ'}
+                inputProps={{ maxLength: 1000 }}
+                fullWidth
+              />
               <TextField id='payment-note' size='small' label='หมายเหตุ' value={form.note} onChange={(e) => setForm((p) => ({ ...p, note: e.target.value }))} fullWidth />
             </Stack>
           ) : (
@@ -199,6 +243,7 @@ export function PaymentDialog({ order, onClose, onSaved, onPrintReceipt }: {
                     <TableCell>ใบเสร็จ</TableCell>
                     <TableCell>วิธี</TableCell>
                     <TableCell>อ้างอิง</TableCell>
+                    <TableCell>สลิป</TableCell>
                     <TableCell align='right'>จำนวนเงิน</TableCell>
                     <TableCell>ผู้รับ</TableCell>
                     <TableCell align='right'></TableCell>
@@ -211,6 +256,18 @@ export function PaymentDialog({ order, onClose, onSaved, onPrintReceipt }: {
                       <TableCell>{row.receipt_no || '-'}</TableCell>
                       <TableCell>{PAYMENT_METHOD_LABELS[row.payment_method] ?? row.payment_method}</TableCell>
                       <TableCell>{row.reference_no || '-'}</TableCell>
+                      <TableCell sx={{ whiteSpace: 'nowrap' }}>
+                        {row.slip_view_url ? (
+                          <Button size='small' component='a' href={row.slip_view_url} target='_blank' rel='noopener noreferrer' startIcon={<OpenInNew fontSize='small' />} sx={{ minWidth: 0, px: 0.5 }}>
+                            ดูสลิป
+                          </Button>
+                        ) : '-'}
+                        {classifySlipUrl(row.slip_url).kind !== 'stored' ? (
+                          <Tooltip title={row.slip_url ? 'แก้ลิงก์สลิป' : 'แนบลิงก์สลิป'}>
+                            <IconButton size='small' onClick={() => setLinkEdit({ id: row.id, value: row.slip_url || '' })}><AddLink fontSize='small' /></IconButton>
+                          </Tooltip>
+                        ) : null}
+                      </TableCell>
                       <TableCell align='right'>{money(row.amount)}</TableCell>
                       <TableCell>{row.received_by_name || '-'}</TableCell>
                       <TableCell align='right' sx={{ whiteSpace: 'nowrap' }}>
@@ -227,7 +284,7 @@ export function PaymentDialog({ order, onClose, onSaved, onPrintReceipt }: {
                       </TableCell>
                     </TableRow>
                   ))}
-                  {!history.length ? <TableRow><TableCell colSpan={7} align='center' sx={{ color: 'text.secondary' }}>{loading ? 'กำลังโหลด...' : 'ยังไม่มีการรับชำระ'}</TableCell></TableRow> : null}
+                  {!history.length ? <TableRow><TableCell colSpan={8} align='center' sx={{ color: 'text.secondary' }}>{loading ? 'กำลังโหลด...' : 'ยังไม่มีการรับชำระ'}</TableCell></TableRow> : null}
                 </TableBody>
               </Table>
             </Box>
@@ -237,11 +294,39 @@ export function PaymentDialog({ order, onClose, onSaved, onPrintReceipt }: {
       <DialogActions>
         <Button onClick={onClose}>ปิด</Button>
         {outstanding > 0 ? (
-          <Button variant='contained' onClick={() => void save()} disabled={!amountValid || saving || loading}>
+          <Button variant='contained' onClick={() => void save()} disabled={!amountValid || slipLinkInvalid || saving || loading}>
             {saving ? 'กำลังบันทึก...' : 'บันทึกและออกใบเสร็จ'}
           </Button>
         ) : null}
       </DialogActions>
+      <Dialog open={Boolean(linkEdit)} onClose={linkSaving ? undefined : () => setLinkEdit(null)} fullWidth maxWidth='xs'>
+        <DialogTitle>ลิงก์สลิป</DialogTitle>
+        <DialogContent>
+          <TextField
+            autoFocus
+            size='small'
+            label='ลิงก์สลิป '
+            placeholder='...'
+            value={linkEdit?.value ?? ''}
+            onChange={(e) => setLinkEdit((prev) => (prev ? { ...prev, value: e.target.value } : prev))}
+            error={Boolean(linkEdit?.value.trim()) && !isHttpUrl(linkEdit?.value)}
+            helperText={Boolean(linkEdit?.value.trim()) && !isHttpUrl(linkEdit?.value) ? 'ลิงก์ต้องขึ้นต้นด้วย https://' : 'เว้นว่างแล้วบันทึก = ลบลิงก์'}
+            inputProps={{ maxLength: 1000 }}
+            fullWidth
+            sx={{ mt: 1 }}
+          />
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={() => setLinkEdit(null)} disabled={linkSaving}>ยกเลิก</Button>
+          <Button
+            variant='contained'
+            onClick={() => void saveSlipLink()}
+            disabled={linkSaving || (Boolean(linkEdit?.value.trim()) && !isHttpUrl(linkEdit?.value))}
+          >
+            {linkSaving ? 'กำลังบันทึก...' : 'บันทึก'}
+          </Button>
+        </DialogActions>
+      </Dialog>
     </Dialog>
   );
 }

@@ -1,9 +1,9 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { requireStaff } from '@/lib/auth/api-guard';
 import { canAccessOrder, customerForbidden } from '@/lib/services/customer-scope';
-import { issueQuotation, loadActiveQuotation } from '@/lib/services/quotations';
+import { issueQuotation, loadActiveQuotation, updateQuotationDates } from '@/lib/services/quotations';
 import { parseBody, uuid } from '@/lib/validation/common';
-import { issueQuotationSchema } from '@/lib/validation/orders';
+import { issueQuotationSchema, updateQuotationDatesSchema } from '@/lib/validation/orders';
 
 /** Current active quotation of a sale order (`{ quotation: null }` when none). */
 export async function GET(_: NextRequest, { params }: { params: Promise<{ id: string }> }) {
@@ -33,6 +33,7 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
   if (parsed.response) return parsed.response;
 
   const result = await issueQuotation(guard.ctx.companyId, guard.ctx.userId, id, {
+    issued_at: parsed.data.issued_at,
     valid_until: parsed.data.valid_until,
     note: parsed.data.note,
     reissue: parsed.data.reissue ?? false,
@@ -41,5 +42,24 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
   if ('error' in result) {
     return NextResponse.json({ error: result.error, ...(result.quotation ? { quotation: result.quotation } : {}) }, { status: result.status });
   }
+  return NextResponse.json(result);
+}
+
+/**
+ * Edits the document date (and validity date) of the order's current
+ * quotation. The quotation number does not change.
+ */
+export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
+  const guard = await requireStaff('orders');
+  if (guard.response) return guard.response;
+  const { id } = await params;
+  if (!uuid.safeParse(id).success) return NextResponse.json({ error: 'รหัสใบสั่งขายไม่ถูกต้อง' }, { status: 422 });
+  if (!(await canAccessOrder(guard.ctx, id))) return customerForbidden();
+
+  const parsed = parseBody(updateQuotationDatesSchema, await req.json().catch(() => ({})));
+  if (parsed.response) return parsed.response;
+
+  const result = await updateQuotationDates(guard.ctx.companyId, guard.ctx.userId, id, parsed.data);
+  if ('error' in result) return NextResponse.json({ error: result.error }, { status: result.status });
   return NextResponse.json(result);
 }

@@ -17,6 +17,7 @@ import { DEFAULT_VAT_MODE, type VatMode } from '@/lib/documents/vat-mode';
 import { formatDate } from '@/lib/utils/date-format';
 import { applyInvoiceContent } from '@/lib/utils/invoice-content';
 import { loadInvoiceContentRow } from '@/lib/services/invoice-content';
+import { createDocumentShortLink } from '@/lib/services/short-links';
 
 export const DOCUMENT_TYPES: DocumentType[] = ['purchase-order', 'quotation', 'tax-invoice', 'delivery-note', 'receipt', 'delivery-record'];
 
@@ -214,16 +215,77 @@ export async function findCustomerLineRecipient(companyId: string, customerId: s
 }
 
 /**
+ * Generates and uploads a document PDF, then creates its customer link: the
+ * short /d/<code> link when `origin` is given and the short link can be
+ * created, otherwise the long public storage URL. Used both by the LINE send
+ * and by the "คัดลอกลิงก์" button so both hand out the same kind of link.
+ *
+ * @param companyId - tenant scope
+ * @param type - document type
+ * @param id - order id (receipt id for receipts)
+ * @param userId - staff user creating the link
+ * @param options - VAT display mode and site origin
+ * @returns generated document and its link URL
+ */
+export async function createDocumentLink(
+  companyId: string,
+  type: DocumentType,
+  id: string,
+  userId: string | null,
+  options: { vatMode?: VatMode; origin?: string } = {},
+): Promise<{ doc: GeneratedDocument; url: string } | { error: string; status: number }> {
+  const doc = await generateDocumentPdf(companyId, type, id, { vatMode: options.vatMode });
+  if ('error' in doc) return doc;
+  const linked = await linkGeneratedDocument(companyId, doc, type, userId, options.origin);
+  if ('error' in linked) return linked;
+  return { doc, url: linked.url };
+}
+
+/**
+ * Uploads an already generated PDF and returns its customer link (short
+ * /d/<code> when possible, else the long storage URL).
+ *
+ * @param companyId - tenant scope
+ * @param doc - generated document
+ * @param type - document type
+ * @param userId - staff user creating the link
+ * @param origin - site origin for the short link
+ */
+async function linkGeneratedDocument(
+  companyId: string,
+  doc: GeneratedDocument,
+  type: DocumentType,
+  userId: string | null,
+  origin?: string,
+): Promise<{ url: string } | { error: string; status: number }> {
+  const uploaded = await uploadDocumentPdf(companyId, doc, type);
+  if ('error' in uploaded) return { error: uploaded.error, status: 400 };
+  const shortUrl = origin
+    ? await createDocumentShortLink({
+      companyId,
+      storagePath: uploaded.path,
+      documentType: type,
+      saleOrderId: doc.orderId,
+      userId,
+      origin,
+    })
+    : null;
+  return { url: shortUrl ?? uploaded.url };
+}
+
+/**
  * Generates, uploads and pushes a document to the customer's LINE (group when
  * linked, otherwise the user). Returns the public URL.
  * `options.vatMode` picks ราคาไม่รวมภาษี / ราคารวมภาษี (default: the bill's saved mode).
+ * `options.origin` (site origin) makes the LINE button use a short /d/<code> link;
+ * without it, or when the short link cannot be created, the long storage URL is used.
  */
 export async function sendDocumentToLine(
   companyId: string,
   type: DocumentType,
   id: string,
   userId: string | null = null,
-  options: { vatMode?: VatMode } = {},
+  options: { vatMode?: VatMode; origin?: string } = {},
 ): Promise<{ url: string; recipient: string; docNo: string; order_status: string | null; status_advanced: boolean } | { error: string; status: number }> {
   const doc = await generateDocumentPdf(companyId, type, id, { vatMode: options.vatMode });
   if ('error' in doc) return doc;
@@ -233,8 +295,10 @@ export async function sendDocumentToLine(
   const recipient = lineCustomer?.group_id || lineCustomer?.line_user_id;
   if (!recipient) return { error: 'ลูกค้ารายนี้ยังไม่ได้เชื่อม LINE', status: 422 };
 
-  const uploaded = await uploadDocumentPdf(companyId, doc, type);
-  if ('error' in uploaded) return { error: uploaded.error, status: 400 };
+  // same link builder as the "คัดลอกลิงก์" button (createDocumentLink)
+  const linked = await linkGeneratedDocument(companyId, doc, type, userId, options.origin);
+  if ('error' in linked) return linked;
+  const linkUrl = linked.url;
 
   const { data: customer } = await supabaseAdmin.from('customers').select('company_name').eq('id', doc.customerId).maybeSingle();
   const context: LinePushContext = {
@@ -243,7 +307,7 @@ export async function sendDocumentToLine(
     recipientType: lineCustomer?.group_id ? 'GROUP' : 'USER',
     source: `document_${type}`,
   };
-  const flexMessage = buildDocumentFlex(doc, uploaded.url, customer?.company_name || '');
+  const flexMessage = buildDocumentFlex(doc, linkUrl, customer?.company_name || '');
   await pushLinePayload(recipient, [flexMessage], context);
 
   await logOutboundLineMessages([{
@@ -251,7 +315,7 @@ export async function sendDocumentToLine(
     line_customer_id: lineCustomer?.id ?? null,
     group_id: lineCustomer?.group_id || null,
     message_type: `document_${type}`,
-    message_text: `${doc.title} ${doc.docNo}: ${uploaded.url}`,
+    message_text: `${doc.title} ${doc.docNo}: ${linkUrl}`,
     message_payload: flexMessage,
   }]);
 
@@ -274,5 +338,5 @@ export async function sendDocumentToLine(
     }
   }
 
-  return { url: uploaded.url, recipient: lineCustomer?.group_id ? 'GROUP' : 'USER', docNo: doc.docNo, order_status: orderStatus, status_advanced: statusAdvanced };
+  return { url: linkUrl, recipient: lineCustomer?.group_id ? 'GROUP' : 'USER', docNo: doc.docNo, order_status: orderStatus, status_advanced: statusAdvanced };
 }

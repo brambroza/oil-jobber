@@ -1,5 +1,12 @@
 import { z } from 'zod';
 import { dateYmd, optionalText, uuid } from '@/lib/validation/common';
+import { isHttpUrl } from '@/lib/utils/slip-link';
+
+/** Optional link to the slip (e.g. Google Drive): http(s) only, '' → null. */
+const optionalSlipLink = optionalText(1000).refine(
+  (value) => value == null || isHttpUrl(value),
+  'ลิงก์สลิปต้องขึ้นต้นด้วย https:// หรือ http://',
+);
 
 export const PAYMENT_METHODS = ['CASH', 'TRANSFER', 'CHEQUE'] as const;
 
@@ -10,9 +17,14 @@ export const recordPaymentSchema = z.object({
   paid_at: z.preprocess((v) => (v === '' ? undefined : v), dateYmd.optional()),
   payment_method: z.enum(PAYMENT_METHODS).default('CASH'),
   reference_no: optionalText(100),
-  slip_url: optionalText(1000),
+  slip_url: optionalSlipLink,
   note: optionalText(1000),
   issue_receipt: z.boolean().default(true),
+});
+
+/** PATCH /api/accounting/payment/[id]: แนบ/แก้/ลบ ลิงก์สลิปของรายการรับชำระ */
+export const updatePaymentSlipLinkSchema = z.object({
+  slip_url: optionalSlipLink,
 });
 
 /** One printed line of an edited tax invoice (unit price incl. VAT, delivery fee folded in). */
