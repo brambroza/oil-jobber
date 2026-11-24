@@ -1,20 +1,12 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { requireStaff, type StaffContext } from '@/lib/auth/api-guard';
-import { supabaseAdmin } from '@/lib/supabase/server';
-import { canAccessOrder, customerForbidden, isScopedRole } from '@/lib/services/customer-scope';
+import { requireStaff } from '@/lib/auth/api-guard';
+import { customerForbidden } from '@/lib/services/customer-scope';
+import { canAccessDocument } from '@/lib/services/document-access';
 import { DOCUMENT_TYPES, generateDocumentPdf } from '@/lib/services/documents';
 import type { DocumentType } from '@/lib/documents/types';
 import { parseOptionalVatMode } from '@/lib/documents/vat-mode';
 
 export const runtime = 'nodejs';
-
-/** Resolves the order behind a document id and checks the SALES customer scope. */
-async function canAccessDocument(ctx: StaffContext, type: DocumentType, id: string): Promise<boolean> {
-  if (!isScopedRole(ctx.role)) return true;
-  if (type !== 'receipt') return canAccessOrder(ctx, id);
-  const { data } = await supabaseAdmin.from('receipts').select('sale_order_id').eq('id', id).eq('company_id', ctx.companyId).maybeSingle();
-  return canAccessOrder(ctx, data?.sale_order_id ?? null);
-}
 
 /**
  * Streams a PDF document. `?download=1` forces a download, `?copy=1` prints

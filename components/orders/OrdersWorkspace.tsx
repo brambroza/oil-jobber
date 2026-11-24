@@ -53,7 +53,7 @@ import { PdfPreviewDialog, type PdfPreviewTarget } from '@/components/documents/
 import { canApproveOrders, isAdminRole } from '@/lib/auth/permissions';
 import ApproveOrderDialog from '@/components/orders/ApproveOrderDialog';
 import QuotationDialog, { type QuotationDialogOrder } from '@/components/orders/QuotationDialog';
-import DeliveryRecordDialog, { type DeliveryRecordDialogOrder } from '@/components/orders/DeliveryRecordDialog';
+import DeliveryTripsDialog, { type DeliveryTripsChange, type DeliveryTripsDialogOrder } from '@/components/orders/DeliveryTripsDialog';
 import { DELIVERY_RECORDABLE_STATUSES, ORDER_STATUS_ORDER, canIssueTaxInvoice, statusColor, statusThai } from '@/lib/utils/order-status';
 import { formatDate, formatDateTime } from '@/lib/utils/date-format';
 import { pickDefaultDepot } from '@/lib/utils/default-depot';
@@ -447,7 +447,7 @@ export default function OrdersWorkspace({ mode = 'order' }: { mode?: OrdersWorks
   const [deleteId, setDeleteId] = useState<string | null>(null);
   const [cancelOpen, setCancelOpen] = useState(false);
   const [uploadingDo, setUploadingDo] = useState(false);
-  const [deliveryRecordOrder, setDeliveryRecordOrder] = useState<DeliveryRecordDialogOrder>(null);
+  const [deliveryRecordOrder, setDeliveryRecordOrder] = useState<DeliveryTripsDialogOrder>(null);
   const [snack, setSnack] = useState<{
     open: boolean;
     message: string;
@@ -1246,29 +1246,20 @@ export default function OrdersWorkspace({ mode = 'order' }: { mode?: OrdersWorks
     }
   };
 
-  /** Opens the delivery record dialog for a row, or the DR PDF when it was already recorded. */
-  const openDeliveryRecord = (row: { id: string; order_no?: string | null; customer_name?: string | null; delivered_at?: string | null; delivery_receiver_name?: string | null; delivery_record_note?: string | null; delivery_record_no?: string | null }, forceDialog = false) => {
-    const orderNo = row.order_no || row.id.slice(0, 8);
-    if (row.delivery_record_no && !forceDialog) {
-      openPdf('delivery-record', row.id, `บันทึกการส่งของ · ${orderNo}`);
-      return;
-    }
+  /** Opens the delivery trips dialog (เที่ยวส่งของ) of an order. */
+  const openDeliveryRecord = (row: { id: string; order_no?: string | null; customer_name?: string | null }) => {
     setDeliveryRecordOrder({
       id: row.id,
-      order_no: orderNo,
+      order_no: row.order_no || row.id.slice(0, 8),
       customer_name: row.customer_name || '',
-      delivered_at: row.delivered_at ?? null,
-      delivery_receiver_name: row.delivery_receiver_name ?? null,
-      delivery_record_note: row.delivery_record_note ?? null,
-      delivery_record_no: row.delivery_record_no ?? null,
     });
   };
 
-  const onDeliveryRecordSaved = async (saved: Record<string, any>) => {
-    showSnack(saved.advanced ? `บันทึกการส่งของแล้ว สถานะเป็น "${statusThai('DELIVERED')}" เลขที่ ${saved.delivery_record_no || ''}` : `บันทึกการส่งของแล้ว เลขที่ ${saved.delivery_record_no || ''}`, 'success');
+  /** A trip was added / edited / removed or invoiced: refresh the list and the open drawer. */
+  const onDeliveryTripsChanged = async (change: DeliveryTripsChange) => {
+    showSnack(change.advanced ? `${change.message} · สถานะเป็น "${statusThai('DELIVERED')}"` : change.message, change.severity);
     await load();
-    if (form.id === saved.id) await openEdit(saved.id);
-    openPdf('delivery-record', saved.id, `บันทึกการส่งของ · ${saved.order_no || saved.id.slice(0, 8)}`);
+    if (form.id && form.id === deliveryRecordOrder?.id) await openEdit(form.id);
   };
 
   const remove = async () => {
@@ -2454,15 +2445,11 @@ export default function OrdersWorkspace({ mode = 'order' }: { mode?: OrdersWorks
                   id: form.id,
                   order_no: form.order_no,
                   customer_name: customers.find((c) => c.id === form.customer_id)?.company_name,
-                  delivered_at: form.delivered_at,
-                  delivery_receiver_name: form.delivery_receiver_name,
-                  delivery_record_note: form.delivery_record_note,
-                  delivery_record_no: form.delivery_record_no,
-                }, true)}
+                })}
                 disabled={!form.id || !DELIVERY_RECORDABLE_STATUSES.includes(form.order_status)}
                 sx={{ borderRadius: 2 }}
               >
-                {form.delivery_record_no ? 'แก้บันทึกส่งของ' : 'บันทึกส่งของ'}
+                {form.delivery_record_no ? 'เที่ยวส่งของ' : 'บันทึกส่งของ'}
               </Button>
               </>)}
               <Button variant={formIsPendingQuotation && form.id ? 'outlined' : 'contained'} onClick={() => void save()} disabled={!form.customer_id || !form.items.length || hasBelowFloor || form.quotation_stage === 'CLOSED' || (!formIsQuotation && form.receive_method === 'PICKUP_BY_TRUCK' && !form.vehicle_license_plate.trim())} sx={{ borderRadius: 2 }}>
@@ -2515,20 +2502,15 @@ export default function OrdersWorkspace({ mode = 'order' }: { mode?: OrdersWorks
         <MenuItem disabled={!printMenuApproved} onClick={() => {
           if (printMenu) {
             const row = printMenu.row ?? null;
-            const fromForm = form.id === printMenu.orderId;
             openDeliveryRecord({
               id: printMenu.orderId,
               order_no: printMenu.orderNo,
               customer_name: row?.customers?.company_name ?? customers.find((c) => c.id === form.customer_id)?.company_name,
-              delivered_at: row?.delivered_at ?? (fromForm ? form.delivered_at : null),
-              delivery_receiver_name: row?.delivery_receiver_name ?? (fromForm ? form.delivery_receiver_name : null),
-              delivery_record_note: fromForm ? form.delivery_record_note : null,
-              delivery_record_no: row?.delivery_record_no ?? (fromForm ? form.delivery_record_no : null),
             });
           }
           setPrintMenu(null);
         }}>
-          <LocalShipping fontSize="small" sx={{ mr: 1 }} /> {(printMenu?.row?.delivery_record_no ?? (form.id === printMenu?.orderId ? form.delivery_record_no : null)) ? 'บันทึกการส่งของ (PDF)' : 'บันทึกการส่งของ'}
+          <LocalShipping fontSize="small" sx={{ mr: 1 }} /> {(printMenu?.row?.delivery_record_no ?? (form.id === printMenu?.orderId ? form.delivery_record_no : null)) ? 'เที่ยวส่งของ / บันทึกการส่งของ' : 'บันทึกการส่งของ'}
           {printMenuApproved ? '' : ' (ต้องอนุมัติใบสั่งขายก่อน)'}
         </MenuItem>
       </Menu>
@@ -2557,10 +2539,11 @@ export default function OrdersWorkspace({ mode = 'order' }: { mode?: OrdersWorks
         onDone={(result) => { void onQuotationDecided(result); }}
         onNotify={showSnack}
       />
-      <DeliveryRecordDialog
+      <DeliveryTripsDialog
         order={deliveryRecordOrder}
         onClose={() => setDeliveryRecordOrder(null)}
-        onSaved={(saved) => { void onDeliveryRecordSaved(saved); }}
+        onChanged={(change) => { void onDeliveryTripsChanged(change); }}
+        onOpenPdf={(type, id, title) => openPdf(type, id, title)}
       />
 
       <ApproveOrderDialog

@@ -118,7 +118,7 @@ export async function loadPublicPaymentView(link: LinkRow): Promise<PublicPaymen
     supabaseAdmin.from('sale_orders').select('order_no, order_status, customer_id, is_deleted').eq('id', link.sale_order_id).maybeSingle(),
     supabaseAdmin.from('companies').select('name').eq('id', link.company_id).maybeSingle(),
     supabaseAdmin.from('invoices').select('invoice_no').eq('sale_order_id', link.sale_order_id).eq('is_deleted', false)
-      .neq('status', 'CANCELLED').order('created_at', { ascending: false }).limit(1).maybeSingle(),
+      .neq('status', 'CANCELLED').order('created_at', { ascending: true }),
     supabaseAdmin.from('payment_slip_submissions').select('id, created_at, amount, transferred_at, status, reject_reason')
       .eq('sale_order_id', link.sale_order_id).order('created_at', { ascending: false }).limit(20),
     loadOrderOutstanding(link.sale_order_id),
@@ -141,7 +141,7 @@ export async function loadPublicPaymentView(link: LinkRow): Promise<PublicPaymen
     }),
     company_name: companyRes.data?.name || '',
     order_no: order?.order_no ?? null,
-    invoice_no: invoiceRes.data?.invoice_no ?? null,
+    invoice_no: (invoiceRes.data ?? []).map((inv) => inv.invoice_no).filter(Boolean).join(', ') || null,
     customer_name: customerName,
     total_amount: total,
     paid_amount: Math.max(0, Math.round((total - outstanding) * 100) / 100),

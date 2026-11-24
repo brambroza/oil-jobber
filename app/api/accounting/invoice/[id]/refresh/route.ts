@@ -5,11 +5,13 @@ import { canAccessOrder, customerForbidden } from '@/lib/services/customer-scope
 import { loadOrderDocumentData } from '@/lib/documents/from-order';
 import { invoiceContentColumns } from '@/lib/services/invoice-content';
 import { uuid } from '@/lib/validation/common';
+import { buildTripInvoiceFromOrder, loadTrip } from '@/lib/services/deliveries';
 
 /**
  * ดึงข้อมูลล่าสุดจากใบสั่งขาย: re-snapshots the sale order into the invoice
  * (customer, lines, totals) and clears the edited flag, so the PDF prints the
- * live order again. The invoice number and dates stay the same.
+ * live order again. The invoice number and dates stay the same. A trip
+ * invoice (`delivery_id`) is re-snapshotted at that trip's liters.
  */
 export async function POST(_: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   const guard = await requireStaff('accounting');
@@ -20,7 +22,7 @@ export async function POST(_: NextRequest, { params }: { params: Promise<{ id: s
 
   const { data: invoice, error } = await supabaseAdmin
     .from('invoices')
-    .select('id, sale_order_id, status')
+    .select('id, sale_order_id, status, delivery_id')
     .eq('id', id)
     .eq('company_id', ctx.companyId)
     .eq('is_deleted', false)
@@ -30,14 +32,24 @@ export async function POST(_: NextRequest, { params }: { params: Promise<{ id: s
   if (!(await canAccessOrder(ctx, String(invoice.sale_order_id)))) return customerForbidden();
   if (invoice.status === 'CANCELLED') return NextResponse.json({ error: 'ใบกำกับภาษีถูกยกเลิกแล้ว แก้ไขไม่ได้' }, { status: 422 });
 
-  const doc = await loadOrderDocumentData(ctx.companyId, String(invoice.sale_order_id));
-  if ('error' in doc) return NextResponse.json({ error: doc.error }, { status: doc.status });
-  if (!doc.items.length) return NextResponse.json({ error: 'ใบสั่งขายไม่มีรายการสินค้า' }, { status: 422 });
+  let columns: ReturnType<typeof invoiceContentColumns>;
+  if (invoice.delivery_id) {
+    const trip = await loadTrip(ctx.companyId, String(invoice.delivery_id));
+    if (!trip) return NextResponse.json({ error: 'ไม่พบเที่ยวส่งของของใบกำกับนี้' }, { status: 404 });
+    const built = await buildTripInvoiceFromOrder(ctx.companyId, trip, String(invoice.id));
+    if ('error' in built) return NextResponse.json({ error: built.error }, { status: built.status });
+    columns = invoiceContentColumns({ customer: built.doc.customer, items: built.content.items, totals: built.content.totals, note: null });
+  } else {
+    const doc = await loadOrderDocumentData(ctx.companyId, String(invoice.sale_order_id));
+    if ('error' in doc) return NextResponse.json({ error: doc.error }, { status: doc.status });
+    if (!doc.items.length) return NextResponse.json({ error: 'ใบสั่งขายไม่มีรายการสินค้า' }, { status: 422 });
+    columns = invoiceContentColumns({ customer: doc.customer, items: doc.items, totals: doc.totals, note: null });
+  }
 
   const { data, error: updateError } = await supabaseAdmin
     .from('invoices')
     .update({
-      ...invoiceContentColumns({ customer: doc.customer, items: doc.items, totals: doc.totals, note: null }),
+      ...columns,
       content_overridden: false,
       updated_by: ctx.userId,
     })

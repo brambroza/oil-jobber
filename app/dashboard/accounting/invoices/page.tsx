@@ -12,7 +12,7 @@ import { PaymentDialog, type PaymentDialogOrder } from '@/components/accounting/
 import { canIssueTaxInvoice } from '@/lib/utils/order-status';
 import { groupInvoiceRowsByStatus } from '@/lib/utils/invoice-groups';
 import { formatDate } from '@/lib/utils/date-format';
-import { validateInvoiceIssueDate } from '@/lib/utils/invoice-dates';
+import DeliveryTripsDialog, { type DeliveryTripsChange } from '@/components/orders/DeliveryTripsDialog';
 import { parseVatMode, type VatMode } from '@/lib/documents/vat-mode';
 import InvoiceEditDialog, { type InvoiceEditTarget } from '@/components/accounting/InvoiceEditDialog';
 import { invoiceDocStatus, invoiceDocView, paymentView, type InvoiceDocStatus, type PaymentKind, type StatusTone, type StatusView } from '@/lib/utils/invoice-status-view';
@@ -29,6 +29,17 @@ type InvoiceRow = {
   total_amount: number;
   subtotal_amount: number | null;
   vat_amount: number | null;
+  /** เที่ยวส่งของที่ใบนี้เรียกเก็บ; null = ใบกำกับทั้งใบสั่งขาย */
+  delivery_id?: string | null;
+};
+/** Delivery trip from `/api/accounting/deliveries` (one row per trip on this page). */
+type TripRow = {
+  id: string;
+  sale_order_id: string;
+  trip_no: number;
+  delivery_record_no: string | null;
+  delivered_at: string;
+  total_liters: number;
 };
 type OrderOption = {
   id: string;
@@ -42,6 +53,8 @@ type OrderOption = {
   outstanding_amount: number;
   /** ประเภทภาษีของบิล (ราคาไม่รวม/รวมภาษี) */
   price_vat_mode: VatMode;
+  /** ลิตรรวมของใบสั่งขาย */
+  total_liters: number;
 };
 
 /** Today's date in Asia/Bangkok as `YYYY-MM-DD`. */
@@ -224,6 +237,7 @@ function StatusPill({ view, strike }: { view: StatusView; strike?: boolean }) {
 /** Tax invoices issued from orders; manual typing is gone. */
 export default function InvoicesPage() {
   const [rows, setRows] = useState<InvoiceRow[]>([]);
+  const [trips, setTrips] = useState<TripRow[]>([]);
   const [orders, setOrders] = useState<OrderOption[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
@@ -235,7 +249,6 @@ export default function InvoicesPage() {
   const [pdfTarget, setPdfTarget] = useState<PdfPreviewTarget>(null);
   const [paymentOrder, setPaymentOrder] = useState<PaymentDialogOrder | null>(null);
   /** วันที่ออกใบกำกับใน dialog ออกใบกำกับ */
-  const [issueDate, setIssueDate] = useState(todayBangkok());
   /** ใบกำกับที่กำลังแก้วันที่ */
   /** ใบกำกับที่กำลังแก้ไข */
   const [editTarget, setEditTarget] = useState<InvoiceEditTarget>(null);
@@ -254,14 +267,17 @@ export default function InvoicesPage() {
     setLoading(true);
     setError('');
     try {
-      const [invRes, orderRes] = await Promise.all([
+      const [invRes, orderRes, tripRes] = await Promise.all([
         fetch('/api/accounting/invoice', { cache: 'no-store' }),
         fetch('/api/orders', { cache: 'no-store' }),
+        fetch('/api/accounting/deliveries', { cache: 'no-store' }),
       ]);
-      const [invData, orderData] = await Promise.all([invRes.json(), orderRes.json()]);
+      const [invData, orderData, tripData] = await Promise.all([invRes.json(), orderRes.json(), tripRes.json().catch(() => [])]);
       if (!invRes.ok) throw new Error(invData.error || 'โหลดใบกำกับไม่สำเร็จ');
       if (!orderRes.ok) throw new Error(orderData.error || 'โหลดคำสั่งซื้อไม่สำเร็จ');
       setRows(invData);
+      // เที่ยวส่งของโหลดไม่ได้ (เช่น ยังไม่ได้รัน migration): แสดงแบบเดิม 1 แถวต่อใบสั่งขาย
+      setTrips(tripRes.ok && Array.isArray(tripData) ? tripData : []);
       setOrders((orderData || []).map((o: any) => ({
         id: o.id,
         order_no: o.order_no,
@@ -271,6 +287,7 @@ export default function InvoicesPage() {
         due_date: o.due_date ? String(o.due_date) : null,
         outstanding_amount: Number(o.outstanding_amount ?? o.total_amount ?? 0),
         price_vat_mode: parseVatMode(o.price_vat_mode),
+        total_liters: Number(o.total_liters || 0),
       })));
     } catch (e) {
       setError((e as Error).message);
@@ -281,11 +298,20 @@ export default function InvoicesPage() {
 
   useEffect(() => { void load(); }, []);
 
-  const invoicedOrderIds = useMemo(() => new Set(rows.filter((r) => r.status !== 'CANCELLED').map((r) => r.sale_order_id)), [rows]);
-  const issuableOrders = useMemo(
-    () => orders.filter((o) => !invoicedOrderIds.has(o.id) && canIssueTaxInvoice(o.order_status)),
-    [orders, invoicedOrderIds],
-  );
+  /**
+   * Orders that can still be billed: approved, no active whole-order invoice, and
+   * either liters not yet delivered or a delivered trip without an active invoice.
+   */
+  const issuableOrders = useMemo(() => {
+    const fullInvoiced = new Set(rows.filter((r) => r.status !== 'CANCELLED' && !r.delivery_id).map((r) => r.sale_order_id));
+    const invoicedTrips = new Set(rows.filter((r) => r.status !== 'CANCELLED' && r.delivery_id).map((r) => r.delivery_id));
+    return orders.filter((o) => {
+      if (fullInvoiced.has(o.id) || !canIssueTaxInvoice(o.order_status)) return false;
+      const orderTrips = trips.filter((t) => t.sale_order_id === o.id);
+      const delivered = orderTrips.reduce((s, t) => s + Number(t.total_liters || 0), 0);
+      return delivered < o.total_liters - 0.005 || orderTrips.some((t) => !invoicedTrips.has(t.id));
+    });
+  }, [orders, rows, trips]);
   /**
    * Orders CONFIRMED onwards paired with their invoice, filtered by the search box,
    * sorted by invoice issue date then invoice number (newest first); orders without
@@ -296,11 +322,24 @@ export default function InvoicesPage() {
     const matches = (o: OrderOption) => {
       if (!q) return true;
       const inv = rows.filter((r) => r.sale_order_id === o.id).map((r) => r.invoice_no);
-      return [o.order_no, o.customer_name, ...inv].some((v) => String(v || '').toLowerCase().includes(q));
+      const dr = trips.filter((t) => t.sale_order_id === o.id).map((t) => t.delivery_record_no);
+      return [o.order_no, o.customer_name, ...inv, ...dr].some((v) => String(v || '').toLowerCase().includes(q));
     };
     const activeOf = (r: InvoiceRow | null) => (r && r.status !== 'CANCELLED' ? r : null);
+    /** Active invoice of a trip, else its latest cancelled one. */
+    const invoiceOfTrip = (tripId: string) => {
+      const list = rows.filter((r) => r.delivery_id === tripId);
+      return list.find((r) => r.status !== 'CANCELLED') ?? list[0] ?? null;
+    };
     return groupInvoiceRowsByStatus(orders.filter(matches), rows)
       .flatMap((g) => g.rows)
+      // ใบสั่งขายที่ส่งหลายเที่ยว: 1 แถวต่อเที่ยว (เว้นแต่ออกใบกำกับทั้งใบไว้แล้ว)
+      .flatMap(({ order, invoice }): { order: OrderOption; invoice: InvoiceRow | null; trip: TripRow | null }[] => {
+        const orderTrips = trips.filter((t) => t.sale_order_id === order.id);
+        const fullActive = rows.some((r) => r.sale_order_id === order.id && !r.delivery_id && r.status !== 'CANCELLED');
+        if (!orderTrips.length || fullActive) return [{ order, invoice, trip: null }];
+        return orderTrips.map((trip) => ({ order, invoice: invoiceOfTrip(trip.id), trip }));
+      })
       .sort((a, b) => {
         const ia = activeOf(a.invoice);
         const ib = activeOf(b.invoice);
@@ -309,11 +348,12 @@ export default function InvoicesPage() {
         if (byDate) return byDate;
         return ib.invoice_no.localeCompare(ia.invoice_no, undefined, { numeric: true });
       })
-      .map(({ order, invoice }) => {
+      .map(({ order, invoice, trip }) => {
         const active = activeOf(invoice);
         return {
           order,
           invoice,
+          trip,
           docStatus: invoiceDocStatus(invoice?.status),
           payView: paymentView({
             order_status: order.order_status,
@@ -324,7 +364,7 @@ export default function InvoicesPage() {
           }, todayBangkok()),
         };
       });
-  }, [orders, rows, search]);
+  }, [orders, rows, trips, search]);
 
   /** Row counts per filter option, after the search box but before the status filters. */
   const filterCounts = useMemo(() => {
@@ -362,27 +402,37 @@ export default function InvoicesPage() {
     if (page > lastPage) setPage(lastPage);
   }, [tableRows.length, rowsPerPage, page]);
 
-  /**
-   * Issues a tax invoice from an order.
-   * @param target - order to invoice (defaults to the one picked in the dialog)
-   * @param issuedAt - issue date `YYYY-MM-DD` (defaults to today)
-   */
-  const issue = async (target: OrderOption | null = issueOrder, issuedAt: string = todayBangkok()) => {
-    if (!target) return;
-    setIssuing(true);
-    try {
-      const res = await fetch(`/api/accounting/invoice/from-order/${target.id}`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ issued_at: issuedAt }),
-      });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error || 'ออกใบกำกับภาษีไม่สำเร็จ');
+  /** Opens the "ออกใบกำกับภาษี" form (pick an order, liters default to what is left). */
+  const openIssue = (order: OrderOption | null = null) => {
+    setIssueOrder(order);
+    setIssueOpen(true);
+  };
+
+  /** After the form saved a trip or issued an invoice: refresh, and show the new invoice. */
+  const onIssueChanged = (change: DeliveryTripsChange) => {
+    showSnack(change.message, change.severity);
+    void load();
+    if (change.invoice) {
       setIssueOpen(false);
       setIssueOrder(null);
-      showSnack(`ออกใบกำกับภาษี ${data.invoice_no} แล้ว`, 'success');
+      setPdfTarget({ type: 'tax-invoice', id: change.invoice.id, title: `ใบแจ้งหนี้/ใบกำกับภาษี · ${change.invoice.invoice_no}` });
+    }
+  };
+
+  /**
+   * Issues the tax invoice of one delivery trip (date = delivery date when allowed).
+   * @param trip - trip row
+   * @param order - its order
+   */
+  const issueTrip = async (trip: TripRow, order: OrderOption) => {
+    setIssuing(true);
+    try {
+      const res = await fetch(`/api/accounting/invoice/from-delivery/${trip.id}`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || 'ออกใบกำกับภาษีไม่สำเร็จ');
+      showSnack(`ออกใบกำกับภาษี ${data.invoice_no} จาก ${trip.delivery_record_no || `เที่ยวที่ ${trip.trip_no}`} แล้ว`, 'success');
       await load();
-      setPdfTarget({ type: 'tax-invoice', id: target.id, title: `ใบแจ้งหนี้/ใบกำกับภาษี · ${data.invoice_no}` });
+      setPdfTarget({ type: 'tax-invoice', id: data.id, title: `ใบแจ้งหนี้/ใบกำกับภาษี · ${data.invoice_no} · ${order.order_no || ''}` });
     } catch (e) {
       showSnack((e as Error).message, 'error');
     } finally {
@@ -390,7 +440,6 @@ export default function InvoicesPage() {
     }
   };
 
-  const issueDateError = issueOpen ? validateInvoiceIssueDate(issueDate, { today: todayBangkok() }) : null;
   const cancelInvoice = async () => {
     if (!cancelId) return;
     const res = await fetch(`/api/accounting/invoice/${cancelId}`, {
@@ -415,7 +464,7 @@ export default function InvoicesPage() {
           <TextField id='invoice-search' size='small' label='ค้นหา เลขที่ / คำสั่งซื้อ / ลูกค้า' value={search} onChange={(e) => setSearch(e.target.value)} sx={{ minWidth: 280, flex: { sm: 1 }, maxWidth: { sm: 420 } }} />
           <Button variant='outlined' onClick={() => void load()}>รีเฟรช</Button>
           <Box sx={{ flex: 1, display: { xs: 'none', sm: 'block' } }} />
-          <Button variant='contained' startIcon={<Add />} onClick={() => { setIssueDate(todayBangkok()); setIssueOpen(true); }}>ออกใบกำกับจากใบสั่งขาย</Button>
+          <Button variant='contained' startIcon={<Add />} onClick={() => openIssue()}>ออกใบกำกับจากใบสั่งขาย</Button>
         </Stack>
         <Stack spacing={1} sx={{ mt: 1.5, pt: 1.5, borderTop: '1px dashed', borderColor: 'divider' }}>
           <FilterRow label='สถานะใบกำกับ' options={DOC_FILTERS} value={docFilter} counts={filterCounts.doc} onChange={setDocFilter} />
@@ -441,10 +490,10 @@ export default function InvoicesPage() {
             </TableRow>
           </TableHead>
           <TableBody>
-            {pagedRows.map(({ order: o, invoice: r, docStatus, payView }) => {
+            {pagedRows.map(({ order: o, invoice: r, trip, docStatus, payView }) => {
                   const active = r && r.status !== 'CANCELLED' ? r : null;
                   return (
-                    <TableRow key={o.id} hover>
+                    <TableRow key={trip?.id ?? o.id} hover>
                       <TableCell>{formatDate(active?.issued_at)}</TableCell>
                       <TableCell sx={{ fontWeight: 800, color: active ? 'text.primary' : 'text.disabled' }}>
                         <Tooltip title={`ใบสั่งขาย ${o.order_no || o.id.slice(0, 8)}`}>
@@ -460,20 +509,29 @@ export default function InvoicesPage() {
                             <Typography variant='body2' sx={{ fontWeight: 700, lineHeight: 1.3, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: 260 }} title={o.customer_name}>
                               {o.customer_name}
                             </Typography>
-                            <Typography variant='caption' color='text.secondary' sx={{ lineHeight: 1.2 }}>
+                            <Typography variant='caption' color='text.secondary' sx={{ lineHeight: 1.2, display: 'block' }}>
                               ใบสั่งขาย {o.order_no || o.id.slice(0, 8)}
                             </Typography>
+                            {trip ? (
+                              <Typography variant='caption' color='info.main' sx={{ lineHeight: 1.2, fontWeight: 700 }}>
+                                เที่ยวที่ {trip.trip_no} · {trip.delivery_record_no || '-'} · {Number(trip.total_liters).toLocaleString('th-TH')} ลิตร
+                              </Typography>
+                            ) : null}
                           </Box>
                         </Stack>
                       </TableCell>
                       <TableCell>{formatDate(active?.due_date ?? o.due_date)}</TableCell>
                       <TableCell align='right' sx={{ minWidth: 190 }}>
-                        <AmountCell
-                          total={active ? active.total_amount : o.total_amount}
-                          subtotal={active?.subtotal_amount ?? null}
-                          vat={active?.vat_amount ?? null}
-                          fromOrder={!active}
-                        />
+                        {trip && !active ? (
+                          <Typography variant='caption' color='text.secondary' sx={{ whiteSpace: 'nowrap' }}>รอออกใบกำกับ</Typography>
+                        ) : (
+                          <AmountCell
+                            total={active ? active.total_amount : o.total_amount}
+                            subtotal={active?.subtotal_amount ?? null}
+                            vat={active?.vat_amount ?? null}
+                            fromOrder={!active}
+                          />
+                        )}
                       </TableCell>
                       <TableCell>
                         <StatusPill view={invoiceDocView(docStatus)} />
@@ -496,7 +554,7 @@ export default function InvoicesPage() {
                         {active ? (
                           <>
                             <Tooltip title='ใบแจ้งหนี้/ใบกำกับภาษี (ต้นฉบับ) · พิมพ์ / ส่ง LINE'>
-                              <IconButton size='small' color='primary' onClick={() => setPdfTarget({ type: 'tax-invoice', id: o.id, title: `ใบแจ้งหนี้/ใบกำกับภาษี · ${active.invoice_no}` })}>
+                              <IconButton size='small' color='primary' onClick={() => setPdfTarget({ type: 'tax-invoice', id: active.id, title: `ใบแจ้งหนี้/ใบกำกับภาษี · ${active.invoice_no}` })}>
                                 <PictureAsPdf fontSize='small' />
                               </IconButton>
                             </Tooltip>
@@ -509,7 +567,7 @@ export default function InvoicesPage() {
                               </IconButton>
                             </Tooltip>
                             <Tooltip title='สำเนาใบกำกับภาษี'>
-                              <IconButton size='small' color='secondary' onClick={() => setPdfTarget({ type: 'tax-invoice', id: o.id, title: `สำเนาใบกำกับภาษี · ${active.invoice_no}`, copy: true })}>
+                              <IconButton size='small' color='secondary' onClick={() => setPdfTarget({ type: 'tax-invoice', id: active.id, title: `สำเนาใบกำกับภาษี · ${active.invoice_no}`, copy: true })}>
                                 <ContentCopy fontSize='small' />
                               </IconButton>
                             </Tooltip>
@@ -520,7 +578,7 @@ export default function InvoicesPage() {
                             </Tooltip>
                           </>
                         ) : (
-                          <Button size='small' variant='outlined' startIcon={<Add />} disabled={issuing} onClick={() => void issue(o)}>ออกใบกำกับ</Button>
+                          <Button size='small' variant='outlined' startIcon={<Add />} disabled={issuing} onClick={() => (trip ? void issueTrip(trip, o) : openIssue(o))}>ออกใบกำกับ</Button>
                         )}
                       </TableCell>
                     </TableRow>
@@ -551,37 +609,25 @@ export default function InvoicesPage() {
         sx={{ mt: '0 !important', bgcolor: 'background.paper', border: 1, borderColor: 'divider', borderTop: 0, borderRadius: '0 0 4px 4px' }}
       />
 
-      <Dialog open={issueOpen} onClose={() => setIssueOpen(false)} fullWidth maxWidth='sm'>
-        <DialogTitle>ออกใบกำกับภาษีจากใบสั่งขาย</DialogTitle>
-        <DialogContent>
-          <Stack spacing={2} sx={{ pt: 1 }}>
-            <Autocomplete
-              options={issuableOrders}
-              value={issueOrder}
-              onChange={(_, value) => setIssueOrder(value)}
-              getOptionLabel={(o) => `${o.order_no || o.id.slice(0, 8)} · ${o.customer_name} · ${money(o.total_amount)} บาท`}
-              isOptionEqualToValue={(a, b) => a.id === b.id}
-              noOptionsText='ไม่มีคำสั่งซื้อที่ยังไม่ได้ออกใบกำกับ'
-              renderInput={(params) => <TextField {...params} label='เลือกคำสั่งซื้อ' autoFocus />}
-            />
-            <TextField
-              type='date'
-              size='small'
-              label='วันที่ออกใบกำกับภาษี'
-              value={issueDate}
-              onChange={(e) => setIssueDate(e.target.value)}
-              error={Boolean(issueDateError)}
-              helperText={issueDateError || 'แก้ย้อนหลังได้ภายในปีเดียวกัน'}
-              slotProps={{ inputLabel: { shrink: true }, htmlInput: { max: todayBangkok() } }}
-            />
-            <Alert severity='info'>ระบบจะคัดลอกรายการ ยอดเงิน ค่าขนส่ง และข้อมูลลูกค้า ณ วันที่ออก และกำหนดเลขที่ให้อัตโนมัติ</Alert>
-          </Stack>
-        </DialogContent>
-        <DialogActions>
-          <Button onClick={() => setIssueOpen(false)}>ยกเลิก</Button>
-          <Button variant='contained' disabled={!issueOrder || issuing || Boolean(issueDateError)} onClick={() => void issue(issueOrder, issueDate)}>{issuing ? 'กำลังออก...' : 'ออกใบกำกับ'}</Button>
-        </DialogActions>
-      </Dialog>
+      <DeliveryTripsDialog
+        mode='invoice'
+        open={issueOpen}
+        order={issueOrder ? { id: issueOrder.id, order_no: issueOrder.order_no || '', customer_name: issueOrder.customer_name } : null}
+        onClose={() => { setIssueOpen(false); setIssueOrder(null); }}
+        onChanged={onIssueChanged}
+        onOpenPdf={(type, id, title) => setPdfTarget({ type, id, title })}
+        header={(
+          <Autocomplete
+            options={issueOrder && !issuableOrders.some((o) => o.id === issueOrder.id) ? [issueOrder, ...issuableOrders] : issuableOrders}
+            value={issueOrder}
+            onChange={(_, value) => setIssueOrder(value)}
+            getOptionLabel={(o) => `${o.order_no || o.id.slice(0, 8)} · ${o.customer_name} · ${money(o.total_amount)} บาท`}
+            isOptionEqualToValue={(a, b) => a.id === b.id}
+            noOptionsText='ไม่มีใบสั่งขายที่ยังออกใบกำกับไม่ครบ'
+            renderInput={(params) => <TextField {...params} size='small' label='เลือกใบสั่งขาย (PO)' autoFocus={!issueOrder} />}
+          />
+        )}
+      />
 
       <InvoiceEditDialog
         target={editTarget}

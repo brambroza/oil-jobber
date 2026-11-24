@@ -8,11 +8,14 @@ import { parseBody } from '@/lib/validation/common';
 import { invoiceIssueSchema } from '@/lib/validation/accounting';
 import { todayBangkok } from '@/lib/services/quotations';
 import { validateInvoiceIssueDate } from '@/lib/utils/invoice-dates';
+import { hasTripInvoices } from '@/lib/services/deliveries';
 
 /**
- * Issues a tax invoice from an order: snapshots customer, items and totals and
- * assigns the next IV-YY#### number (yearly run). One active invoice per order, and
- * only once the order has been approved. Body `{ issued_at? }` sets the issue
+ * Issues a tax invoice for the whole order (ใบกำกับทั้งใบสั่งขาย): snapshots
+ * customer, items and totals and assigns the next IV-YY#### number (yearly run).
+ * One active whole-order invoice per order, only once the order has been
+ * approved, and not when the order is already billed per delivery trip
+ * (`/api/accounting/invoice/from-delivery/[deliveryId]`). Body `{ issued_at? }` sets the issue
  * date (default today, Asia/Bangkok; not in the future, same year as today).
  */
 export async function POST(req: Request, { params }: { params: Promise<{ orderId: string }> }) {
@@ -43,12 +46,18 @@ export async function POST(req: Request, { params }: { params: Promise<{ orderId
     return NextResponse.json({ error: 'คำสั่งซื้อยังไม่ผ่านการอนุมัติ ต้องอนุมัติก่อนจึงออกใบกำกับภาษีได้' }, { status: 422 });
   }
 
+  const tripInvoiceNo = await hasTripInvoices(ctx.companyId, orderId);
+  if (tripInvoiceNo) {
+    return NextResponse.json({ error: `ใบสั่งขายนี้ออกใบกำกับตามเที่ยวส่งแล้ว (${tripInvoiceNo}) ออกใบเที่ยวถัดไปจากเที่ยวส่งของ` }, { status: 409 });
+  }
+
   const { data: existing } = await supabaseAdmin
     .from('invoices')
     .select('id, invoice_no')
     .eq('sale_order_id', orderId)
     .eq('is_deleted', false)
     .neq('status', 'CANCELLED')
+    .limit(1)
     .maybeSingle();
   if (existing) return NextResponse.json({ error: `คำสั่งซื้อนี้มีใบกำกับภาษี ${existing.invoice_no} อยู่แล้ว`, invoice: existing }, { status: 409 });
 

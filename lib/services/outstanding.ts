@@ -53,8 +53,13 @@ export async function loadOutstandingRows(
 
   const paidByOrder = new Map<string, number>();
   for (const p of paymentsRes.data ?? []) paidByOrder.set(p.sale_order_id, (paidByOrder.get(p.sale_order_id) || 0) + Number(p.amount || 0));
+  // ใบสั่งขายที่ออกใบกำกับตามเที่ยวส่งมีหลายใบ: แสดงเลขทุกใบ, ปุ่มพิมพ์เปิดใบล่าสุด
   const invoiceByOrder = new Map<string, { id: string; invoice_no: string }>();
-  for (const inv of invoicesRes.data ?? []) invoiceByOrder.set(inv.sale_order_id, { id: inv.id, invoice_no: inv.invoice_no });
+  const sortedInvoices = [...(invoicesRes.data ?? [])].sort((a, b) => String(a.invoice_no).localeCompare(String(b.invoice_no), undefined, { numeric: true }));
+  for (const inv of sortedInvoices) {
+    const current = invoiceByOrder.get(inv.sale_order_id);
+    invoiceByOrder.set(inv.sale_order_id, { id: inv.id, invoice_no: current ? `${current.invoice_no}, ${inv.invoice_no}` : inv.invoice_no });
+  }
 
   const rows: OutstandingRow[] = [];
   for (const o of orders ?? []) {

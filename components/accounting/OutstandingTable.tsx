@@ -115,7 +115,7 @@ export function OutstandingTable({ title, description, endpoint }: { title: stri
                     </Tooltip>
                     <Tooltip title={r.invoice_no ? 'พิมพ์ใบกำกับภาษี' : 'ยังไม่ได้ออกใบกำกับ'}>
                       <span>
-                        <IconButton size='small' color='primary' disabled={!r.invoice_no} onClick={() => setPdfTarget({ type: 'tax-invoice', id: r.sale_order_id, title: `ใบกำกับภาษี · ${r.invoice_no}` })}>
+                        <IconButton size='small' color='primary' disabled={!r.invoice_no} onClick={() => setPdfTarget({ type: 'tax-invoice', id: r.invoice_id || r.sale_order_id, title: `ใบกำกับภาษี · ${r.invoice_no}` })}>
                           <PictureAsPdf fontSize='small' />
                         </IconButton>
                       </span>

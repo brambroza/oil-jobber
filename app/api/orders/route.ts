@@ -17,7 +17,12 @@ import {
 import { canAccessCustomer, customerForbidden, loadCustomerScope } from '@/lib/services/customer-scope';
 import { round2 } from '@/lib/services/order-pricing';
 
-type OrderInvoiceSummary = { invoice_no: string; issued_at: string; due_date: string | null; status: string };
+/**
+ * Active tax invoices of an order for the list. An order billed per delivery
+ * trip has several: `invoice_no` joins their numbers, `issued_at` is the
+ * latest, `status` is ISSUED while any is unpaid.
+ */
+type OrderInvoiceSummary = { invoice_no: string; issued_at: string; due_date: string | null; status: string; count: number };
 
 /**
  * Loads, per order, the active tax invoice and the sum of recorded payments
@@ -50,12 +55,26 @@ async function loadInvoicesAndPayments(
     ]);
     if (invoiceRes.error) return { error: invoiceRes.error.message };
     if (paymentRes.error) return { error: paymentRes.error.message };
-    for (const inv of invoiceRes.data ?? []) {
-      invoices.set(String(inv.sale_order_id), {
-        invoice_no: String(inv.invoice_no),
-        issued_at: String(inv.issued_at),
-        due_date: inv.due_date ? String(inv.due_date) : null,
-        status: String(inv.status),
+    const sorted = [...(invoiceRes.data ?? [])].sort((a, b) => String(a.invoice_no).localeCompare(String(b.invoice_no), undefined, { numeric: true }));
+    for (const inv of sorted) {
+      const key = String(inv.sale_order_id);
+      const current = invoices.get(key);
+      if (!current) {
+        invoices.set(key, {
+          invoice_no: String(inv.invoice_no),
+          issued_at: String(inv.issued_at),
+          due_date: inv.due_date ? String(inv.due_date) : null,
+          status: String(inv.status),
+          count: 1,
+        });
+        continue;
+      }
+      invoices.set(key, {
+        invoice_no: `${current.invoice_no}, ${inv.invoice_no}`,
+        issued_at: String(inv.issued_at) > current.issued_at ? String(inv.issued_at) : current.issued_at,
+        due_date: current.due_date ?? (inv.due_date ? String(inv.due_date) : null),
+        status: current.status === 'ISSUED' || inv.status === 'ISSUED' ? 'ISSUED' : String(inv.status),
+        count: current.count + 1,
       });
     }
     for (const p of paymentRes.data ?? []) {

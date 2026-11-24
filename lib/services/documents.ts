@@ -16,7 +16,12 @@ import type { DocumentType } from '@/lib/documents/types';
 import { DEFAULT_VAT_MODE, type VatMode } from '@/lib/documents/vat-mode';
 import { formatDate } from '@/lib/utils/date-format';
 import { applyInvoiceContent } from '@/lib/utils/invoice-content';
-import { loadInvoiceContentRow } from '@/lib/services/invoice-content';
+import { loadInvoiceForDocument } from '@/lib/services/invoice-content';
+import { loadOrderTrips, loadTrip, type DeliveryTrip } from '@/lib/services/deliveries';
+import { loadSalesUserNames, loadStaffSignatures } from '@/lib/services/order-items';
+import { buildInvoiceContent } from '@/lib/utils/invoice-content';
+import { tripInvoiceLines } from '@/lib/utils/delivery-trips';
+import type { OrderDocumentData } from '@/lib/documents/types';
 import { createDocumentShortLink } from '@/lib/services/short-links';
 
 export const DOCUMENT_TYPES: DocumentType[] = ['purchase-order', 'quotation', 'tax-invoice', 'delivery-note', 'receipt', 'delivery-record'];
@@ -42,7 +47,9 @@ export type GeneratedDocument = {
 
 /**
  * Generates one PDF document. `id` is an order id for purchase-order /
- * quotation / tax-invoice / delivery-note / delivery-record and a receipt id for receipt.
+ * quotation / delivery-note, a receipt id for receipt, an invoice id (or an
+ * order id: its latest invoice) for tax-invoice, and a delivery trip id (or an
+ * order id: its first trip) for delivery-record.
  * The quotation prints the latest active quotation of the order.
  * `vatMode` (purchase-order / quotation / tax-invoice) picks ราคาไม่รวมภาษี
  * or ราคารวมภาษี for the item table and totals; when omitted the mode saved
@@ -88,25 +95,42 @@ export async function generateDocumentPdf(
     };
   }
 
-  const data = await loadOrderDocumentData(companyId, id);
-  if ('error' in data) return data;
-  const { data: customerRow } = await supabaseAdmin.from('sale_orders').select('customer_id').eq('id', id).maybeSingle();
+  // ใบกำกับ/บันทึกส่งของ: id อาจเป็นเลขใบกำกับหรือเที่ยวส่ง ให้หาใบสั่งขายของเอกสารก่อน
+  const invoiceRow = type === 'tax-invoice' ? await loadInvoiceForDocument(companyId, id) : null;
+  let trip: DeliveryTrip | null = type === 'delivery-record' ? await loadTrip(companyId, id) : null;
+  const orderId = invoiceRow?.sale_order_id ?? trip?.sale_order_id ?? id;
+
+  const loaded = await loadOrderDocumentData(companyId, orderId);
+  if ('error' in loaded) return loaded;
+  let data: OrderDocumentData = loaded;
+  const { data: customerRow } = await supabaseAdmin.from('sale_orders').select('customer_id').eq('id', orderId).maybeSingle();
 
   if (type === 'tax-invoice') {
-    if (!data.invoice) return { error: 'ยังไม่ได้ออกใบกำกับภาษีสำหรับคำสั่งซื้อนี้', status: 409 };
-    // ใบกำกับที่แก้ไขแล้ว: พิมพ์ข้อมูลที่เก็บในใบกำกับแทนใบสั่งขาย
-    const invoiceData = applyInvoiceContent(data, await loadInvoiceContentRow(companyId, id));
+    if (!invoiceRow) return { error: 'ยังไม่ได้ออกใบกำกับภาษีสำหรับคำสั่งซื้อนี้', status: 409 };
+    data = {
+      ...data,
+      invoice: { invoice_no: invoiceRow.invoice_no, issued_at: invoiceRow.issued_at, due_date: invoiceRow.due_date, status: invoiceRow.status },
+    };
+    // ใบกำกับที่แก้ไขแล้ว หรือใบตามเที่ยวส่ง: พิมพ์ข้อมูลที่เก็บในใบกำกับแทนใบสั่งขาย
+    const invoiceData = applyInvoiceContent(data, invoiceRow.delivery_id ? { ...invoiceRow, content_overridden: true } : invoiceRow);
     const buffer = await renderPdf(buildTaxInvoicePdf(invoiceData, options.copy ? 'copy' : 'original', modeFor(data.price_vat_mode)));
     return {
       buffer,
-      filename: `${data.invoice.invoice_no}.pdf`,
+      filename: `${invoiceRow.invoice_no}.pdf`,
       title: DOCUMENT_TITLES['tax-invoice'],
-      docNo: data.invoice.invoice_no,
+      docNo: invoiceRow.invoice_no,
       orderId: data.order_id,
       customerId: customerRow?.customer_id ?? null,
-      summary: `ยอดรวม ${money(invoiceData.totals.net_incl_vat)} บาท ครบกำหนด ${formatDate(data.invoice.due_date || data.due_date)}`,
+      summary: `ยอดรวม ${money(invoiceData.totals.net_incl_vat)} บาท ครบกำหนด ${formatDate(invoiceRow.due_date || data.due_date)}`,
     };
   }
+
+  if (type === 'delivery-record' && !trip) {
+    // ลิงก์เดิมที่ใช้เลขใบสั่งขาย: พิมพ์เที่ยวที่ตรงกับเลข DR ของใบสั่งขาย (เที่ยวแรก)
+    const trips = await loadOrderTrips(companyId, orderId);
+    if (!('error' in trips) && trips.length) trip = trips.find((t) => t.delivery_record_no === data.delivery?.record_no) ?? trips[0];
+  }
+  if (type === 'delivery-record' && trip) data = await applyTripToDocument(companyId, data, trip);
 
   if (type === 'delivery-note') {
     const buffer = await renderPdf(buildDeliveryNotePdf(data, options.copy ? 'copy' : 'original'));
@@ -145,6 +169,46 @@ export async function generateDocumentPdf(
     orderId: data.order_id,
     customerId: customerRow?.customer_id ?? null,
     summary: `${money(data.totals.total_liters, 0)} ลิตร ยอดรวม ${money(data.totals.net_incl_vat)} บาท`,
+  };
+}
+
+/**
+ * Narrows an order document to one delivery trip: the trip's liters (at the
+ * order's printed prices) and the trip's DR number, time, receiver and staff.
+ *
+ * @param companyId - tenant scope
+ * @param data - order document data
+ * @param trip - delivery trip to print
+ */
+async function applyTripToDocument(companyId: string, data: OrderDocumentData, trip: DeliveryTrip): Promise<OrderDocumentData> {
+  const built = buildInvoiceContent(tripInvoiceLines(data.items, trip.lines), 0);
+  const [names, signatures, fullInvoice] = await Promise.all([
+    loadSalesUserNames(companyId, [trip.recorded_by]),
+    loadStaffSignatures(companyId, [trip.recorded_by]),
+    trip.invoice ? Promise.resolve(null) : loadInvoiceForDocument(companyId, data.order_id),
+  ]);
+  // เลขใบกำกับที่อ้างในบันทึกส่งของ: ใบของเที่ยวนี้ หรือใบทั้งใบสั่งขาย (ไม่ใช่ใบของเที่ยวอื่น)
+  const invoice = trip.invoice
+    ? { invoice_no: trip.invoice.invoice_no, issued_at: trip.invoice.issued_at, due_date: data.invoice?.due_date ?? data.due_date, status: trip.invoice.status }
+    : fullInvoice && !fullInvoice.delivery_id
+      ? { invoice_no: fullInvoice.invoice_no, issued_at: fullInvoice.issued_at, due_date: fullInvoice.due_date, status: fullInvoice.status }
+      : null;
+  return {
+    ...data,
+    invoice,
+    items: built.items,
+    totals: built.totals,
+    vehicle: trip.vehicle_license_plate
+      ? { license_plate: trip.vehicle_license_plate, driver_name: trip.vehicle_driver_name, driver_phone: data.vehicle?.driver_phone ?? null }
+      : data.vehicle,
+    delivery: {
+      record_no: trip.delivery_record_no || data.order_no,
+      delivered_at: trip.delivered_at,
+      receiver_name: trip.receiver_name,
+      note: trip.note,
+      recorded_by_name: trip.recorded_by ? names.get(trip.recorded_by) ?? null : null,
+      recorded_by_signature: trip.recorded_by ? signatures.get(trip.recorded_by) ?? null : null,
+    },
   };
 }
 

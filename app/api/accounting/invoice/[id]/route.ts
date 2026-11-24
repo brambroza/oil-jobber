@@ -36,7 +36,8 @@ export async function GET(_: NextRequest, { params }: { params: Promise<{ id: st
   const doc = await loadOrderDocumentData(ctx.companyId, String(invoice.sale_order_id));
   if ('error' in doc) return NextResponse.json({ error: doc.error }, { status: doc.status });
 
-  const edited = Boolean(invoice.content_overridden);
+  // ใบกำกับตามเที่ยวส่ง: พิมพ์จาก snapshot ของเที่ยวเสมอ (ลิตรเฉพาะเที่ยวนั้น)
+  const edited = Boolean(invoice.content_overridden) || Boolean(invoice.delivery_id);
   const totals = (invoice.totals_snapshot ?? null) as Partial<DocumentTotals> | null;
   const content = edited
     ? {

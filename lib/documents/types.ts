@@ -22,6 +22,8 @@ export type CustomerInfo = {
 
 export type DocumentItem = {
   no: number;
+  /** `sale_order_items.id` of the line (absent on edited invoice lines) */
+  item_id?: string;
   product_code: string;
   product_name: string;
   depot_label: string | null;

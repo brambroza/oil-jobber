@@ -78,6 +78,7 @@ export async function loadOrderDocumentData(companyId: string, orderId: string):
     const amountIncl = round2(litersValue * unitIncl);
     return {
       no: index + 1,
+      item_id: String(it.id),
       product_code: String(it.product_code || ''),
       product_name: String(it.product_name || it.product_code || ''),
       depot_label: sourceLabel(it.refineries?.name ?? it.depots?.refineries?.name, it.depots?.code, it.depots?.name),

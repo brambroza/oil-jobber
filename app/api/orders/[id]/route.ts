@@ -1,4 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
+import { loadOrderItemsForTrips, loadOrderTrips, type DeliveryTrip } from '@/lib/services/deliveries';
+import { remapTripLines } from '@/lib/utils/delivery-trips';
 import { requireStaff } from '@/lib/auth/api-guard';
 import { supabaseAdmin } from '@/lib/supabase/server';
 import { pushLineMessage } from '@/lib/services/line';
@@ -167,6 +169,24 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
     effectivePayload.discount_amount = discountCheck.discount;
   }
 
+  // มีเที่ยวส่งของแล้ว: แก้รายการสินค้าได้ แต่ห้ามลบสินค้าที่ส่งไปแล้วหรือลดลิตรต่ำกว่าที่ส่ง
+  let tripRemap: { trips: DeliveryTrip[]; oldItems: { id: string; product_code: string; product_name: string; liters: number }[] } | null = null;
+  if (enrichedItems && 'items' in enrichedItems) {
+    const trips = await loadOrderTrips(ctx.companyId, id);
+    if ('error' in trips) return NextResponse.json({ error: trips.error }, { status: 400 });
+    if (trips.length) {
+      const oldItems = await loadOrderItemsForTrips(ctx.companyId, id);
+      if ('error' in oldItems) return NextResponse.json({ error: oldItems.error }, { status: 400 });
+      const check = remapTripLines(
+        oldItems,
+        enrichedItems.items.map((it, index) => ({ id: `new-${index}`, product_code: String(it.product_code), liters: Number(it.liters || 0) })),
+        trips,
+      );
+      if ('error' in check) return NextResponse.json({ error: check.error }, { status: 422 });
+      tripRemap = { trips, oldItems };
+    }
+  }
+
   const { data, error } = await supabaseAdmin
     .from('sale_orders')
     .update(effectivePayload)
@@ -185,7 +205,7 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
       .eq('is_deleted', false);
     if (softDeleteErr) return NextResponse.json({ error: softDeleteErr.message }, { status: 400 });
 
-    const { error: itemErr } = await supabaseAdmin.from('sale_order_items').insert(
+    const { data: insertedItems, error: itemErr } = await supabaseAdmin.from('sale_order_items').insert(
       enrichedItems.items.map((item) => ({
         company_id: ctx.companyId,
         sale_order_id: id,
@@ -193,8 +213,26 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
         updated_by: ctx.userId,
         ...item,
       })),
-    );
+    ).select('id, product_code, liters');
     if (itemErr) return NextResponse.json({ error: itemErr.message }, { status: 400 });
+
+    // รายการสินค้าถูกสร้างใหม่: ชี้ลิตรของแต่ละเที่ยวส่งไปที่รายการใหม่
+    if (tripRemap) {
+      const remapped = remapTripLines(
+        tripRemap.oldItems,
+        (insertedItems ?? []).map((it) => ({ id: String(it.id), product_code: String(it.product_code), liters: Number(it.liters || 0) })),
+        tripRemap.trips,
+      );
+      if ('error' in remapped) return NextResponse.json({ error: remapped.error }, { status: 422 });
+      for (const trip of remapped.trips) {
+        const { error: tripErr } = await supabaseAdmin
+          .from('sale_order_deliveries')
+          .update({ lines: trip.lines, updated_by: ctx.userId, updated_at: new Date().toISOString() })
+          .eq('id', trip.id)
+          .eq('company_id', ctx.companyId);
+        if (tripErr) return NextResponse.json({ error: tripErr.message }, { status: 400 });
+      }
+    }
   }
 
   // ยกเลิกใบสั่งขาย: ยกเลิกใบกำกับภาษีที่ยัง active ด้วย ไม่ให้ค้างเป็น "รอชำระ" ในหน้าบัญชี

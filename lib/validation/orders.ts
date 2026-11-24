@@ -85,6 +85,26 @@ export const deliveryRecordSchema = z.object({
 
 export type DeliveryRecordInput = z.infer<typeof deliveryRecordSchema>;
 
+/** Liters of one order item on a delivery trip. */
+const tripLineSchema = z.object({
+  sale_order_item_id: uuid,
+  liters: z.coerce.number({ invalid_type_error: 'ลิตรต้องเป็นตัวเลข' }).finite().nonnegative('ลิตรต้องไม่ติดลบ'),
+});
+
+/** POST /api/orders/[id]/deliveries (new trip) and PATCH .../deliveries/[deliveryId] */
+export const deliveryTripSchema = z.object({
+  delivered_at: z.string().datetime({ offset: true, message: 'รูปแบบวันเวลาไม่ถูกต้อง' }),
+  lines: z.array(tripLineSchema).min(1, 'ใส่ลิตรที่ส่งอย่างน้อย 1 รายการ').max(50),
+  vehicle_license_plate: optionalText(50),
+  vehicle_driver_name: optionalText(200),
+  receiver_name: optionalText(200),
+  note: optionalText(1000),
+  /** ออกใบกำกับภาษีของเที่ยวนี้ทันที (ต้องมีสิทธิ์เมนูบัญชี) */
+  issue_invoice: z.boolean().optional().default(false),
+});
+
+export type DeliveryTripInput = z.infer<typeof deliveryTripSchema>;
+
 /** POST /api/quotations/[orderId]/decision */
 export const quotationDecisionSchema = z.object({
   action: z.enum(QUOTATION_DECISIONS, { errorMap: () => ({ message: 'การดำเนินการไม่ถูกต้อง' }) }),
